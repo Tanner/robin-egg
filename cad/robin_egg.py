@@ -62,6 +62,13 @@ PERF_D = 2.6
 PERF_Z0, PERF_Z1 = 99.0, 141.0
 PERF_N = 380
 APEX_HOLE_D = 5.0
+
+# optional sensors (mounts are printed now, parts go in later)
+SENSORS = True
+LIGHT_TUBE_Z0 = 136.0        # light sensor (VEML7700-type) glues under a flange at the end of a light tube
+MMWAVE_W, MMWAVE_L, MMWAVE_T = 16.4, 22.5, 1.1   # LD2410C-type board, slides into rails on the crown's front wall
+MMWAVE_Z, MMWAVE_ANGLE = 112.0, -90.0
+TEMP_ANGLE = 22.5            # temperature sensor pad in the foot, and its wire hole through the baffle
 USB_POCKET_W, USB_POCKET_Z1 = 13.5, 96.0
 
 # ---------------------------------------------------------------- egg profile
@@ -138,6 +145,11 @@ def make_foot():
     for a in (90, 210, 330):
         x, y = 27 * math.cos(math.radians(a)), 27 * math.sin(math.radians(a))
         f = f.cut(cyl(10.5, Z_FLOOR - 1, Z_FLOOR + 1.0, x, y))
+    if SENSORS:   # upright pad on the floor for a small temperature sensor board (zip tie or glue)
+        pad = radial_box(0, 34, 2.0, 16, Z_FLOOR + FOOT_FLOOR_T, Z_FLOOR + FOOT_FLOOR_T + 13)
+        pad = pad.cut(radial_box(0, 34, 3, 4, Z_FLOOR + FOOT_FLOOR_T + 4, Z_FLOOR + FOOT_FLOOR_T + 7).translate((0, 5, 0)))
+        pad = pad.cut(radial_box(0, 34, 3, 4, Z_FLOOR + FOOT_FLOOR_T + 4, Z_FLOOR + FOOT_FLOOR_T + 7).translate((0, -5, 0)))
+        f = f.union(pad.rotate((0, 0, 0), (0, 0, 1), TEMP_ANGLE))
     return f
 
 # ---------------------------------------------------------------- body
@@ -150,6 +162,8 @@ def make_body():
     for sx in (-1, 1):
         for sy in (-1, 1):
             b = b.cut(cyl(DRIVER_PILOT_D, Z_BAFFLE - 1, Z_BAFFLE + BAFFLE_T + 1, sx * DRIVER_SCREW, sy * DRIVER_SCREW))
+    if SENSORS:   # sensor wire from the foot up through the chamber (seal with hot glue)
+        b = b.cut(cyl(3.5, Z_BAFFLE - 1, Z_BAFFLE + BAFFLE_T + 1, 44 * math.cos(math.radians(TEMP_ANGLE)), 44 * math.sin(math.radians(TEMP_ANGLE))))
     # heat-set inserts for the foot screws
     for a in (0, 90, 180, 270):
         x, y = FOOT_POST_R * math.cos(math.radians(a)), FOOT_POST_R * math.sin(math.radians(a))
@@ -180,7 +194,7 @@ def make_chassis():
         x, y = CHASSIS_SCREW_R * math.cos(math.radians(a)), CHASSIS_SCREW_R * math.sin(math.radians(a))
         c = c.cut(cyl(2.8, z0 - 1, z0 + CHASSIS_T + 1, x, y))
     # wire grommet holes: speaker pigtail near the JST, spare for sensors
-    for (x, y) in ((-38.0, -14.0), (-20.0, -40.0)):
+    for (x, y) in ((-38.0, -14.0), (44 * math.cos(math.radians(TEMP_ANGLE)), 44 * math.sin(math.radians(TEMP_ANGLE)))):
         c = c.cut(cyl(WIRE_HOLE_D, z0 - 1, z0 + CHASSIS_T + 1, x, y))
     return c
 
@@ -251,7 +265,45 @@ def make_crown():
             holes.append(h)
         comp = cq.Compound.makeCompound(holes)
         c = c.cut(cq.Workplane().add(comp))
+    if SENSORS:
+        c = c.union(light_tube())
+        c = c.union(mmwave_rails())
     return c
+
+def light_tube():
+    t = ring(APEX_HOLE_D / 2 + 0.3, APEX_HOLE_D / 2 + 2.0, LIGHT_TUBE_Z0, EGG_L)
+    flange = ring(APEX_HOLE_D / 2 + 0.3, 10.0, LIGHT_TUBE_Z0 - 1.5, LIGHT_TUBE_Z0)
+    return t.union(flange).intersect(OUT)
+
+def mmwave_rails():
+    """Two rails and a bottom stop on the inside of the crown's front wall. The radar
+    board slides down between them, antenna side against the wall (tilted with it)."""
+    z = MMWAVE_Z
+    dr = (egg_r(z + 0.2) - egg_r(z - 0.2)) / 0.4
+    a = math.radians(MMWAVE_ANGLE)
+    er = cq.Vector(math.cos(a), math.sin(a), 0)
+    ez = cq.Vector(0, 0, 1)
+    n = (er - ez * dr).normalized()                 # outward normal
+    u = (er * dr + ez).normalized()                 # up the wall
+    v = cq.Vector(-math.sin(a), math.cos(a), 0)     # along the wall, sideways
+    p = er * egg_r(z) + ez * z - n * CROWN_WALL     # point on the inside surface
+    w = -n
+    def box(cv, cu, cw, sv, su, sw):   # centre in (v, u, w) and size
+        c0 = p + v * cv + u * cu + w * cw
+        b = cq.Solid.makeBox(sv, su, sw, cq.Vector(-sv / 2, -su / 2, -sw / 2))
+        m = cq.Matrix([[v.x, u.x, w.x, c0.x], [v.y, u.y, w.y, c0.y], [v.z, u.z, w.z, c0.z]])
+        return cq.Workplane().add(b.transformGeometry(m))
+    W, L, T = MMWAVE_W, MMWAVE_L, MMWAVE_T
+    gap = 0.8                      # air between antenna and wall
+    parts = None
+    for sgn in (-1, 1):
+        rail = box(sgn * (W / 2 + 1.2), 0, (gap + T + 1.2) / 2 - 1.5, 2.4, L, gap + T + 1.2 + 3)   # sinks 3 mm into the wall
+        lip = box(sgn * (W / 2 - 0.6), 0, gap + T + 0.6 + 0.1, 2.4, L, 1.2)
+        r = rail.union(lip)
+        parts = r if parts is None else parts.union(r)
+    stop = box(0, -L / 2 - 1.0, (gap + T + 1.2) / 2 - 1.5, W + 4.8, 2.0, gap + T + 1.2 + 3)
+    parts = parts.union(stop)
+    return parts.intersect(OUT)
 
 def export(part, name, outdir):
     cq.exporters.export(part, os.path.join(outdir, name + ".stl"), tolerance=0.03, angularTolerance=0.08)

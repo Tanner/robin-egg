@@ -6,8 +6,8 @@ Everything undecided or unverified. When one closes, move the answer to [decisio
 
 ## Wake word
 
-- **Training "Hey Robin".** Next. Which microWakeWord notebook, how many synthetic samples, how long training takes. Not researched yet.
-- **How to load a custom model into the formatBCE firmware.** Its README does not say. The wake word config comes from the Respeaker Lite repo it builds on.
+- **Training "Hey Robin".** In progress: Colab notebook at `wakeword/hey_robin_training.ipynb` (Piper samples, household confusables as negatives, real takes from Tanner and Ryan).
+- **How to load a custom model into the formatBCE firmware.** Answered: add the local `hey_robin.json` manifest to the `micro_wake_word.models` list. Put it first, because only the first model is on at first boot. See `wakeword/README.md`.
 - **False triggers.** The HomeView answers to "Hey Siri" in the same room, and the TV says "Robin" sometimes. Needs a week of real use to judge.
 - **Both voices.** Train and test with Tanner and Ryan.
 - **Sensitivity.** The firmware exposes a threshold setting. Pick a value after testing.

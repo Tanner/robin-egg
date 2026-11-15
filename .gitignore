@@ -8,3 +8,7 @@ bench-recordings/
 .env
 .env.*
 secrets.yaml
+
+# wake-word recordings stay local (voices)
+wakeword/recordings/*
+!wakeword/recordings/.gitkeep

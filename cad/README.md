@@ -17,6 +17,15 @@ Board positions come from Seeed's STEP model (`reference/datasheets/3d/respeaker
 
 `step/` has the same parts as STEP for Fusion, Onshape or FreeCAD. `robin_egg_assembly.step` has everything in place.
 
+## Half-egg test rig (print this first)
+
+To get the electronics working before the full egg, print only **`foot`, `body` and `chassis`** and leave the crown off. You get the real sealed speaker chamber, and the board sits on its standoffs at the top, open to the room.
+
+- The mics hear the room directly, with no crown in the way. That makes this the baseline for later crown tests.
+- The USB-C cable plugs straight into the XIAO port, and you press the board's own mute and reset buttons.
+- It is about 170 g of filament. Nothing gets reprinted when you move on to the full egg: you just add the crown.
+- Leave the sensors out. Their mounts are already in the parts, so they can go in later without reprinting the body or foot.
+
 ## How it opens
 
 - **Crown (everyday access):** it twists off. Turn it about 30° anticlockwise, seen from above, and lift. To close it, drop it on with the three lugs in the three notches and turn it clockwise until it stops. A small arrow mark is not modelled yet. Mark the notch positions with a pen on the first print. Take the USB cable out first, because the plug sits in the crown's pocket.
@@ -32,7 +41,9 @@ Board positions come from Seeed's STEP model (`reference/datasheets/3d/respeaker
 | Reset | Left side, opposite mute | 1.8 mm pinhole for a paperclip |
 | LEDs | Under the crown | The 12-LED ring at r = 40 mm glows through the white crown and its holes |
 | Mics | Under the crown | Ports at (±33, ±33) mm. They hear through the speckle holes (380 holes of 2.6 mm, about 15 % open area) |
-| Light sensor | Apex | 5 mm window. Glue in a clear plug or leave it open |
+| Light sensor (later) | Apex | 5 mm window with a short light tube inside, so the LED ring does not light the sensor. A small breakout such as a VEML7700 glues under the flange at the end of the tube |
+| Presence sensor (later) | Front of the crown, inside, about 112 mm up | Two rails and a stop on the inside wall. An LD2410C-size board (16 × 22 mm) slides down between them, antenna side facing the wall. It points out the front, away from the XIAO antenna at the back. Change `MMWAVE_W` and `MMWAVE_L` for a different board |
+| Temperature sensor (later) | Inside the foot | A small upright pad with two zip-tie slots, in the cool air by the sound slots. Its wire goes through a 3.5 mm hole in the baffle, then up the chamber and out the chassis's second hole. Seal both holes with hot glue |
 | Speaker | Fires down into the foot | Sound goes out through the slots. Glue acoustic fabric or thin speaker cloth inside the slots |
 
 ## Hardware
@@ -54,7 +65,7 @@ Board positions come from Seeed's STEP model (`reference/datasheets/3d/respeaker
 1. Press the 4 M3 inserts into the underside of the body's baffle with a soldering iron.
 2. Solder the JST pigtail to the speaker (red to +). Screw the speaker to the underside of the baffle, magnet up into the chamber, with the 4 M3 × 8 screws.
 3. Loosely fill the chamber with polyester fill, keeping it off the speaker cone.
-4. Put foam tape on the ledge. Thread the speaker pigtail up through the chassis hole near (−38, −14). Seat the chassis and fix it with the 3 M2.5 screws. Seal the wire hole with hot glue. The chamber is only airtight if this hole and the ledge are sealed.
+4. Put foam tape on the ledge. Thread the speaker pigtail up through the chassis hole near (−38, −14). Seat the chassis and fix it with the 3 M2.5 screws. Seal the wire hole with hot glue. The second hole is for the temperature sensor later. Plug it with hot glue until then. The chamber is only airtight if this hole and the ledge are sealed.
 5. Glue fabric inside the foot's slots. Screw the foot on with the 4 M3 × 25 screws, then stick on the rubber feet.
 6. Set the board on the standoffs, LEDs and Seeed logo up, with the XIAO toward the back (+y). Fix it with the 3 M2 screws. Plug the speaker into the board's JST socket from underneath.
 7. Twist the crown on. Plug in the USB-C cable at the back.
@@ -78,6 +89,6 @@ Run with `check.py` against Seeed's full board model (580 solids) and a DMA70-4 
 
 - The mics sit about 20 mm under the crown. The speckle holes are a first guess. Print a crown with `PERF_N` and `PERF_D` turned up, and one with them down, and compare wake-word distance against the bare board.
 - The bayonet lip catches the lugs by about 0.9 mm. That is enough for PLA. If it feels loose, make `LUG_R1` 0.3 mm bigger.
-- No mount for the mmWave presence sensor yet. Its spot is the front wall of the crown, just above the seam, away from the XIAO antenna at the back.
+- The crown sensors' wires need a small connector (for example JST-SH), so the crown can still come off.
 - The XMOS USB port and the 3.5 mm jack are not reachable without lifting the board.
 - Measure the real board, button and speaker against these numbers on the bench before a long print. A quick test is to print only the bottom 15 mm of the crown and the top 15 mm of the body to check the bayonet, the USB pocket and the mute tab.
