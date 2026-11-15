@@ -27,7 +27,7 @@ Source for each row is Seeed's wiki unless noted.
 | Voice processor | XMOS XVF3800, closed firmware from Seeed | Stated |
 | Codec | TLV320AIC3104, I2C address 0x18 | Stated. Address is from the formatBCE README |
 | Amplifier | LM48511 class D | Stated |
-| Speaker socket | "JST speaker interface, supports 5W amplified speakers" | Pitch, position and polarity are not stated anywhere I could read |
+| Speaker socket | JST-PH 2.0 mm, 2-pin. Seeed's 3D model names the part B2B-PH-SM4-TB | Part name from the 3D model. Position and polarity still unknown |
 | Microphones | 4 PDM MEMS mics. DSP geometry is a square with corners at plus or minus 33 mm | Read from an example command output, not a drawing |
 | Mic inlet side | The side with the Seeed logo faces the sound | Stated |
 | LEDs | 12 WS2812, driven by the XMOS chip | Stated |
@@ -76,4 +76,8 @@ Things to know before flashing:
 
 ## Speaker match
 
-The DMA70-4 is 4 ohm. Seeed sells its own 4 ohm 5 W speaker for this socket, so a 4 ohm load is expected. I have not read the LM48511 datasheet for its 4 ohm rating at 5 V, so real output power is unknown. Voice at room volume needs well under 1 W.
+The DMA70-4 is 4 ohm. Seeed sells its own 4 ohm 5 W speaker for this socket, so a 4 ohm load is expected. TI's LM48511 datasheet gives 5.4 W into 4 ohm at 1% THD with a 5 V supply, and the DMA70-4 handles 20 W RMS, so the pair is safe. Voice at room volume needs well under 1 W.
+
+## Wiring
+
+See [wiring.md](wiring.md) and the [schematic](wiring-schematic.svg).

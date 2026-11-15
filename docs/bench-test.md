@@ -48,13 +48,16 @@ This step is optional. It exists so a hardware fault shows up before Home Assist
 
 This is also step 2 of the roadmap.
 
-1. Get Home Assistant running on the Mac mini with a speech-to-text and text-to-speech engine in an Assist pipeline. How to host it on macOS is an [open question](open-questions.md).
+No Home Assistant. Tanner decided on 2026-11-15 that the Robin Egg Server will speak ESPHome's native API itself. For the bench, [tools/bench-voice-test](../tools/bench-voice-test/README.md) plays that part: it takes the audio after the wake word and plays it back through the egg.
+
+1. Set up the script on the Mac and run its offline tests, as in its README.
 2. Plug the Mac into the XIAO port. Open the [formatBCE web installer](https://formatbce.github.io/Respeaker-XVF3800-ESPHome-integration/) in Chrome, connect, install, and enter Wi-Fi credentials. The network must be 2.4 GHz.
 3. Wait. On first boot the ESP32 reflashes the XMOS chip over I2C to I2S master v1.0.9. Do not cut power. The device stays off the network until this finishes.
-4. Adopt the device in Home Assistant and check the DSP Status sensor reads "OK". If it reads "Update failed", restart once. If it still fails or reads "No response", flash the XMOS chip manually over USB from safe mode.
-5. Say the default wake word and ask something. A spoken reply means the whole chain works.
+4. Run `bench_voice_test.py <egg address> --logs`. Check that it prints `DSP Status: OK`. If it reads "Update failed", restart once. If it still fails or reads "No response", flash the XMOS chip manually over USB from safe mode.
+5. Say the default wake word ("Okay Nabu") and a sentence. Hearing yourself played back means the mics, Wi-Fi, the API and the speaker all work.
+6. Run it again with `--announce` to check the egg can speak first, which proactive messages need.
 
-If there is no audio, the README says to check the codec appears at 0x18 in the I2C scan and that media player volume is above zero.
+If there is no audio, the formatBCE README says to check the codec appears at 0x18 in the I2C scan and that media player volume is above zero.
 
 ## 6. Measurements worth taking while it is on the bench
 

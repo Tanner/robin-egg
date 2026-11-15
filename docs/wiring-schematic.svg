@@ -1,0 +1,285 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1080" viewBox="0 0 1600 1080" font-family="Helvetica, Arial, sans-serif" xmlns:c2pa="http://c2pa.org/manifest">
+<defs>
+<marker id="ar_c0392b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker>
+<marker id="ar_2463b5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2463b5"/></marker>
+<marker id="ar_7d3cb5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7d3cb5"/></marker>
+<marker id="ar_d07a12" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#d07a12"/></marker>
+<marker id="ar_1a8a4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1a8a4a"/></marker>
+<marker id="ar_8a94a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8a94a6"/></marker>
+<marker id="ar_2b3442" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2b3442"/></marker>
+</defs>
+<rect width="1600" height="1080" fill="#ffffff"/>
+<text x="30" y="42" font-size="26" font-weight="bold" fill="#1d2430" text-anchor="start">Robin Egg — wiring schematic</text>
+<text x="30" y="66" font-size="13" font-weight="normal" fill="#5b6575" text-anchor="start">Rev B draft · 2026-11-15 · not yet checked against the physical board (parts arrive 2026-11-16). Orange G-tags are guesses; see docs/wiring.md.</text>
+<rect x="30" y="100" width="250" height="74" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="40" y="120" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">PS1  USB-C wall charger</text>
+<text x="40" y="138.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">5 V, 2 A or more (on hand)</text>
+<text x="40" y="152.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Only power source. No battery.</text>
+<path d="M155,174 L155,222" fill="none" stroke="#c0392b" stroke-width="3" stroke-linejoin="round" marker-end="url(#ar_c0392b)"/>
+<rect x="30" y="226" width="250" height="102" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="40" y="246" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">W1  USB-C data cable</text>
+<text x="40" y="264.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Ordinary USB-C to USB-C, 1–2 m</text>
+<text x="40" y="278.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Must carry data (for flashing),</text>
+<text x="40" y="293.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">not a charge-only cable</text>
+<text x="40" y="307.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Hangs down the back of the egg</text>
+<circle cx="268" cy="236" r="10" fill="#e8590c"/>
+<text x="268" y="240" font-size="10" font-weight="bold" fill="#fff" text-anchor="middle">G1</text>
+<path d="M155,328 L155,372" fill="none" stroke="#c0392b" stroke-width="3" stroke-linejoin="round" marker-end="url(#ar_c0392b)"/>
+<rect x="30" y="376" width="250" height="132" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="40" y="396" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">Crown pocket, back, z≈90</text>
+<text x="40" y="414.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Opening in the back of the crown</text>
+<text x="40" y="428.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">at board height. The plug goes</text>
+<text x="40" y="443.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">straight into the XIAO port at the</text>
+<text x="40" y="457.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">board edge (mouth r≈49.5 mm).</text>
+<text x="40" y="472.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">No socket or extension inside:</text>
+<text x="40" y="486.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">the shell is only 4–5 mm away</text>
+<path d="M280,470 L322,470 L322,211 L394,211" fill="none" stroke="#c0392b" stroke-width="3" stroke-linejoin="round" marker-end="url(#ar_c0392b)"/>
+<rect x="30" y="528" width="250" height="168" rx="6" fill="#f5f7fa" stroke="#2b3442" stroke-width="1.6"/>
+<text x="40" y="548" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">Power budget (estimate)</text>
+<text x="40" y="566.0" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">ESP32-S3 Wi-Fi peaks  ~0.35 A</text>
+<text x="40" y="580.5" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">XVF3800 + codec           ~0.25 A</text>
+<text x="40" y="595.0" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">LM48511 @ voice level     ~0.3 A</text>
+<text x="40" y="609.5" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">WS2812 ×12, dimmed        ~0.1 A</text>
+<text x="40" y="624.0" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">LD2410 (optional)         ~0.08 A</text>
+<text x="40" y="638.5" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">Total typical ≈1.1 A; 5 V 2 A ok.</text>
+<text x="40" y="653.0" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">Cap volume in firmware: amp can</text>
+<text x="40" y="667.5" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">pull &gt;1.3 A at its 5.4 W max.</text>
+<rect x="340" y="92" width="860" height="666" rx="18" fill="#eef6f4" stroke="#3c8d7f" stroke-width="2.4"/>
+<text x="356" y="118" font-size="16" font-weight="bold" fill="#3c8d7f" text-anchor="start">U1  Seeed reSpeaker XVF3800 4-Mic Array with XIAO ESP32-S3</text>
+<text x="356" y="136" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Ø100 mm, mic/logo side up, on 3 M2 screws at z≈94 mm. Everything inside this outline is on the board already.</text>
+<rect x="402" y="160" width="230" height="440" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="412" y="180" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">U2  XIAO ESP32-S3</text>
+<text x="412" y="198.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">8 MB PSRAM · 2.4 GHz Wi-Fi</text>
+<text x="412" y="212.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Flashed over its own USB-C</text>
+<rect x="394" y="196" width="16" height="30" rx="3" fill="#cfd6df" stroke="#2b3442"/>
+<text x="416" y="232" font-size="11" font-weight="bold" fill="#c0392b" text-anchor="start">USB-C (VBUS, D±)</text>
+<text x="416" y="252" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">u.FL → on-board PCB antenna</text>
+<line x1="632" y1="290" x2="646" y2="290" stroke="#2463b5" stroke-width="2"/>
+<text x="626" y="294" font-size="11.5" font-weight="normal" fill="#1d2430" text-anchor="end">GPIO5 / D4  SDA</text>
+<line x1="632" y1="312" x2="646" y2="312" stroke="#2463b5" stroke-width="2"/>
+<text x="626" y="316" font-size="11.5" font-weight="normal" fill="#1d2430" text-anchor="end">GPIO6 / D5  SCL</text>
+<line x1="632" y1="348" x2="646" y2="348" stroke="#7d3cb5" stroke-width="2"/>
+<text x="626" y="352" font-size="11.5" font-weight="normal" fill="#1d2430" text-anchor="end">GPIO7 / D8  I2S WS</text>
+<line x1="632" y1="370" x2="646" y2="370" stroke="#7d3cb5" stroke-width="2"/>
+<text x="626" y="374" font-size="11.5" font-weight="normal" fill="#1d2430" text-anchor="end">GPIO8 / D9  I2S BCLK</text>
+<line x1="632" y1="392" x2="646" y2="392" stroke="#7d3cb5" stroke-width="2"/>
+<text x="626" y="396" font-size="11.5" font-weight="normal" fill="#1d2430" text-anchor="end">GPIO43 / D6  I2S DIN</text>
+<line x1="632" y1="414" x2="646" y2="414" stroke="#7d3cb5" stroke-width="2"/>
+<text x="626" y="418" font-size="11.5" font-weight="normal" fill="#1d2430" text-anchor="end">GPIO44 / D7  I2S DOUT</text>
+<text x="412" y="446" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start" font-style="italic">GPIO9 / D10: MCLK? leave free</text>
+<circle cx="598" cy="442" r="10" fill="#e8590c"/>
+<text x="598" y="446" font-size="10" font-weight="bold" fill="#fff" text-anchor="middle">G6</text>
+<text x="412" y="478" font-size="11.5" font-weight="bold" fill="#1d2430" text-anchor="start">Spare pads, bottom edge →</text>
+<text x="412" y="496" font-size="10.5" font-weight="normal" fill="#5b6575" text-anchor="start">(Seeed: "unused IO pads</text>
+<text x="412" y="511" font-size="10.5" font-weight="normal" fill="#5b6575" text-anchor="start">connected to XIAO")</text>
+<circle cx="598" cy="474" r="10" fill="#e8590c"/>
+<text x="598" y="478" font-size="10" font-weight="bold" fill="#fff" text-anchor="middle">G4</text>
+<line x1="530" y1="600" x2="530" y2="614" stroke="#1a8a4a" stroke-width="2"/>
+<text x="534" y="594" font-size="11" fill="#1d2430" transform="rotate(-90 534 594)">GPIO1 D0</text>
+<line x1="554" y1="600" x2="554" y2="614" stroke="#1a8a4a" stroke-width="2"/>
+<text x="558" y="594" font-size="11" fill="#1d2430" transform="rotate(-90 558 594)">GPIO2 D1</text>
+<line x1="578" y1="600" x2="578" y2="614" stroke="#1a8a4a" stroke-width="2"/>
+<text x="582" y="594" font-size="11" fill="#1d2430" transform="rotate(-90 582 594)">GPIO3 D2</text>
+<line x1="602" y1="600" x2="602" y2="614" stroke="#1a8a4a" stroke-width="2"/>
+<text x="606" y="594" font-size="11" fill="#1d2430" transform="rotate(-90 606 594)">GPIO4 D3</text>
+<line x1="622" y1="600" x2="622" y2="614" stroke="#c0392b" stroke-width="2"/>
+<text x="626" y="594" font-size="11" fill="#1d2430" transform="rotate(-90 626 594)">5V</text>
+<rect x="720" y="160" width="230" height="190" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="730" y="180" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">U3  XMOS XVF3800</text>
+<text x="730" y="198.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Voice DSP: AEC, beamforming, AGC</text>
+<text x="730" y="212.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">I2C target 0x2C</text>
+<text x="730" y="227.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">I2S master, 48 kHz firmware</text>
+<text x="730" y="241.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start"></text>
+<text x="730" y="256.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">GPIO (via I2C):</text>
+<text x="730" y="270.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">X1D09 ← mute button (hi = up)</text>
+<text x="730" y="285.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">X0D30 → mute LED + mic mute</text>
+<text x="730" y="299.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">X0D31 → amp enable (lo = on)</text>
+<text x="730" y="314.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">X0D33 → WS2812 power (hi = on)</text>
+<path d="M646,290 L680,290" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round"/>
+<path d="M646,312 L692,312" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round"/>
+<path d="M680,290 L680,412" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round"/>
+<path d="M680,200 L720,200" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="680" cy="200" r="3.6" fill="#2463b5"/>
+<path d="M680,290 L680,200" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round"/>
+<path d="M692,312 L692,424" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round"/>
+<path d="M692,212 L720,212" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="692" cy="212" r="3.6" fill="#2463b5"/>
+<path d="M692,312 L692,212" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round"/>
+<path d="M680,412 L720,412" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="680" cy="412" r="3.6" fill="#2463b5"/>
+<path d="M692,424 L720,424" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="692" cy="424" r="3.6" fill="#2463b5"/>
+<text x="676" y="190" font-size="11.5" font-weight="bold" fill="#2463b5" text-anchor="end">I2C</text>
+<path d="M646,348 L660,348 L660,236 L720,236" fill="none" stroke="#7d3cb5" stroke-width="2.2" stroke-linejoin="round"/>
+<path d="M646,370 L652,370 L652,249 L720,249" fill="none" stroke="#7d3cb5" stroke-width="2.2" stroke-linejoin="round"/>
+<path d="M646,392 L644,392 L644,262 L720,262" fill="none" stroke="#7d3cb5" stroke-width="2.2" stroke-linejoin="round"/>
+<path d="M646,414 L636,414 L636,275 L720,275" fill="none" stroke="#7d3cb5" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="728" y="231" font-size="11.5" font-weight="bold" fill="#7d3cb5" text-anchor="start"></text>
+<text x="664" y="440" font-size="11.5" font-weight="bold" fill="#7d3cb5" text-anchor="middle">I2S</text>
+<rect x="990" y="160" width="190" height="62" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="1000" y="180" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">MK1–4  PDM MEMS mics</text>
+<text x="1000" y="198.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Square, corners ±33 mm</text>
+<text x="1000" y="212.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Face up through the crown</text>
+<path d="M990,190 L950,190" fill="none" stroke="#2b3442" stroke-width="2.2" stroke-linejoin="round"/>
+<rect x="990" y="234" width="190" height="62" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="1000" y="254" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">D1–12  WS2812 ring</text>
+<text x="1000" y="272.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Data + power from XMOS</text>
+<text x="1000" y="286.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Glows through the crown</text>
+<path d="M990,265 L950,265" fill="none" stroke="#2b3442" stroke-width="2.2" stroke-linejoin="round"/>
+<rect x="990" y="308" width="190" height="76" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="1000" y="328" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">SW1 + D13  Mute</text>
+<text x="1000" y="346.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Side-push button on board edge</text>
+<text x="1000" y="360.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">+ red LED. Pressed through the</text>
+<text x="1000" y="375.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">shell. No wiring needed</text>
+<path d="M990,340 L950,340" fill="none" stroke="#2b3442" stroke-width="2.2" stroke-linejoin="round"/>
+<rect x="720" y="396" width="230" height="72" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="730" y="416" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">U4  TLV320AIC3104 codec</text>
+<text x="730" y="434.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">I2C 0x18 · DAC for playback</text>
+<text x="730" y="448.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Gets I2S from XMOS (inferred)</text>
+<circle cx="938" cy="406" r="10" fill="#e8590c"/>
+<text x="938" y="410" font-size="10" font-weight="bold" fill="#fff" text-anchor="middle">G3</text>
+<path d="M835,350 L835,396" fill="none" stroke="#7d3cb5" stroke-width="2.2" stroke-linejoin="round" stroke-dasharray="7 5" marker-end="url(#ar_7d3cb5)"/>
+<rect x="720" y="500" width="230" height="86" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="730" y="520" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">U5  LM48511 class-D amp</text>
+<text x="730" y="538.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Boost + BTL out, 5.4 W @ 4 Ω, 1% THD</text>
+<text x="730" y="552.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">EN from X0D31 (low = on)</text>
+<text x="730" y="567.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Neither output is ground</text>
+<path d="M835,468 L835,500" fill="none" stroke="#d07a12" stroke-width="2.2" stroke-linejoin="round" marker-end="url(#ar_d07a12)"/>
+<rect x="990" y="400" width="190" height="52" rx="6" fill="#ffffff" stroke="#8a94a6" stroke-width="1.6"/>
+<text x="1000" y="420" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">J5  3.5 mm jack</text>
+<text x="1000" y="438.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Line out. Unused, keep clear</text>
+<path d="M950,432 L990,426" fill="none" stroke="#d07a12" stroke-width="2.2" stroke-linejoin="round" stroke-dasharray="7 5"/>
+<rect x="990" y="500" width="190" height="86" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="1000" y="520" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">J2  Speaker socket</text>
+<text x="1000" y="538.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">JST-PH 2.0 mm, 2-pin, underside</text>
+<text x="1000" y="552.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">at about (−43, −15) mm</text>
+<text x="1000" y="567.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Polarity not marked</text>
+<circle cx="1168" cy="510" r="10" fill="#e8590c"/>
+<text x="1168" y="514" font-size="10" font-weight="bold" fill="#fff" text-anchor="middle">G2</text>
+<path d="M950,535 L990,535" fill="none" stroke="#d07a12" stroke-width="2.6" stroke-linejoin="round"/>
+<path d="M950,553 L990,553" fill="none" stroke="#d07a12" stroke-width="2.6" stroke-linejoin="round"/>
+<text x="970" y="530" font-size="9.5" font-weight="bold" fill="#d07a12" text-anchor="middle">OUT+</text>
+<text x="970" y="568" font-size="9.5" font-weight="bold" fill="#d07a12" text-anchor="middle">OUT−</text>
+<rect x="720" y="612" width="230" height="96" rx="6" fill="#ffffff" stroke="#8a94a6" stroke-width="1.6"/>
+<text x="730" y="632" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">J3  XMOS USB-C</text>
+<text x="730" y="650.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Next to the 3.5 mm jack</text>
+<text x="730" y="664.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Service only: DFU from safe mode</text>
+<text x="730" y="679.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Not wired out. Reach it by</text>
+<text x="730" y="693.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">lifting the crown and board</text>
+<rect x="990" y="612" width="190" height="96" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="1000" y="632" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">On-board power</text>
+<text x="1000" y="650.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">5 V rail = XIAO VBUS</text>
+<text x="1000" y="664.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">TPS62A01 buck, TPL740 LDO,</text>
+<text x="1000" y="679.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">1210 fuse. From Seeed's 3D</text>
+<text x="1000" y="693.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">model; no schematic published</text>
+<circle cx="1168" cy="622" r="10" fill="#e8590c"/>
+<text x="1168" y="626" font-size="10" font-weight="bold" fill="#fff" text-anchor="middle">G1</text>
+<path d="M416,270 l10,-9 h70 v18 h-70 z" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+<text x="462" y="274" font-size="10.5" font-weight="bold" fill="#c0392b" text-anchor="middle">+5V_BUS</text>
+<text x="502" y="274" font-size="10.5" font-weight="normal" fill="#5b6575" text-anchor="start">XIAO VBUS</text>
+<path d="M1000,728 l10,-9 h70 v18 h-70 z" fill="#fdecea" stroke="#c0392b" stroke-width="1.5"/>
+<text x="1046" y="732" font-size="10.5" font-weight="bold" fill="#c0392b" text-anchor="middle">+5V_BUS</text>
+<text x="1086" y="732" font-size="10.5" font-weight="normal" fill="#5b6575" text-anchor="start">amp, regs, LEDs</text>
+<rect x="402" y="640" width="112" height="76" rx="6" fill="#ffffff" stroke="#8a94a6" stroke-width="1.6"/>
+<text x="412" y="660" font-size="13" font-weight="bold" fill="#1d2430" text-anchor="start">J4  I2C/I2S</text>
+<text x="412" y="678.0" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">header. Same</text>
+<text x="412" y="692.5" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">bus as GPIO5/6.</text>
+<text x="412" y="707.0" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">Sensor tap.</text>
+<circle cx="504" cy="650" r="10" fill="#e8590c"/>
+<text x="504" y="654" font-size="10" font-weight="bold" fill="#fff" text-anchor="middle">G5</text>
+<rect x="1250" y="486" width="320" height="120" rx="6" fill="#ffffff" stroke="#2b3442" stroke-width="1.6"/>
+<text x="1260" y="506" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">LS1  Dayton DMA70-4</text>
+<text x="1260" y="524.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">2.5" full range, 4 Ω, 20 W RMS</text>
+<text x="1260" y="538.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Sealed chamber 0.35–0.40 L net</text>
+<text x="1260" y="553.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Baffle at z≈25, fires down</text>
+<text x="1260" y="567.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Solder to tabs (+ marked on frame)</text>
+<path d="M1180,535 L1215,535 L1215,528 L1250,528" fill="none" stroke="#d07a12" stroke-width="2.6" stroke-linejoin="round"/>
+<path d="M1180,553 L1225,553 L1225,566 L1250,566" fill="none" stroke="#d07a12" stroke-width="2.6" stroke-linejoin="round"/>
+<text x="1236" y="522" font-size="11.5" font-weight="bold" fill="#d07a12" text-anchor="start">+</text>
+<text x="1236" y="582" font-size="11.5" font-weight="bold" fill="#d07a12" text-anchor="start">−</text>
+<text x="1250" y="628" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">W2  JST-PH pigtail (ordered), lengthen to ~15 cm,</text>
+<text x="1250" y="643" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">twisted pair 22–24 AWG, through the sealed</text>
+<text x="1250" y="658" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">divider grommet at z=78. Heat-shrink the splice.</text>
+<text x="1250" y="108" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">Where each part sits (side view)</text>
+<text x="1250" y="124" font-size="11" font-weight="normal" fill="#5b6575" text-anchor="start">z in mm, matches docs/enclosure.md</text>
+<path d="M1314.5,456.0 C1242.5,361.5 1269.5,204.0 1400,147.75 C1530.5,204.0 1557.5,361.5 1485.5,456.0 Z" fill="#e6f4f8" stroke="#5aa9c0" stroke-width="2"/>
+<line x1="1287.5" y1="273.75" x2="1512.5" y2="273.75" stroke="#3c8d7f" stroke-width="2.4"/>
+<text x="1281.5" y="277.75" font-size="10.5" font-weight="normal" fill="#3c8d7f" text-anchor="end">board z=94</text>
+<line x1="1274.0" y1="309.75" x2="1526.0" y2="309.75" stroke="#2b3442" stroke-width="2.4"/>
+<text x="1268.0" y="313.75" font-size="10.5" font-weight="normal" fill="#2b3442" text-anchor="end">divider z=78</text>
+<line x1="1296.5" y1="429.0" x2="1503.5" y2="429.0" stroke="#2b3442" stroke-width="2.4"/>
+<text x="1290.5" y="433.0" font-size="10.5" font-weight="normal" fill="#2b3442" text-anchor="end">baffle z=25</text>
+<text x="1400" y="368.25" font-size="10.5" font-weight="normal" fill="#5b6575" text-anchor="middle">speaker chamber</text>
+<rect x="1384" y="419.0" width="32" height="10" fill="#d07a12"/>
+<rect x="1510.25" y="275.5" width="18" height="10" fill="#c0392b"/>
+<path d="M1528.25,280.5 L1539.5,280.5 L1539.5,456.0" fill="none" stroke="#c0392b" stroke-width="2.4" stroke-linejoin="round"/>
+<text x="1544.0" y="350.25" font-size="10.5" font-weight="normal" fill="#c0392b" text-anchor="start">W1</text>
+<text x="1505.75" y="270.5" font-size="10.5" font-weight="normal" fill="#c0392b" text-anchor="end">USB-C (back)</text>
+<circle cx="1400" cy="156.75" r="5" fill="none" stroke="#8a94a6" stroke-width="2" stroke-dasharray="3 2"/>
+<text x="1400" y="174.75" font-size="10.5" font-weight="normal" fill="#8a94a6" text-anchor="middle">light (apex)</text>
+<rect x="1285.25" y="279.25" width="8" height="16" fill="none" stroke="#8a94a6" stroke-width="2" stroke-dasharray="3 2"/>
+<text x="1299.25" y="295.75" font-size="10.5" font-weight="normal" fill="#8a94a6" text-anchor="start">mmWave (front wall)</text>
+<circle cx="1355.0" cy="447.0" r="4" fill="none" stroke="#8a94a6" stroke-width="2" stroke-dasharray="3 2"/>
+<text x="1363.0" y="451.0" font-size="10.5" font-weight="normal" fill="#8a94a6" text-anchor="start">temp (foot)</text>
+<line x1="1220.0" y1="456.0" x2="1557.5" y2="456.0" stroke="#5b6575" stroke-width="1"/>
+<text x="1557.5" y="470.0" font-size="10" font-weight="normal" fill="#5b6575" text-anchor="end">table</text>
+<text x="1404" y="219.75" font-size="10.5" font-weight="normal" fill="#5b6575" text-anchor="middle">crown</text>
+<text x="1265.0" y="470.0" font-size="10" font-weight="normal" fill="#5b6575" text-anchor="start">front</text>
+<text x="990" y="776" font-size="14" font-weight="bold" fill="#8a94a6" text-anchor="start">Optional, later (dashed):</text>
+<text x="990" y="794" font-size="14" font-weight="bold" fill="#8a94a6" text-anchor="start">sensors and an external mute button</text>
+<rect x="30" y="826" width="300" height="112" rx="6" fill="#ffffff" stroke="#8a94a6" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="40" y="846" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">U6  VEML7700 light</text>
+<text x="40" y="864.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">I2C 0x10 · 3V3 · apex window, z≈146</text>
+<text x="40" y="878.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Shared I2C bus (SDA/SCL)</text>
+<text x="40" y="893.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Removable crown → 4-pin JST-SH</text>
+<text x="40" y="907.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">(Qwiic) plug, ~12 cm lead</text>
+<rect x="350" y="826" width="300" height="112" rx="6" fill="#ffffff" stroke="#8a94a6" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="360" y="846" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">U7  SHT4x temp + humidity</text>
+<text x="360" y="864.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">I2C 0x44 · 3V3 · low in the foot, z≈17</text>
+<text x="360" y="878.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Shared I2C bus (SDA/SCL)</text>
+<text x="360" y="893.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">~15 cm lead via divider grommet</text>
+<text x="360" y="907.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Keep I2C at 100 kHz for the run</text>
+<rect x="670" y="826" width="300" height="112" rx="6" fill="#ffffff" stroke="#8a94a6" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="680" y="846" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">U8  LD2410C mmWave presence</text>
+<text x="680" y="864.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">5 V supply · 3.3 V UART, 256000 baud</text>
+<text x="680" y="878.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Front wall of the bay, z≈85,</text>
+<text x="680" y="893.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">away from the XIAO antenna</text>
+<text x="680" y="907.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">TX→GPIO2, RX←GPIO1, OUT→GPIO4</text>
+<rect x="990" y="826" width="300" height="112" rx="6" fill="#ffffff" stroke="#8a94a6" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="1000" y="846" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">SW2  External mute button</text>
+<text x="1000" y="864.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Momentary, wired across SW1's pads</text>
+<text x="1000" y="878.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Only if pressing SW1 through the shell fails</text>
+<text x="1000" y="893.0" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">A slide switch can't go here: SW1 is</text>
+<text x="1000" y="907.5" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">a toggle-on-press input (X1D09)</text>
+<circle cx="1278" cy="836" r="10" fill="#e8590c"/>
+<text x="1278" y="840" font-size="10" font-weight="bold" fill="#fff" text-anchor="middle">G7</text>
+<path d="M458,716 L458,790 L180,790 L180,826" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round" stroke-dasharray="7 5"/>
+<path d="M458,790 L480,790 L480,826" fill="none" stroke="#2463b5" stroke-width="2.2" stroke-linejoin="round" stroke-dasharray="7 5"/>
+<circle cx="458" cy="790" r="3.6" fill="#2463b5"/>
+<text x="200" y="784" font-size="10.5" font-weight="bold" fill="#2463b5" text-anchor="start">SDA, SCL, 3V3, GND from J4</text>
+<path d="M530,614 L530,806 L740,806 L740,826" fill="none" stroke="#1a8a4a" stroke-width="2.2" stroke-linejoin="round" stroke-dasharray="7 5"/>
+<path d="M554,614 L554,800 L770,800 L770,826" fill="none" stroke="#1a8a4a" stroke-width="2.2" stroke-linejoin="round" stroke-dasharray="7 5"/>
+<path d="M602,614 L602,794 L800,794 L800,826" fill="none" stroke="#1a8a4a" stroke-width="2.2" stroke-linejoin="round" stroke-dasharray="7 5"/>
+<text x="640" y="790" font-size="10.5" font-weight="bold" fill="#1a8a4a" text-anchor="start">GPIO1, 2, 4</text>
+<path d="M622,614 L622,780 L930,780 L930,826" fill="none" stroke="#c0392b" stroke-width="2.2" stroke-linejoin="round" stroke-dasharray="7 5"/>
+<text x="936" y="800" font-size="10.5" font-weight="bold" fill="#c0392b" text-anchor="start">5 V pad</text>
+<text x="30" y="955" font-size="14" font-weight="bold" fill="#1d2430" text-anchor="start">Legend</text>
+<path d="M30,975 L70,975" fill="none" stroke="#c0392b" stroke-width="3" stroke-linejoin="round"/>
+<text x="78" y="979" font-size="12" font-weight="normal" fill="#1d2430" text-anchor="start">Power</text>
+<path d="M200,975 L240,975" fill="none" stroke="#2463b5" stroke-width="3" stroke-linejoin="round"/>
+<text x="248" y="979" font-size="12" font-weight="normal" fill="#1d2430" text-anchor="start">I2C</text>
+<path d="M370,975 L410,975" fill="none" stroke="#7d3cb5" stroke-width="3" stroke-linejoin="round"/>
+<text x="418" y="979" font-size="12" font-weight="normal" fill="#1d2430" text-anchor="start">I2S</text>
+<path d="M540,975 L580,975" fill="none" stroke="#d07a12" stroke-width="3" stroke-linejoin="round"/>
+<text x="588" y="979" font-size="12" font-weight="normal" fill="#1d2430" text-anchor="start">Speaker / analog</text>
+<path d="M710,975 L750,975" fill="none" stroke="#1a8a4a" stroke-width="3" stroke-linejoin="round"/>
+<text x="758" y="979" font-size="12" font-weight="normal" fill="#1d2430" text-anchor="start">UART / GPIO</text>
+<path d="M880,975 L920,975" fill="none" stroke="#8a94a6" stroke-width="3" stroke-linejoin="round" stroke-dasharray="7 5"/>
+<text x="928" y="979" font-size="12" font-weight="normal" fill="#1d2430" text-anchor="start">Optional</text>
+<circle cx="40" cy="1005" r="10" fill="#e8590c"/>
+<text x="40" y="1009" font-size="10" font-weight="bold" fill="#fff" text-anchor="middle">G0</text>
+<rect x="30" y="995" width="20" height="20" fill="#e8590c"/>
+<text x="60" y="1010" font-size="11.5" font-weight="normal" fill="#1d2430" text-anchor="start">Guess to confirm on the bench. G1 XIAO port powers the whole board · G2 speaker socket type/polarity · G3 internal audio path ·</text>
+<text x="60" y="1027" font-size="11.5" font-weight="normal" fill="#1d2430" text-anchor="start">G4 which XIAO pads are exposed · G5 I2C tap point and pull-ups · G6 GPIO9 = MCLK · G7 external mute across SW1. Details in docs/wiring.md.</text>
+<text x="30" y="1059" font-size="11.5" font-weight="normal" fill="#5b6575" text-anchor="start">Not wired out on purpose: the XMOS USB-C (J3) and the 3.5 mm jack (J5). The board's mute button, red LED and LED ring need no wiring.</text>
+<metadata><c2pa:manifest>AAAWgmp1bWIAAAAeanVtZGMycGEAEQAQgAAAqgA4m3EDYzJwYQAAABZcanVtYgAAAEdqdW1kYzJtYQARABCAAACqADibcQN1cm46YzJwYTozNjlmY2FkYy1jMTkxLTQ5NzMtYTM5OS1iNTZlOGM5YTg4N2MAAAADl2p1bWIAAAApanVtZGMyYXMAEQAQgAAAqgA4m3EDYzJwYS5hc3NlcnRpb25zAAAAALxqdW1iAAAARGp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuaW5ncmVkaWVudC52MwAAAAAYYzJzaMaP3WAK0E0dBgx+Q0eQS9EAAABwY2JvcqNpZGM6Zm9ybWF0bWltYWdlL3N2Zyt4bWxqaW5zdGFuY2VJRHgseG1wOmlpZDo5NDhiN2U1Ny04ZTViLTQ2MTktYTA1My0yMDQ5YjkyNzgyZmVscmVsYXRpb25zaGlwaHBhcmVudE9mAAAB4mp1bWIAAABBanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5hY3Rpb25zLnYyAAAAABhjMnNoQMn/FpYb3G0hGPUSroTmRQAAAZljYm9yomdhY3Rpb25zgqJmYWN0aW9ua2MycGEub3BlbmVkanBhcmFtZXRlcnOha2luZ3JlZGllbnRzgaJjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFggnCteAGWPO8ch4SIRe9lzt6nNL5hsz2MjdteHmBssHuCkZmFjdGlvbngdY29tLmFudGhyb3BpYy5jbGF1ZGUucHJvdmlkZWRqcGFyYW1ldGVyc6F4H2NvbS5hbnRocm9waWMub3JpZ2luLWNvbmZpZGVuY2VndW5rbm93bmtkZXNjcmlwdGlvbnhmQ2xhdWRlIHByb3ZpZGVkIHRoaXMgZmlsZSBhdCB0aGUgcmVxdWVzdCBvZiBhIHVzZXIgYW5kIG1heSBoYXZlIGNyZWF0ZWQgb3IgbW9kaWZpZWQgdGhlIGZpbGUgY29udGVudHMubXNvZnR3YXJlQWdlbnShZG5hbWVmQ2xhdWRlcmFsbEFjdGlvbnNJbmNsdWRlZPUAAADIanVtYgAAAEBqdW1kY2JvcgARABCAAACqADibcRNjMnBhLmhhc2guZGF0YQAAAAAYYzJzaCRpVmtNnWvMDbbR6Wg+B4oAAACAY2JvcqVjYWxnZnNoYTI1NmNwYWRMAAAAAAAAAAAAAAAAZGhhc2hYIEAv7TFnaI0Xt1xiLsINEjCfRrPmh8c/qKMC0tCBa07IZG5hbWVuanVtYmYgbWFuaWZlc3RqZXhjbHVzaW9uc4GiZXN0YXJ0GYHkZmxlbmd0aBkeBAAAAj5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAACD2Nib3KlY2FsZ2ZzaGEyNTZpc2lnbmF0dXJleE1zZWxmI2p1bWJmPS9jMnBhL3VybjpjMnBhOjM2OWZjYWRjLWMxOTEtNDk3My1hMzk5LWI1NmU4YzlhODg3Yy9jMnBhLnNpZ25hdHVyZWppbnN0YW5jZUlEeCx4bXA6aWlkOjFkYjJiZTNmLWRjZjEtNDY4Ni1hMzAxLTdlYjAwNTE3ODg3M3JjcmVhdGVkX2Fzc2VydGlvbnODomN1cmx4LXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaW5ncmVkaWVudC52M2RoYXNoWCCcK14AZY87xyHhIhF72XO3qc0vmGzPYyN214eYGywe4KJjdXJseCpzZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmFjdGlvbnMudjJkaGFzaFggcekwV7leq+w6fGt1l6SwPl3KfW8Lnd92DSLqVAL94c+iY3VybHgpc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5oYXNoLmRhdGFkaGFzaFggviWbca57YjO0sDcPgz5GFjwY5pnbrkV/OFY4F3EVcyV0Y2xhaW1fZ2VuZXJhdG9yX2luZm+jZG5hbWVvQW50aHJvcGljIEZpbGVzZ3ZlcnNpb25lMS4wLjBrc3BlY1ZlcnNpb25lMi40LjAAABA4anVtYgAAAChqdW1kYzJjcwARABCAAACqADibcQNjMnBhLnNpZ25hdHVyZQAAABAIY2JvctKEWQISogEmGCFZAgowggIGMIIBjaADAgECAhRA5aAK7sI50L64g/oGQgU9Z1UTADAKBggqhkjOPQQDAzBJMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEuMCwGA1UEAxMlQW50aHJvcGljIENvbnRlbnQgQ3JlZGVudGlhbHMgUm9vdCBDQTAeFw0yNjA4MDcxODQzNTZaFw0yODA4MDYxOTQzNTZaMEQxFzAVBgNVBAoTDkFudGhyb3BpYywgUEJDMSkwJwYDVQQDEyBBbnRocm9waWMgQ2xhdWRlIENvbnRlbnQgU2lnbmluZzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJh6CmvLUBgFFNU0vUKlOVtE6djd17L5SuwX0LemFisBM3dkd/3cyjxFA3Qo5S46fX0/ihY0VZ7mfb9KF703t5OjWDBWMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUEDjAMBgorBgEEAYPoXgIBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAUzlHiBIFOZFsj+OPEz5o+nMHXXMIwCgYIKoZIzj0EAwMDZwAwZAIwMXMdFJ4BetLLVY7ORuE9noqbbAZOZn/aArXyTwFAZfKrPzxF2vPoJNf1+UCdg1XGAjBwX1zd9WGqYkqmL5SFqw1QySjr1zJfpJM9+1rdDwSPLMOPOjKuiXjoU/pUUeG9RwmhY3BhZFkNngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPZYQP9+tk1i/Bhq8Hp3O1ktrEh8bLVOPilNyhvFZpaN6fUQEnFMuMj95ws0cSPhsxHMpgofGomGI7AVGP28TJE23dM=</c2pa:manifest></metadata></svg>

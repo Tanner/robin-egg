@@ -1,0 +1,205 @@
+"""A fake egg, so the Robin Egg Server can be tested with no hardware.
+
+It speaks the ESPHome native API (plaintext) the way the formatBCE firmware does:
+it fires a "wake word", streams 16 kHz mic audio over the API, starts fetching the
+reply URL as soon as the server says streaming has started, and reopens the mic
+for a follow-up when the server asks for one. Used by the tests and by --demo.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+import urllib.request
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+import soundfile as sf
+from aioesphomeapi import api_pb2 as pb
+from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
+
+from .audio import MIC_RATE, resample
+
+PROTO_TO_TYPE = {v: k for k, v in MESSAGE_TYPE_TO_PROTO.items()}
+CHUNK = 1024  # bytes of mic audio per message, 32 ms
+
+
+def varint(n: int) -> bytes:
+    out = bytearray()
+    while True:
+        byte, n = n & 0x7F, n >> 7
+        out.append(byte | (0x80 if n else 0))
+        if not n:
+            return bytes(out)
+
+
+async def read_varint(r: asyncio.StreamReader) -> int:
+    shift = result = 0
+    while True:
+        byte = (await r.readexactly(1))[0]
+        result |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return result
+        shift += 7
+
+
+def load_speech(path: str | Path) -> bytes:
+    """Any audio file soundfile reads (wav, aiff, flac) as 16 kHz 16-bit mono PCM."""
+    data, rate = sf.read(str(path), dtype="float32", always_2d=True)
+    x = resample(data.mean(axis=1), rate, MIC_RATE)
+    return (np.clip(x, -1, 1) * 32767).astype("<i2").tobytes()
+
+
+def silence(seconds: float) -> bytes:
+    rng = np.random.default_rng(0)
+    return np.clip(rng.normal(0, 20, int(seconds * MIC_RATE)), -32768, 32767).astype("<i2").tobytes()
+
+
+@dataclass
+class Run:
+    wake_word: str
+    events: list[tuple[int, dict[str, str]]] = field(default_factory=list)
+    streamed: bytes = b""  # reply as the egg received it while it was being written
+    final: bytes = b""  # the same URL fetched again after the run ended
+    first_byte_at: float | None = None
+    tts_end_at: float | None = None
+
+    def types(self) -> list[int]:
+        return [t for t, _ in self.events]
+
+    def data(self, event_type: int) -> dict[str, str]:
+        return next((d for t, d in self.events if t == event_type), {})
+
+
+class FakeEgg:
+    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu") -> None:
+        self.utterances = list(utterances)
+        self.realtime = realtime
+        self.wake_word = wake_word
+        self.runs: list[Run] = []
+        self.announcements: list[tuple[str, bytes]] = []
+        self.done = asyncio.Event()
+        self._w: asyncio.StreamWriter | None = None
+        self._mic_open = False
+        self._fetch: asyncio.Task | None = None
+        self._server: asyncio.base_events.Server | None = None
+        self.port = 0
+
+    async def start(self, host: str = "127.0.0.1", port: int = 0) -> int:
+        self._server = await asyncio.start_server(self._handle, host, port)
+        self.port = self._server.sockets[0].getsockname()[1]
+        return self.port
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+
+    # ---- wire ----
+
+    def send(self, msg) -> None:
+        data = msg.SerializeToString()
+        assert self._w is not None
+        self._w.write(b"\x00" + varint(len(data)) + varint(PROTO_TO_TYPE[type(msg)]) + data)
+
+    async def _handle(self, r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
+        try:
+            if (await r.readexactly(1)) != b"\x00":  # a Noise hello; this fake is plaintext only
+                w.close()
+                return
+            self._w = w
+            first = True
+            while True:
+                if not first and (await r.readexactly(1)) != b"\x00":
+                    return
+                first = False
+                length = await read_varint(r)
+                mtype = await read_varint(r)
+                msg = MESSAGE_TYPE_TO_PROTO[mtype]()
+                msg.ParseFromString(await r.readexactly(length))
+                await self._on_message(msg)
+        except (asyncio.IncompleteReadError, ConnectionResetError):
+            return
+
+    async def _on_message(self, msg) -> None:
+        if isinstance(msg, pb.HelloRequest):
+            self.send(pb.HelloResponse(api_version_major=1, api_version_minor=12, server_info="fake egg", name="respeaker-xvf3800"))
+        elif isinstance(msg, pb.DeviceInfoRequest):
+            self.send(pb.DeviceInfoResponse(name="fake-egg", esphome_version="2026.10.2", project_name="formatbce.Respeaker XVF3800 Satellite", project_version="2026.11.0", voice_assistant_feature_flags=0b11111))
+        elif isinstance(msg, pb.PingRequest):
+            self.send(pb.PingResponse())
+        elif isinstance(msg, pb.DisconnectRequest):
+            self.send(pb.DisconnectResponse())
+        elif isinstance(msg, pb.SubscribeVoiceAssistantRequest) and msg.subscribe:
+            await asyncio.sleep(0.05)
+            self._start_run(self.wake_word)
+        elif isinstance(msg, pb.VoiceAssistantResponse):
+            assert msg.port == 0 and not msg.error
+            asyncio.create_task(self._stream_mic())
+        elif isinstance(msg, pb.VoiceAssistantEventResponse):
+            await self._on_event(msg.event_type, {d.name: d.value for d in msg.data})
+        elif isinstance(msg, pb.VoiceAssistantAnnounceRequest):
+            body = await asyncio.to_thread(self._get, msg.media_id)
+            self.announcements.append((msg.text, body))
+            self.send(pb.VoiceAssistantAnnounceFinished(success=True))
+
+    # ---- the voice run ----
+
+    def _start_run(self, wake_word: str) -> None:
+        self.runs.append(Run(wake_word))
+        self.send(pb.VoiceAssistantRequest(start=True, conversation_id="c1", wake_word_phrase=wake_word))
+
+    async def _stream_mic(self) -> None:
+        """Like the real egg: speech if someone is talking, then room noise until told to stop."""
+        audio = self.utterances.pop(0) if self.utterances else b""
+        audio = silence(0.4) + audio + silence(8.0)
+        self._mic_open = True
+        run = len(self.runs)
+        for i in range(0, len(audio), CHUNK):
+            if not self._mic_open or len(self.runs) != run:
+                return
+            self.send(pb.VoiceAssistantAudio(data=audio[i : i + CHUNK]))
+            await self._w.drain()
+            await asyncio.sleep(CHUNK / 2 / MIC_RATE if self.realtime else 0)
+
+    async def _on_event(self, t: int, data: dict[str, str]) -> None:
+        run = self.runs[-1]
+        run.events.append((t, data))
+        if t == pb.VOICE_ASSISTANT_STT_VAD_END:
+            self._mic_open = False
+        elif t == pb.VOICE_ASSISTANT_INTENT_PROGRESS and data.get("tts_start_streaming") == "1":
+            self._fetch = asyncio.create_task(self._fetch_reply(run, run.data(pb.VOICE_ASSISTANT_RUN_START)["url"]))
+        elif t == pb.VOICE_ASSISTANT_TTS_END:
+            run.tts_end_at = time.monotonic()
+            if self._fetch is None:  # not streamed: play the finished file now
+                self._fetch = asyncio.create_task(self._fetch_reply(run, data["url"]))
+        elif t == pb.VOICE_ASSISTANT_RUN_END:
+            self._mic_open = False
+            if self._fetch is not None:
+                await self._fetch
+                self._fetch = None
+                url = run.data(pb.VOICE_ASSISTANT_TTS_END).get("url")
+                if url:
+                    run.final = await asyncio.to_thread(self._get, url)
+            if run.data(pb.VOICE_ASSISTANT_INTENT_END).get("continue_conversation") == "1":
+                self._start_run("")  # the egg reopens its mic with no wake word
+            else:
+                self.done.set()
+
+    async def _fetch_reply(self, run: Run, url: str) -> None:
+        def get() -> bytes:
+            buf = bytearray()
+            with urllib.request.urlopen(url, timeout=30) as resp:
+                assert resp.headers["Content-Type"] == "audio/flac"
+                while chunk := resp.read1(4096) if hasattr(resp, "read1") else resp.read(4096):
+                    if run.first_byte_at is None:
+                        run.first_byte_at = time.monotonic()
+                    buf.extend(chunk)
+            return bytes(buf)
+
+        run.streamed = await asyncio.to_thread(get)
+
+    @staticmethod
+    def _get(url: str) -> bytes:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            return resp.read()

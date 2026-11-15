@@ -21,7 +21,9 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | No audio leaves the egg until the wake word fires | Privacy |
 | The connection stays open so the Mac mini can push chimes, speech and LED states | Needed for proactive behaviour |
 | Wake word trained with microWakeWord | It runs on the ESP32-S3 and ESPHome supports it |
-| Phase 1 uses formatBCE's ESPHome firmware with Home Assistant | Proves the hardware before we write firmware |
+| Phase 1 uses formatBCE's ESPHome firmware | Proves the hardware before we write firmware |
+| No Home Assistant. The Robin Egg Server speaks ESPHome's native API itself, so the formatBCE firmware stays. Decided 2026-11-15 | The egg is a personal assistant for Tanner and Ryan, not a home assistant. It also drops a Home Assistant VM from the Mac mini |
+| The server is called the Robin Egg Server. Decided 2026-11-15 | "Egg server" on its own reads oddly |
 
 ## Hardware
 
