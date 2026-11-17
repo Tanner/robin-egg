@@ -82,13 +82,14 @@ class RobinBrain:
         url: str,
         agent: str,
         timeout_s: float = 90.0,
+        people_timeout_s: float = 5.0,
     ) -> None:
         import httpx2
 
         self.agent = agent
         self.chat_url = f"{url.rstrip('/')}/api/chat/{agent}"
         self.endpoint = f"{self.chat_url}/messages"
-        self.url, self.timeout_s = url.rstrip("/"), timeout_s
+        self.url, self.timeout_s, self.people_timeout_s = url.rstrip("/"), timeout_s, people_timeout_s
         # No read timeout from the client: the overall deadline below covers a silent server.
         self.client = httpx2.AsyncClient(timeout=httpx2.Timeout(10.0, read=None))
 
@@ -148,8 +149,12 @@ class RobinBrain:
         import httpx2
 
         url = f"{self.url}/api/users"
+        # Every turn waits on this list, so a server that accepts and never answers must not hang them.
+        # httpx timeouts are per read, so wait_for caps the whole request.
         try:
-            resp = await self.client.get(url)
+            resp = await asyncio.wait_for(self.client.get(url, timeout=httpx2.Timeout(self.people_timeout_s)), self.people_timeout_s)
+        except (httpx2.TimeoutException, asyncio.TimeoutError):
+            raise RobinUnavailable(f"robin-assistant at {url} did not send the people list within {self.people_timeout_s:g} s") from None
         except httpx2.HTTPError as err:
             raise RobinUnavailable(f"Could not reach robin-assistant at {url}: {err}") from err
         if resp.status_code != 200:

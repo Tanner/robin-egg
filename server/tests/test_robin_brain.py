@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +42,8 @@ class FakeRobinAssistant:
         self.scripts, self.status, self.agent_lookup, self.headers = list(scripts), status, agent_lookup, headers
         self.requests: list[dict] = []
         self.users_reply: tuple[int, dict] = (200, {"users": []})
+        self.users_hang = False  # accept GET /api/users and never answer it
+        self._release = asyncio.Event()
         self._server: asyncio.base_events.Server | None = None
         self.url = ""
 
@@ -50,6 +53,7 @@ class FakeRobinAssistant:
         return self.url
 
     async def stop(self) -> None:
+        self._release.set()
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
@@ -62,6 +66,9 @@ class FakeRobinAssistant:
             body = await reader.readexactly(int(headers.get("content-length", "0")))
             fields = dict(re.findall(r'name="([^"]+)"\r\n\r\n(.*?)\r\n--', body.decode(), re.S))
             self.requests.append({"line": request_line, "headers": headers, "fields": fields})
+            if self.users_hang and request_line.startswith("GET /api/users"):
+                await self._release.wait()
+                return
             if request_line.startswith("GET "):  # /api/users, or /api/chat/:agent for the startup check
                 status, payload = self.users_reply if request_line.startswith("GET /api/users") else self.agent_lookup
                 body = json.dumps(payload).encode()
@@ -180,6 +187,23 @@ def test_people_is_unavailable_when_robin_assistant_refuses():
 
     with pytest.raises(RobinUnavailable):
         asyncio.run(fetch())
+
+
+def test_people_gives_up_on_a_robin_assistant_that_never_answers():
+    async def fetch():
+        fake = FakeRobinAssistant([])
+        fake.users_hang = True
+        brain = RobinBrain(await fake.start(), "robin", people_timeout_s=0.2)
+        start = time.monotonic()
+        try:
+            with pytest.raises(RobinUnavailable):
+                await brain.people()
+            return time.monotonic() - start
+        finally:
+            await brain.close()
+            await fake.stop()
+
+    assert asyncio.run(fetch()) < 2.0
 
 
 def test_a_quiet_turn_raises_quiet():
