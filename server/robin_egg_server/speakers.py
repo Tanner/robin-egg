@@ -184,23 +184,22 @@ class VoiceprintStore:
             self.prints = {}
             LOG.warning("Ignoring the voiceprints in %s: the file could not be read (%s)", self.path, e)
 
+    # Each change is written to disk before it is kept in memory, so a failed write leaves the two agreeing.
     def replace(self, key: str, enrolled: list[np.ndarray]) -> None:
-        self.prints[key] = Voiceprint(list(enrolled), [], date.today().isoformat())
-        self._save()
+        self._commit({**self.prints, key: Voiceprint(list(enrolled), [], date.today().isoformat())})
 
     def learn(self, key: str, embedding: np.ndarray, cap: int) -> None:
         vp = self.prints.get(key)
         if vp is None:
             return
-        vp.pool.append(embedding)
-        del vp.pool[: max(0, len(vp.pool) - cap)]
-        self._save()
+        pool = [*vp.pool, embedding]
+        self._commit({**self.prints, key: Voiceprint(vp.enrolled, pool[max(0, len(pool) - cap) :], vp.enrolled_on)})
 
     def forget(self, key: str) -> None:
-        if self.prints.pop(key, None) is not None:
-            self._save()
+        if key in self.prints:
+            self._commit({k: vp for k, vp in self.prints.items() if k != key})
 
-    def _save(self) -> None:
+    def _commit(self, prints: dict[str, Voiceprint]) -> None:
         data = {
             "model": self.model_name,
             "people": {
@@ -209,13 +208,18 @@ class VoiceprintStore:
                     "pool": [np.asarray(v).tolist() for v in vp.pool],
                     "enrolled_on": vp.enrolled_on,
                 }
-                for key, vp in self.prints.items()
+                for key, vp in prints.items()
             },
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data))
-        os.replace(tmp, self.path)
+        try:
+            tmp.write_text(json.dumps(data))
+            os.replace(tmp, self.path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        self.prints = prints
 
 
 def scores(embedding: np.ndarray, store: VoiceprintStore, keys: set[str]) -> list[tuple[str, float]]:

@@ -172,6 +172,36 @@ def test_forget_removes_and_saves(tmp_path):
     assert reloaded.prints == {}
 
 
+def failing_writes(monkeypatch) -> None:
+    def broken(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("robin_egg_server.speakers.os.replace", broken)
+
+
+def test_a_failed_write_leaves_the_voiceprints_as_they_were(tmp_path, monkeypatch):
+    path = tmp_path / "v.json"
+    store = VoiceprintStore(path, MODEL)
+    store.replace("tanner", [unit(1, 0, 0)])
+    on_disk = path.read_text()
+    failing_writes(monkeypatch)
+
+    with pytest.raises(OSError):
+        store.replace("tanner", [unit(0, 1, 0), unit(0, 0, 1)])
+    with pytest.raises(OSError):
+        store.replace("ryan", [unit(0, 1, 0)])
+    with pytest.raises(OSError):
+        store.learn("tanner", unit(0, 0, 1), cap=50)
+    with pytest.raises(OSError):
+        store.forget("tanner")
+
+    assert set(store.prints) == {"tanner"}
+    assert len(store.prints["tanner"].enrolled) == 1 and np.allclose(store.prints["tanner"].enrolled[0], unit(1, 0, 0))
+    assert store.prints["tanner"].pool == []
+    assert path.read_text() == on_disk
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
 def test_store_ignores_a_broken_or_foreign_file(tmp_path, caplog):
     foreign = tmp_path / "foreign.json"
     foreign.write_text(json.dumps({"model": "other.onnx", "people": {"tanner": {
