@@ -81,6 +81,7 @@ That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
+| `--max-utterance` | 30 s | The longest request. Listening stops here even if you have not paused. |
 | `--echo` | off | Repeat what was heard instead of asking Robin. Tests the audio chain with no robin-assistant. |
 | `--server` | required | robin-assistant's address: a host or IP, `host:port`, or a URL such as `https://robin.example.net`. A bare host gets port 8273; a URL keeps its scheme's port. Not needed with `--echo`. |
 | `--agent-name` | required | The robin-assistant agent to ask: its folder name under `~/.robin/agents/`. Not needed with `--echo`. |

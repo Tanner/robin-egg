@@ -20,7 +20,7 @@ class VadConfig:
     min_speech_s: float = 0.3  # speech needed before an end of speech counts
     end_silence_s: float = 0.8  # silence that ends the utterance
     no_speech_timeout_s: float = 6.0  # give up if nobody speaks
-    max_utterance_s: float = 15.0
+    max_utterance_s: float = 30.0  # stop listening even if the speaker never pauses
     floor_frames: int = 10  # frames used to learn the room's noise floor
     min_threshold: float = 300.0  # RMS on 16-bit samples
     max_threshold: float = 1500.0  # so speaking straight after the wake word still counts
