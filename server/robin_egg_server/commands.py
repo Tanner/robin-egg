@@ -42,6 +42,7 @@ _NAME_LEAD_INS = ("my name is", "this is", "its", "im", "i am")
 
 KEEP_IT = "Okay, I'll keep it."
 SAVE_FAILED = "Sorry, I couldn't save that. Try again in a bit."
+FORGET_FAILED = "Sorry, I couldn't forget that. Try again in a bit."
 STOPPED = "Okay, I've stopped. Nothing was saved."
 SPEAKER_ID_OFF = "Speaker recognition is turned off, so I can't learn or forget voices right now."
 
@@ -277,7 +278,7 @@ class VoiceCommands:
             self.store.forget(flow.person.key)
         except OSError as err:
             LOG.warning("Forget for %s: could not delete the voiceprint (%s)", flow.person.key, err)
-            return self._end(SAVE_FAILED)
+            return self._end(FORGET_FAILED)
         LOG.info("Forget for %s: voiceprint deleted", flow.person.key)
         return self._end("Done. I've forgotten your voice.")
 

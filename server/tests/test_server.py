@@ -25,7 +25,7 @@ from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.audio import MIC_RATE, ReplyAudio
 from robin_egg_server.brain import sentences
-from robin_egg_server.commands import ENROL_SENTENCES, VoiceCommands
+from robin_egg_server.commands import ENROL_SENTENCES, KEEP_IT, SPEAKER_ID_OFF, VoiceCommands
 from robin_egg_server.egg import FAILED_TURN, Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.speakers import Match, People, Person, SpeakerId, VoiceprintStore
@@ -510,7 +510,7 @@ def test_command_turns_are_not_learned(tmp_path):
     texts = ["learn my voice", "Tanner", "no"]
     egg, _ = asyncio.run(converse([speech(4.0) for _ in texts], FakeSTT(texts), SlowBrain([]), ToneTTS(),
                                   speakers=speakers, people=people, commands=commands))
-    assert egg.runs[-1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Okay, I'll keep it."
+    assert egg.runs[-1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == KEEP_IT
     assert json.loads((tmp_path / "voiceprints.json").read_text())["people"]["tanner"]["pool"] == []
 
 
@@ -536,11 +536,12 @@ def test_a_mumble_while_asking_for_the_name_counts_as_a_miss(tmp_path):
 
 
 def test_voice_commands_say_speaker_recognition_is_off_when_it_is():
+    assert SPEAKER_ID_OFF == "Speaker recognition is turned off, so I can't learn or forget voices right now."
     for command in ("learn my voice", "Robin, forget my voice."):
         brain = SlowBrain([])
         egg, _ = asyncio.run(converse([speech(2.0)], FakeSTT([command]), brain, ToneTTS()))
         (run,) = egg.runs
-        assert run.data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Speaker recognition is turned off, so I can't learn or forget voices right now."
+        assert run.data(pb.VOICE_ASSISTANT_TTS_START)["text"] == SPEAKER_ID_OFF
         assert run.data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] == "0"
         assert brain.heard == []
 

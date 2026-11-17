@@ -11,6 +11,10 @@ import numpy as np
 
 from robin_egg_server.commands import (
     ENROL_SENTENCES,
+    FORGET_FAILED,
+    KEEP_IT,
+    SAVE_FAILED,
+    STOPPED,
     VoiceCommands,
     is_command,
     same_sentence,
@@ -20,8 +24,6 @@ from robin_egg_server.speakers import Match, People, Person, Thresholds, Voicepr
 TANNER = Person("tanner", "Tanner")
 RYAN = Person("ryan", "Ryan")
 
-KEEP = "Okay, I'll keep it."
-STOPPED = "Okay, I've stopped. Nothing was saved."
 RETRY_NAME = "I only know Tanner and Ryan. Who am I talking to?"
 INTRO = "I'll read you ten short sentences. Repeat each one after me, in your normal voice. "
 
@@ -250,7 +252,7 @@ def test_replacing_needs_a_yes(tmp_path):
     step = reach_sentences(commands, match=heard_as("tanner"))
     assert (step.say, step.listen) == ("I already know Tanner's voice. Replace it?", True)
     step = say(commands, "no")
-    assert (step.say, step.listen) == (KEEP, False)
+    assert (step.say, step.listen) == (KEEP_IT, False)
     assert len(store.prints["tanner"].enrolled) == 3
     assert store.prints["tanner"].pool
 
@@ -280,7 +282,7 @@ def test_a_reply_that_only_contains_a_yes_is_not_one(tmp_path):
     for reply in ("no, not yes", "yesterday was better", "don't do it", "go ahead and stop"):
         commands, store = make(tmp_path, enrolled=[("tanner", TANNER_VOICE)])
         say(commands, "forget my voice", heard_as("tanner"))
-        assert say(commands, reply).say == KEEP, reply
+        assert say(commands, reply).say == KEEP_IT, reply
         assert "tanner" in store.prints
 
 
@@ -298,7 +300,7 @@ def test_forget_anything_but_yes_keeps_it(tmp_path):
     commands, store = make(tmp_path, enrolled=[("tanner", TANNER_VOICE)])
     say(commands, "forget my voice", heard_as("tanner"))
     step = say(commands, "hmm maybe")
-    assert (step.say, step.listen) == (KEEP, False)
+    assert (step.say, step.listen) == (KEEP_IT, False)
     assert "tanner" in store.prints
 
 
@@ -319,9 +321,6 @@ def test_reset_drops_the_flow(tmp_path):
     assert not commands.active
     assert store.prints == {}
     assert say(commands, "hello there") is None
-
-
-SAVE_FAILED = "Sorry, I couldn't save that. Try again in a bit."
 
 
 def test_a_failed_save_ends_the_enrolment(tmp_path, monkeypatch):
@@ -348,6 +347,7 @@ def test_a_failed_forget_ends_the_conversation(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "forget", broken)
     say(commands, "forget my voice", heard_as("tanner"))
     step = say(commands, "yes")
-    assert (step.say, step.listen) == (SAVE_FAILED, False)
+    assert (step.say, step.listen) == (FORGET_FAILED, False)
+    assert FORGET_FAILED == "Sorry, I couldn't forget that. Try again in a bit."
     assert not commands.active
     assert say(commands, "what's the weather") is None
