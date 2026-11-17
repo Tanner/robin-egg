@@ -80,10 +80,9 @@ That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
-| `--brain robin\|claude\|echo` | `claude` | `robin` asks Robin through robin-assistant. `claude` calls Claude directly. `echo` repeats what was heard, to test the audio chain with no key. |
+| `--brain robin\|claude\|echo` | `claude` | `robin` asks Robin through robin-assistant, in the plain web chat the phone uses. `claude` calls Claude directly. `echo` repeats what was heard, to test the audio chain with no key. |
 | `--robin-url` | `http://127.0.0.1:8273` | robin-assistant's address. |
 | `--robin-agent` | `robin` | The robin-assistant agent to ask. |
-| `--robin-project` | plain web chat | The project whose main chat the egg talks in. |
 | `--robin-user` | none | A `[users]` key to send as the speaker. Left out until the egg can tell who is speaking. |
 | `--robin-timeout` | 90 s | How long to wait for Robin to finish answering before the error sound. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |

@@ -58,7 +58,7 @@ class FakeRobinAssistant:
             fields = dict(re.findall(r'name="([^"]+)"\r\n\r\n(.*?)\r\n--', body.decode(), re.S))
             self.requests.append({"line": request_line, "headers": headers, "fields": fields})
             if self.status != 200:
-                writer.write(f"HTTP/1.1 {self.status} Nope\r\nContent-Length: 15\r\nConnection: close\r\n\r\nUnknown project".encode())
+                writer.write(f"HTTP/1.1 {self.status} Nope\r\nContent-Length: 13\r\nConnection: close\r\n\r\nUnknown agent".encode())
                 await writer.drain()
                 return
             writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")
@@ -105,7 +105,7 @@ def answer(*texts: str, outcome: str = "response") -> list[tuple]:
 
 
 def test_posts_as_a_speaker_and_yields_each_reply_separately():
-    got, reqs, err = asyncio.run(ask([answer("You have the dentist at **10**.", "Want a reminder?")], project=7))
+    got, reqs, err = asyncio.run(ask([answer("You have the dentist at **10**.", "Want a reminder?")]))
     assert err is None
     assert got == ["You have the dentist at 10.\n", "Want a reminder?\n"]
     (req,) = reqs
@@ -113,9 +113,8 @@ def test_posts_as_a_speaker_and_yields_each_reply_separately():
     assert req["headers"]["accept"] == "text/event-stream"
     assert req["headers"]["content-type"].startswith("multipart/form-data")
     f = req["fields"]
-    assert {k: f[k] for k in ("text", "device", "wait", "project")} == {
-        "text": "what's on tomorrow", "device": "speaker", "wait": "1", "project": "7",
-    }
+    assert {k: f[k] for k in ("text", "device", "wait")} == {"text": "what's on tomorrow", "device": "speaker", "wait": "1"}
+    assert not {"chat", "project", "thread"} & f.keys()  # the plain web chat, shared with the phone
     assert re.fullmatch(r"[A-Za-z0-9_-]{8,64}", f["send_id"])  # the route's SEND_ID pattern
     assert "user" not in f  # the egg cannot tell who is speaking yet
 
@@ -134,7 +133,6 @@ def test_each_turn_gets_its_own_send_id_and_an_optional_user():
     first, second = asyncio.run(two())
     assert first["fields"]["send_id"] != second["fields"]["send_id"]
     assert first["fields"]["user"] == "tanner"
-    assert "project" not in first["fields"]
 
 
 def test_a_quiet_turn_raises_quiet():
@@ -173,8 +171,8 @@ def test_a_turn_that_never_ends_times_out_despite_pings():
 
 
 def test_a_refused_post_is_an_error_with_the_status():
-    _, _, err = asyncio.run(ask([], status=404, project=99))
-    assert isinstance(err, RobinUnavailable) and "404" in str(err) and "Unknown project" in str(err)
+    _, _, err = asyncio.run(ask([], status=404))
+    assert isinstance(err, RobinUnavailable) and "404" in str(err) and "Unknown agent" in str(err)
 
 
 def test_unreachable_robin_assistant_is_an_error():

@@ -49,7 +49,7 @@ The route already takes a `device` field (`phone`, `tablet`, `computer`, in `WEB
 
 To confirm while building:
 
-- A merged turn takes the last message's metadata, and a steered message carries text only (`steerText`, `pipeline-state-machine.ts:169-173`). A steered egg message keeps whatever device the running turn had. That is fine in a chat only the egg uses (see "Which chat").
+- A merged turn takes the last message's metadata, and a steered message carries text only (`steerText`, `pipeline-state-machine.ts:169-173`). A steered egg message keeps whatever device the running turn had, which in the shared chat may be `phone` (see "Which chat").
 - The exact-repeat check (`agent.ts:1463`) must not hide a device change back to `speaker` after a phone message.
 - Whether memory summarisation reads system-role entries. The device row should not end up in memory as something the person said.
 
@@ -96,9 +96,14 @@ Rules:
 
 ### Which chat
 
-The egg should not share the plain web chat with the phone. In a shared chat, an egg question and a phone message arriving close together get merged or steered into each other's turns, and each `device` is overwritten by the other's.
+The egg posts to the plain web chat, the same one the phone uses. It names no `chat`, `project` or `thread`. Decided 2026-11-16: the egg does not get a project. Egg and phone conversations share one context, so something asked out loud can be followed up on the phone.
 
-Use a project's main chat, named something like "Robin Egg". Project main chats go through `web.receive`. The trade-off is that egg conversations no longer share context with the phone chat. Robin's memory still carries over between chats. The robin-assistant session should confirm that a project's main chat behaves like the plain chat for ordinary conversation, for example that the project coordinator prompt does not take over.
+What sharing costs, and what the build has to handle:
+
+- An egg question and a phone message close together can be merged or steered into one turn. A `wait=1` must still return only rows that answer its own message. Confirm whether a message steered into a running turn appears in that turn's `messageIds`. If it does not, the egg's wait would never see its reply, and the steered-message case needs another way to match.
+- The `device` row changes between `speaker` and `phone` as the two alternate. Each message carries its own device, so each turn should see the right one. The exact-repeat check under "To confirm while building" matters more here.
+- A merged turn takes the last message's metadata, so a phone message merged with an egg question answers as `phone`, or the other way round. Accept this for v1: it needs two people talking to Robin within half a second.
+- `wait=1` ends when the chat goes idle, so a phone conversation that starts right after an egg question can hold the egg's wait open longer. The egg's own timeout covers the worst case.
 
 ### Preventing regressions
 
@@ -120,7 +125,7 @@ Use a project's main chat, named something like "Robin Egg". Project main chats 
 
 ### Report back
 
-- The agent name, the port, and the project id for the egg's chat.
+- The agent name and the port.
 - What happens today when `user` is omitted or is not a `[users]` key, since the egg cannot identify speakers yet.
 - Anything in this doc that changed.
 
@@ -128,7 +133,7 @@ Use a project's main chat, named something like "Robin Egg". Project main chats 
 
 Done in this repo once the robin-assistant side lands.
 
-- A `RobinBrain` in `server/robin_egg_server/brain.py`, beside `ClaudeBrain` and `EchoBrain`, behind the same `Brain` protocol. It posts `text`, `device=speaker`, `wait=1`, a fresh `send_id` and the project id, reads the event stream, and yields each `reply`.
+- A `RobinBrain` in `server/robin_egg_server/brain.py`, beside `ClaudeBrain` and `EchoBrain`, behind the same `Brain` protocol. It posts `text`, `device=speaker`, `wait=1`, and a fresh `send_id` to the plain web chat, reads the event stream, and yields each `reply`.
 - Yield a newline after each reply. `sentences()` only splits on punctuation or newlines (`brain.py:88`), so two replies would otherwise run together.
 - Strip markdown from each reply before speaking, as a backstop to the prompt.
 - Outcomes:
@@ -136,7 +141,7 @@ Done in this repo once the robin-assistant side lands.
   - `error`: speak the apology row if there is one and skip the error sound. Play the error sound only if there was no reply.
   - `stopped`, a connection error, or no `end` within `--robin-timeout`: the error sound.
 - After a timeout or a barge-in, Robin's turn keeps running and its late answer lands in the chat unheard. The next thing said may be steered into that turn. Accept this for v1 and log it. An approval card from a speaker turn has the same effect until the timeout.
-- New options: `--brain robin`, `--robin-url` (default `http://127.0.0.1:8273`), `--robin-agent`, `--robin-project`, `--robin-user`, `--robin-timeout`. `claude` stays the default until the robin brain has worked on the bench.
+- New options: `--brain robin`, `--robin-url` (default `http://127.0.0.1:8273`), `--robin-agent`, `--robin-user`, `--robin-timeout`. `claude` stays the default until the robin brain has worked on the bench.
 - The server's own conversation history and idle reset only apply to `ClaudeBrain`.
 
 ### Preventing regressions

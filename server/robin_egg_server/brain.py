@@ -100,21 +100,22 @@ class ClaudeBrain:
 class RobinBrain:
     """Asks Robin through robin-assistant's web chat API and yields each reply as it arrives.
 
-    robin-assistant keeps the conversation, so this keeps no history of its own.
+    It posts to the plain web chat, the one the phone uses, so a question asked out loud
+    can be followed up on the phone. robin-assistant keeps the conversation, so this
+    keeps no history of its own.
     """
 
     def __init__(
         self,
         url: str = "http://127.0.0.1:8273",
         agent: str = "robin",
-        project: int | None = None,
         user: str | None = None,
         timeout_s: float = 90.0,
     ) -> None:
         import httpx2
 
         self.endpoint = f"{url.rstrip('/')}/api/chat/{agent}/messages"
-        self.project, self.user, self.timeout_s = project, user, timeout_s
+        self.user, self.timeout_s = user, timeout_s
         # No read timeout from the client: the overall deadline below covers a silent server.
         self.client = httpx2.AsyncClient(timeout=httpx2.Timeout(10.0, read=None))
 
@@ -122,8 +123,6 @@ class RobinBrain:
         import httpx2
 
         fields = {"text": heard, "device": "speaker", "wait": "1", "send_id": secrets.token_urlsafe(16)}
-        if self.project is not None:
-            fields["project"] = str(self.project)
         if self.user:
             fields["user"] = self.user
         deadline = time.monotonic() + self.timeout_s

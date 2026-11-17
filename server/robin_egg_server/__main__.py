@@ -30,7 +30,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--brain", choices=["claude", "robin", "echo"], default="claude", help="claude (needs ANTHROPIC_API_KEY), robin (robin-assistant) or echo (repeats what it heard)")
     p.add_argument("--robin-url", default="http://127.0.0.1:8273", help="robin-assistant's address, with --brain robin")
     p.add_argument("--robin-agent", default="robin", help="robin-assistant agent name, with --brain robin")
-    p.add_argument("--robin-project", type=int, help="Project id whose main chat the egg talks in (default: the plain web chat)")
     p.add_argument("--robin-user", help="A [users] key to send as the speaker. Left out until the egg can tell who is speaking")
     p.add_argument("--robin-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--model", default="claude-opus-5-5", help="Claude model id")
@@ -78,7 +77,7 @@ def build(args: argparse.Namespace):
     elif args.brain == "robin":
         from .brain import RobinBrain
 
-        brain = RobinBrain(args.robin_url, args.robin_agent, args.robin_project, args.robin_user, args.robin_timeout)
+        brain = RobinBrain(args.robin_url, args.robin_agent, user=args.robin_user, timeout_s=args.robin_timeout)
     else:
         from .brain import ClaudeBrain
 
