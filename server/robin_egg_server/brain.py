@@ -60,7 +60,7 @@ def server_url(server: str) -> str:
     return f"{parts.scheme}://{netloc}{parts.path.rstrip('/')}"
 
 
-def _redirect_target(resp) -> str:
+def redirect_target(resp) -> str:
     """Where a 3xx points, as the base URL to give --server, so the log can say what to use."""
     location = resp.headers.get("location", "")
     base = location.split("/api/chat/", 1)[0].rstrip("/")
@@ -109,11 +109,11 @@ class RobinBrain:
                 headers={"Accept": "text/event-stream"},
             ) as resp:
                 if resp.is_redirect:
-                    raise RobinUnavailable(f"robin-assistant at {self.endpoint} redirects to {_redirect_target(resp)}. Start with --server {_redirect_target(resp)}")
+                    raise RobinUnavailable(f"robin-assistant at {self.endpoint} redirects to {redirect_target(resp)}. Start with --server {redirect_target(resp)}")
                 if resp.status_code != 200:
                     body = (await resp.aread()).decode("utf-8", "replace")[:200]
                     raise RobinUnavailable(f"robin-assistant answered {resp.status_code}: {body}")
-                events = _sse_events(resp.aiter_lines())
+                events = sse_events(resp.aiter_lines())
                 while True:
                     left = deadline - time.monotonic()
                     if left <= 0:
@@ -164,7 +164,7 @@ class RobinBrain:
                 reason = resp.text
             raise SystemExit(f"robin-assistant cannot answer as agent {self.agent!r}: {reason}. Check --agent-name.")
         if resp.is_redirect:
-            target = _redirect_target(resp)
+            target = redirect_target(resp)
             raise SystemExit(f"robin-assistant at {self.chat_url} redirects to {target}. Start with --server {target}")
         if resp.status_code != 200:
             LOG.warning("robin-assistant answered %d when checking agent %s, starting anyway", resp.status_code, self.agent)
@@ -175,7 +175,7 @@ class RobinBrain:
         await self.client.aclose()
 
 
-async def _sse_events(lines: AsyncIterator[str]) -> AsyncIterator[tuple[str, dict]]:
+async def sse_events(lines: AsyncIterator[str]) -> AsyncIterator[tuple[str, dict]]:
     """Parses a Server-Sent Events stream into (event name, JSON data) pairs. Comments are pings."""
     name, data = "message", []
     async for line in lines:

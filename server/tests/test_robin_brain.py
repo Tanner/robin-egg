@@ -2,6 +2,7 @@
 
 The fake follows docs/robin-chat-api.md. It plays a script per request and records
 what was posted, so these tests need no robin-assistant, no network and no keys.
+It also serves the speaker stream, GET /api/chat/:agent/speaker, for test_speaker_stream.py.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 
 import pytest
 from aioesphomeapi import api_pb2 as pb
@@ -31,12 +33,28 @@ def pause(seconds: float) -> tuple:
     return ("pause", seconds)
 
 
+def comment(text: str) -> tuple:
+    return ("comment", text)
+
+
+def until(flag: asyncio.Event) -> tuple:
+    """Hold the stream open, pinging, until the test sets the flag."""
+    return ("until", flag)
+
+
+def refuse(status: int, error: str, headers: str = "") -> list[tuple]:
+    """A speaker-stream connection answered with an error instead of a stream."""
+    return [("refuse", status, error, headers)]
+
+
 class FakeRobinAssistant:
     """A minimal HTTP server standing in for POST /api/chat/:agent/messages with wait=1."""
 
-    def __init__(self, scripts: list[list[tuple]], status: int = 200, agent_lookup: tuple[int, dict] = (200, {}), headers: str = "") -> None:
+    def __init__(self, scripts: list[list[tuple]], status: int = 200, agent_lookup: tuple[int, dict] = (200, {}), headers: str = "", speaker: list[list[tuple]] | None = None) -> None:
         self.scripts, self.status, self.agent_lookup, self.headers = list(scripts), status, agent_lookup, headers
+        self.speaker = list(speaker or [])  # one script per speaker-stream connection, then streams that hang
         self.requests: list[dict] = []
+        self.speaker_connects: list[float] = []  # when each speaker-stream request arrived
         self._server: asyncio.base_events.Server | None = None
         self.url = ""
 
@@ -58,6 +76,10 @@ class FakeRobinAssistant:
             body = await reader.readexactly(int(headers.get("content-length", "0")))
             fields = dict(re.findall(r'name="([^"]+)"\r\n\r\n(.*?)\r\n--', body.decode(), re.S))
             self.requests.append({"line": request_line, "headers": headers, "fields": fields})
+            if request_line.startswith("GET ") and request_line.split()[1].endswith("/speaker"):
+                self.speaker_connects.append(time.monotonic())
+                await self._speaker(writer, self.speaker.pop(0) if self.speaker else [HANG])
+                return
             if request_line.startswith("GET "):  # GET /api/chat/:agent, the startup check
                 status, payload = self.agent_lookup
                 body = json.dumps(payload).encode()
@@ -86,6 +108,32 @@ class FakeRobinAssistant:
             pass
         finally:
             writer.close()
+
+    async def _speaker(self, writer: asyncio.StreamWriter, script: list[tuple]) -> None:
+        """One speaker-stream connection: comments and message events, then a close."""
+        if script and script[0][0] == "refuse":
+            _, status, error, extra = script[0]
+            body = json.dumps({"error": error}).encode()
+            writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n{extra}Connection: close\r\n\r\n".encode() + body)
+            await writer.drain()
+            return
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n: connected\n\n")
+        await writer.drain()
+        for step in script:
+            if step[0] == "event":
+                writer.write(f"event: {step[1]}\ndata: {json.dumps(step[2])}\n\n".encode())
+            elif step[0] == "comment":
+                writer.write(f": {step[1]}\n\n".encode())
+            elif step[0] == "ping":
+                writer.write(b": ping\n\n")
+            elif step[0] == "pause":
+                await asyncio.sleep(step[1])
+            elif step[0] in ("until", "hang"):
+                while step[0] == "hang" or not step[1].is_set():
+                    writer.write(b": ping\n\n")
+                    await writer.drain()
+                    await asyncio.sleep(0.05)
+            await writer.drain()
 
 
 async def ask(scripts, heard="what's on tomorrow", status=200, headers="", **kw):

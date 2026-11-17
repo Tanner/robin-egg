@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator
 
 import numpy as np
@@ -77,6 +78,33 @@ class EnergyVad:
             elif elapsed >= self.cfg.max_utterance_s:
                 self.done, self.reason = True, "hit the length limit"
         return started_now
+
+
+def proactive_chime(rate: int = REPLY_RATE) -> np.ndarray:
+    """A stand-in cue before Robin speaks first, used until --proactive-sound names a file.
+
+    Two soft, low, slurred notes: under 600 Hz, slow attacks, peaking at -16 dBFS.
+    """
+    peak = 10 ** (-16 / 20)
+    parts = []
+    for f0, f1, secs in ((590.0, 520.0, 0.20), (470.0, 560.0, 0.26)):
+        n = int(secs * rate)
+        t = np.arange(n) / rate
+        freq = f0 + (f1 - f0) * (t / secs) ** 0.7  # a gentle slur, not a sweep
+        phase = 2 * np.pi * np.cumsum(freq) / rate
+        tone = np.sin(phase) + 0.18 * np.sin(2 * phase)
+        attack = np.minimum(1.0, t / 0.04)
+        decay = np.exp(-3.5 * t / secs)
+        release = np.minimum(1.0, (secs - t) / 0.03)
+        parts += [tone * attack * decay * release, np.zeros(int(0.07 * rate))]
+    out = np.concatenate(parts[:-1])
+    return (out * peak / np.max(np.abs(out))).astype(np.float32)
+
+
+def load_sound(path: str | Path) -> np.ndarray:
+    """Any file soundfile reads (wav, aiff, flac) as mono float samples at REPLY_RATE."""
+    data, rate = sf.read(str(path), dtype="float32", always_2d=True)
+    return resample(data.mean(axis=1), rate, REPLY_RATE)
 
 
 def resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:

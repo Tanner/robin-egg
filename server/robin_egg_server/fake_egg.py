@@ -73,12 +73,15 @@ class Run:
 
 
 class FakeEgg:
-    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu") -> None:
+    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu", announce_seconds: float = 0.0) -> None:
         self.utterances = list(utterances)
         self.realtime = realtime
         self.wake_word = wake_word
         self.runs: list[Run] = []
         self.announcements: list[tuple[str, bytes]] = []
+        self.announce_seconds = announce_seconds  # how long each announcement "plays" before it is reported finished
+        self.announcing = asyncio.Event()  # set while an announcement plays
+        self._announce_cut = asyncio.Event()
         self.done = asyncio.Event()
         self._w: asyncio.StreamWriter | None = None
         self._mic_open = False
@@ -139,9 +142,24 @@ class FakeEgg:
         elif isinstance(msg, pb.VoiceAssistantEventResponse):
             await self._on_event(msg.event_type, {d.name: d.value for d in msg.data})
         elif isinstance(msg, pb.VoiceAssistantAnnounceRequest):
-            body = await asyncio.to_thread(self._get, msg.media_id)
-            self.announcements.append((msg.text, body))
-            self.send(pb.VoiceAssistantAnnounceFinished(success=True))
+            asyncio.create_task(self._announce(msg))
+
+    async def _announce(self, msg) -> None:
+        body = await asyncio.to_thread(self._get, msg.media_id)
+        self.announcements.append((msg.text, body))
+        self._announce_cut.clear()
+        self.announcing.set()
+        try:
+            await asyncio.wait_for(self._announce_cut.wait(), self.announce_seconds)
+        except asyncio.TimeoutError:
+            pass
+        self.announcing.clear()
+        self.send(pb.VoiceAssistantAnnounceFinished(success=True))
+
+    def wake(self) -> None:
+        """Hear the wake word now, cutting off any announcement that is playing."""
+        self._announce_cut.set()
+        self._start_run(self.wake_word)
 
     # ---- the voice run ----
 

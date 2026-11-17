@@ -33,6 +33,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--server", help="robin-assistant's address: a host or IP, host:port, or a URL. The port defaults to 8273. Required unless --echo")
     p.add_argument("--agent-name", help="The robin-assistant agent to ask, its folder name under ~/.robin/agents/. Required unless --echo")
     p.add_argument("--default-speaker-name", help="The [users] key sent as the speaker when the egg cannot tell who is speaking, which for now is always. Without it no speaker is sent")
+    p.add_argument("--robin-announcements", action=argparse.BooleanOptionalAction, default=True, help="Speak the messages Robin sends on its own, such as reminders and scheduled tasks, after a chime and within --speaking-hours (default on; not used with --echo)")
+    p.add_argument("--proactive-sound", metavar="FILE", help="Sound to play before each message Robin sends on its own (wav, aiff or flac). Without it a stand-in chime plays")
     p.add_argument("--server-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
     p.add_argument("--tts", choices=["piper", "say"], default="piper", help="Text-to-speech engine: piper (Robin's voice) or macOS say")
@@ -42,7 +44,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
     p.add_argument("--max-utterance", type=float, default=30.0, help="Longest request in seconds; listening stops here even if the speaker has not paused")
-    p.add_argument("--speaking-hours", default="8-20", help="Hours when /announce may speak, e.g. 8-20; 0-24 for always")
+    p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 0-24 for always")
     p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -98,7 +100,10 @@ def build(args: argparse.Namespace):
         max_utterance_s=args.max_utterance,
         speaking_hours=(start, end),
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
+        proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
     )
+    if opts.proactive_sound and not opts.proactive_sound.exists():
+        raise SystemExit(f"Proactive sound not found at {opts.proactive_sound}")
     web = AudioServer()
     return Robin(stt, brain, tts, web, VoiceAssistantEventType, opts), web
 
@@ -114,9 +119,22 @@ async def run(args: argparse.Namespace) -> None:
         ip = args.advertise_ip or local_ip_toward(args.host)
         await web.start("0.0.0.0", args.http_port, ip)
         LOG.info("Proactive speech: curl -d 'Hello from Robin' %s/announce", web.base_url)
+        stop = asyncio.Event()
+        listener = None
+        if not args.echo and args.robin_announcements:
+            from .speaker_stream import SpeakerStream
+
+            listener = asyncio.create_task(SpeakerStream(args.server, args.agent_name, robin.proactive).run(stop))
+        elif not args.echo:
+            LOG.info("Not listening for messages Robin sends on its own (--no-robin-announcements)")
         try:
             await robin.run_forever(args.host, args.port, args.psk, show_logs=args.logs)
         finally:
+            stop.set()
+            if listener is not None:
+                listener.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await listener
             await web.stop()
     finally:
         if hasattr(robin.brain, "close"):

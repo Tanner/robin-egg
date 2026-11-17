@@ -66,13 +66,24 @@ Flash and find the egg first, as in `tools/bench-voice-test/README.md`. Then:
 
 Say "Okay Nabu" (the stock wake word), then a question. macOS asks whether Python may accept incoming connections the first time. Allow it, because the egg downloads the reply audio from the Mac.
 
-To make Robin speak first, the way a proactive message will:
+## Robin speaking first
+
+Robin also writes messages into the plain web chat on its own: a reminder coming due, a scheduled task, a held update, a routine. The server holds robin-assistant's speaker stream (`GET /api/chat/:agent/speaker`) open for its whole life and speaks each message after a sound.
+
+- Only between 8 AM and 8 PM. Change it with `--speaking-hours`. A message outside those hours is dropped, not saved for later.
+- It never talks over the egg. A message that arrives while the egg is listening, thinking or playing a reply waits until the egg is idle. Several waiting messages are spoken in order, each after its own sound.
+- The wake word stops a message partway, as it stops a reply.
+- Nothing is replayed. A message sent while the server is not connected is missed, but it is still in the chat. The stream closes when Robin reloads, and the server reconnects after 1 s, doubling to 30 s.
+- The log shows each message's id and task label, and whether it was spoken, queued or dropped.
+- `--proactive-sound FILE` sets the sound. Without it a stand-in chime plays. `--no-robin-announcements` turns all of this off.
+
+To make the egg speak something yourself:
 
 ```sh
 curl -d "Time to leave for the airport." http://localhost:8765/announce
 ```
 
-That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
+That uses the same speaking hours, with no sound in front.
 
 ## Useful options
 
@@ -86,6 +97,9 @@ That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 | `--server` | required | robin-assistant's address: a host or IP, `host:port`, or a URL such as `https://robin.example.net`. A bare host gets port 8273; a URL keeps its scheme's port. Not needed with `--echo`. |
 | `--agent-name` | required | The robin-assistant agent to ask: its folder name under `~/.robin/agents/`. Not needed with `--echo`. |
 | `--default-speaker-name` | none | The robin-assistant `[users]` key sent as the speaker when the egg cannot tell who is speaking, which for now is always. Without it no speaker is sent. |
+| `--robin-announcements`, `--no-robin-announcements` | on | Speak the messages Robin sends on its own. Not used with `--echo`. |
+| `--proactive-sound FILE` | stand-in chime | The sound before each of those messages: wav, aiff or flac. |
+| `--speaking-hours` | `8-20` | When Robin may speak first, its own messages and `/announce`. `0-24` for always. |
 | `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the turn failed. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
 | `--tts piper\|say` | `piper` | Which text-to-speech engine to use. |
@@ -109,8 +123,10 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/egg.py` | The ESPHome connection with reconnects, and the voice turn |
 | `robin_egg_server/audio.py` | End-of-speech detection and the streamed FLAC reply |
 | `robin_egg_server/voices.py` | Whisper, `say` and Piper |
+| `robin_egg_server/speaker_stream.py` | robin-assistant's speaker stream: Robin's own messages, with reconnects |
 | `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
 | `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
+| `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |
