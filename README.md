@@ -36,7 +36,7 @@ Updated 2026-11-14.
 | [docs/bench-test.md](docs/bench-test.md) | Step-by-step test for when parts arrive, with a results table |
 | [docs/enclosure.md](docs/enclosure.md) | Egg design plan and the measurements it needs |
 | [docs/decisions.md](docs/decisions.md) | Settled choices and why |
-| [docs/voice-method.md](docs/voice-method.md) | The robin-assistant `voice` Method contract the server talks to |
+| [docs/robin-chat-api.md](docs/robin-chat-api.md) | The robin-assistant chat API changes the server needs, and how it uses them |
 | [docs/references.md](docs/references.md) | Links |
 
 When something gets verified or decided, move it out of open-questions and into the doc it belongs to.
