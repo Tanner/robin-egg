@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import shutil
 import subprocess
 import time
@@ -26,6 +27,7 @@ from robin_egg_server.audio import MIC_RATE, ReplyAudio
 from robin_egg_server.brain import sentences
 from robin_egg_server.egg import FAILED_TURN, Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
+from robin_egg_server.speakers import Match, People, Person, SpeakerId, VoiceprintStore
 from robin_egg_server.web import AudioServer
 
 
@@ -94,12 +96,12 @@ def decode(data: bytes) -> tuple[np.ndarray, int]:
     return sf.read(io.BytesIO(data), dtype="float32")
 
 
-async def converse(utterances, stt, brain, tts, opts=None) -> tuple[FakeEgg, Robin]:
+async def converse(utterances, stt, brain, tts, opts=None, **robin_kwargs) -> tuple[FakeEgg, Robin]:
     egg = FakeEgg(utterances)
     port = await egg.start()
     web = AudioServer()
     await web.start("127.0.0.1", 0, "127.0.0.1")
-    robin = Robin(stt, brain, tts, web, VoiceAssistantEventType, opts or Options())
+    robin = Robin(stt, brain, tts, web, VoiceAssistantEventType, opts or Options(), **robin_kwargs)
     stop = asyncio.Event()
     task = asyncio.create_task(robin.run_forever("127.0.0.1", port, stop=stop))
     try:
@@ -272,3 +274,123 @@ def test_reply_audio_serves_finished_file_to_late_readers():
 
     got, final = asyncio.run(scenario())
     assert got == final and decode(final)[1] == 48000
+
+
+# ---- who is speaking ----
+
+TANNER = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+RYAN = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+BORDERLINE = np.array([0.4, 0.3, 0.866], dtype=np.float32)
+MODEL = "fake-speaker-model"
+
+
+class FakeEmbedder:
+    """Returns queued voice vectors in turn order, the way FakeSTT returns transcripts."""
+
+    name = MODEL
+
+    def __init__(self, vectors: list[np.ndarray]) -> None:
+        self.vectors = list(vectors)
+
+    def embed(self, pcm16: bytes) -> np.ndarray:
+        v = self.vectors.pop(0)
+        return v / np.linalg.norm(v)
+
+
+class BrokenEmbedder:
+    name = MODEL
+
+    def embed(self, pcm16: bytes) -> np.ndarray:
+        raise ValueError("Only 12 audio samples, too short to tell who is speaking")
+
+
+def household_store(tmp_path) -> VoiceprintStore:
+    store = VoiceprintStore(tmp_path / "voiceprints.json", MODEL)
+    store.replace("tanner", [TANNER])
+    store.replace("ryan", [RYAN])
+    return store
+
+
+def household(*keys: str) -> People:
+    async def fetch():
+        return [Person(k, k.title()) for k in keys]
+
+    return People(fetch)
+
+
+def identify_with(embedder, tmp_path, people=None) -> dict:
+    return {"speakers": SpeakerId(embedder, household_store(tmp_path)), "people": people or household("tanner", "ryan")}
+
+
+def test_each_turn_sends_the_identified_speaker(tmp_path):
+    brain = SlowBrain([["Hi Tanner. "], ["Hi Ryan. "]], pause=0)
+    asyncio.run(converse([speech(2.0), speech(2.0)], FakeSTT(["hello", "hello too"]), brain, ToneTTS(),
+                         **identify_with(FakeEmbedder([TANNER, RYAN]), tmp_path)))
+    assert brain.users == ["tanner", "ryan"]
+
+
+def test_a_short_follow_up_inherits_the_speaker(tmp_path):
+    brain = SlowBrain([["Sunny. "], ["Rain. "]], pause=0)
+    _, robin = asyncio.run(converse([speech(2.0), speech(0.6)], FakeSTT(["what's the weather", "and tomorrow"]), brain, ToneTTS(),
+                                    **identify_with(FakeEmbedder([TANNER, BORDERLINE]), tmp_path)))
+    assert brain.users == ["tanner", "tanner"]
+    assert robin.last_match is None  # forgotten when the egg disconnected
+
+
+def test_a_failing_embedder_still_answers_as_unknown(tmp_path, caplog):
+    tts, brain = ToneTTS(), SlowBrain([["Hello. "]], pause=0)
+    asyncio.run(converse([speech(2.0)], FakeSTT(["hi"]), brain, tts, Options(follow_up="off"),
+                         **identify_with(BrokenEmbedder(), tmp_path)))
+    assert FAILED_TURN not in tts.said
+    assert tts.said == ["Hello."]
+    assert brain.users == ["Unknown Speaker"]
+    assert "Could not identify the speaker; treating them as Unknown Speaker" in caplog.text
+
+
+def test_a_confident_long_turn_is_learned(tmp_path):
+    def pool_sizes() -> int:
+        return len(json.loads((tmp_path / "voiceprints.json").read_text())["people"]["tanner"]["pool"])
+
+    brain = SlowBrain([["Noted. "]], pause=0)
+    asyncio.run(converse([speech(4.0)], FakeSTT(["remember this"]), brain, ToneTTS(), Options(follow_up="off"),
+                         **identify_with(FakeEmbedder([TANNER]), tmp_path)))
+    assert brain.users == ["tanner"]
+    assert pool_sizes() == 1
+
+    (tmp_path / "voiceprints.json").unlink()
+    brain = SlowBrain([["Noted. "]], pause=0)
+    asyncio.run(converse([speech(2.0)], FakeSTT(["remember this"]), brain, ToneTTS(), Options(follow_up="off"),
+                         **identify_with(FakeEmbedder([TANNER]), tmp_path)))
+    assert brain.users == ["tanner"]
+    assert pool_sizes() == 0
+
+
+def test_no_speaker_id_sends_unknown():
+    brain = SlowBrain([["Hello. "]], pause=0)
+    asyncio.run(converse([speech(2.0)], FakeSTT(["hi"]), brain, ToneTTS(), Options(follow_up="off"), speakers=None, people=household("tanner")))
+    assert brain.users == ["Unknown Speaker"]
+
+
+def test_someone_removed_from_users_is_not_sent(tmp_path):
+    brain = SlowBrain([["Hello. "]], pause=0)
+    asyncio.run(converse([speech(2.0)], FakeSTT(["hi"]), brain, ToneTTS(), Options(follow_up="off"),
+                         **identify_with(FakeEmbedder([RYAN]), tmp_path, people=household("tanner"))))
+    assert brain.users == ["Unknown Speaker"]
+
+
+def test_without_a_people_list_nobody_is_identified(tmp_path):
+    brain = SlowBrain([["Hello. "]], pause=0)
+    asyncio.run(converse([speech(2.0)], FakeSTT(["hi"]), brain, ToneTTS(), Options(follow_up="off"),
+                         speakers=SpeakerId(FakeEmbedder([TANNER]), household_store(tmp_path)), people=None))
+    assert brain.users == ["Unknown Speaker"]
+
+
+def test_the_wake_word_forgets_the_previous_speaker():
+    async def run() -> Robin:
+        robin = Robin(FakeSTT([]), SlowBrain([]), ToneTTS(), AudioServer(), VoiceAssistantEventType)
+        robin.last_match = Match("tanner", 0.9, None, -1.0, 2.0, False, None)
+        await robin.handle_start("", 0, None, "Okay Nabu")
+        await robin.turn.reply.close()
+        return robin
+
+    assert asyncio.run(run()).last_match is None

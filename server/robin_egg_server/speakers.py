@@ -93,21 +93,28 @@ def people_for_agent(body: dict, agent: str) -> list[Person]:
 class People:
     """The household members robin-assistant knows, refetched when stale so a new person is picked up."""
 
-    def __init__(self, fetch: Callable[[], Awaitable[list[Person]]], max_age_s: float = 300.0) -> None:
-        self._fetch, self.max_age_s = fetch, max_age_s
+    def __init__(self, fetch: Callable[[], Awaitable[list[Person]]], max_age_s: float = 300.0, retry_after_s: float = 60.0) -> None:
+        self._fetch, self.max_age_s, self.retry_after_s = fetch, max_age_s, retry_after_s
         self._people: list[Person] | None = None
         self._fetched_at = 0.0
+        self._failed_at: float | None = None
 
     @property
     def keys(self) -> set[str]:
         return {p.key for p in self._people or []}
 
     async def current(self, force: bool = False) -> list[Person] | None:
-        if force or self._people is None or time.monotonic() - self._fetched_at >= self.max_age_s:
+        now = time.monotonic()
+        stale = self._people is None or now - self._fetched_at >= self.max_age_s
+        # Each attempt can wait out the connect timeout, so while robin-assistant is down
+        # turns must not pay that on every question.
+        backing_off = self._failed_at is not None and now - self._failed_at < self.retry_after_s
+        if force or (stale and not backing_off):
             try:
                 self._people = await self._fetch()
-                self._fetched_at = time.monotonic()
+                self._fetched_at, self._failed_at = time.monotonic(), None
             except Exception as err:  # noqa: BLE001 - any failure keeps the last good list
+                self._failed_at = time.monotonic()
                 LOG.warning("Could not refresh the people list from robin-assistant; keeping the last one (%s)", err)
         return self._people
 
@@ -257,3 +264,40 @@ def should_learn(m: Match, t: Thresholds) -> bool:
         and m.score - m.runner_score >= t.retrain_margin
         and m.seconds >= t.min_retrain_s
     )
+
+
+class SpeakerId:
+    """Identifies the speaker of a turn and folds very confident turns back into their voiceprint."""
+
+    def __init__(self, embedder: SpeakerEmbedder, store: VoiceprintStore, thresholds: Thresholds | None = None) -> None:
+        self.embedder, self.store = embedder, store
+        self.thresholds = thresholds or Thresholds()
+
+    def identify(self, pcm16: bytes, seconds: float, previous: Match | None, keys: set[str]) -> Match:
+        embedding = self.embedder.embed(pcm16)
+        ranked = scores(embedding, self.store, keys)
+        m = decide(ranked, seconds, self.thresholds, previous)
+        m.embedding = embedding
+        LOG.info("%s", _describe(m, ranked))
+        return m
+
+    def learn(self, m: Match) -> None:
+        if m.key is None or m.embedding is None or not should_learn(m, self.thresholds):
+            return
+        LOG.info("Learning from this turn for %s", m.key)
+        try:
+            self.store.learn(m.key, m.embedding, self.thresholds.pool_cap)
+        except OSError as err:
+            LOG.warning("Could not save what was learned from this turn for %s (%s)", m.key, err)
+
+
+def _describe(m: Match, ranked: list[tuple[str, float]]) -> str:
+    if m.key is not None:
+        next_best = f", next best {m.runner_up} at {m.runner_score:.2f}" if m.runner_up is not None else ""
+        if m.inherited:
+            return f"Kept the speaker as {m.key} from the previous turn ({m.seconds:.1f} s of speech, score {m.score:.2f}{next_best})"
+        return f"Identified the speaker as {m.key} (score {m.score:.2f}{next_best})"
+    if not ranked:
+        return f"Did not recognise the speaker: nobody in the people list has enrolled; sending {UNKNOWN_SPEAKER}"
+    closest = ", ".join(f"{key} at {score:.2f}" for key, score in ranked[:2])
+    return f"Did not recognise the speaker ({m.seconds:.1f} s of speech, closest {closest}); sending {UNKNOWN_SPEAKER}"

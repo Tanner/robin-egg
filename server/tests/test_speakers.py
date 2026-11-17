@@ -262,3 +262,26 @@ def test_people_refetches_only_when_stale_or_forced():
         assert fetched == 3
 
     asyncio.run(run())
+
+
+def test_people_waits_before_retrying_a_failed_fetch(caplog):
+    attempts = 0
+
+    async def down():
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("robin-assistant is down")
+
+    async def run():
+        people = People(down, retry_after_s=60.0)
+        with caplog.at_level(logging.WARNING, logger="robin.speakers"):
+            assert await people.current() is None
+            assert await people.current() is None
+            assert attempts == 1
+            await people.current(force=True)
+            assert attempts == 2
+            people.retry_after_s = 0.0
+            await people.current()
+            assert attempts == 3
+
+    asyncio.run(run())
