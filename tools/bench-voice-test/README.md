@@ -34,6 +34,7 @@ python3 -m venv .venv
 5. Say the wake word, then a sentence. The stock firmware ships "Okay Nabu", "Hey Jarvis", "Hey Mycroft" and "Kenobi". "Okay Nabu" is the safe one to try first. The script prints which wake word fired. You should hear yourself played back.
 6. Optional tests:
    - `--announce` sends one announcement on connect. That is how Robin will speak first, for proactive messages.
+   - `--volume 0.85` sets the egg's speaker volume on connect. It starts at 50%, which is quiet with a bare driver.
    - `--reply-file hello.aiff` plays a fixed clip instead of the echo. Make one with `say -o hello.aiff "Hello, I am Robin"`.
    - Stand 1 m and 4 m away for the wake word distance check. Talk over an `--announce` reply for the echo cancellation check.
 

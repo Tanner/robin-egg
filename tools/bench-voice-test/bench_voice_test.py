@@ -299,6 +299,14 @@ async def run(args: argparse.Namespace) -> None:
 
     client.subscribe_states(on_state)
 
+    if args.volume is not None:
+        players = [e for e in entities if type(e).__name__ == "MediaPlayerInfo"]
+        if players:
+            LOG.info("Setting the egg's media player volume to %.0f%%", args.volume * 100)
+            client.media_player_command(players[0].key, volume=args.volume)
+        else:
+            LOG.info("No media player found, so the volume was left alone")
+
     if args.logs:
         def on_log(msg: Any) -> None:
             line = msg.message.decode("utf-8", "replace") if isinstance(msg.message, bytes) else str(msg.message)
@@ -382,6 +390,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--reply-file", help="Audio file to play as the reply instead of the echo (wav, aiff, flac)")
     p.add_argument("--out-dir", default="./bench-recordings", help="Where captures and replies are saved")
     p.add_argument("--announce", action="store_true", help="Also send one announcement on connect")
+    p.add_argument("--volume", type=float, help="Set the egg's media player volume on connect, 0.0 to 1.0")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs, which include the DSP status")
     p.add_argument("--once", action="store_true", help="Exit after one round trip")
     p.add_argument("--linger", type=float, default=10.0, help="Seconds to keep serving after the last reply with --once")
