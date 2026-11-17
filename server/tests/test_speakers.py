@@ -9,8 +9,12 @@ import json
 import logging
 
 import numpy as np
+import pytest
 
+from robin_egg_server.audio import MIC_RATE
 from robin_egg_server.speakers import (
+    DEFAULT_SPEAKER_MODEL,
+    SherpaEmbedder,
     UNKNOWN_SPEAKER,
     Match,
     Person,
@@ -179,3 +183,19 @@ def test_store_ignores_a_broken_or_foreign_file(tmp_path, caplog):
     assert a.prints == {} and b.prints == {}
     assert "foreign.json" in caplog.text and "saved by a different model, re-enrol" in caplog.text
     assert "broken.json" in caplog.text and "could not be read" in caplog.text
+
+
+def speech(seconds: float = 1.0, amp: float = 6000) -> bytes:
+    t = np.arange(int(seconds * MIC_RATE)) / MIC_RATE
+    return (amp * np.sin(2 * np.pi * 300 * t)).astype("<i2").tobytes()
+
+
+@pytest.mark.skipif(not DEFAULT_SPEAKER_MODEL.exists(), reason="speaker model not downloaded (see server/README.md)")
+def test_sherpa_embedder_gives_a_unit_vector():
+    embedder = SherpaEmbedder(str(DEFAULT_SPEAKER_MODEL))
+    first = embedder.embed(speech(2.0))
+    again = embedder.embed(speech(2.0))
+    assert embedder.name == DEFAULT_SPEAKER_MODEL.name
+    assert first.ndim == 1 and first.dtype == np.float32
+    assert abs(np.linalg.norm(first) - 1) < 1e-5
+    assert np.allclose(first, again)

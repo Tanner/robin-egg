@@ -1,7 +1,8 @@
 """Who is talking: voiceprints and the rules for matching a voice to a household member.
 
-Pure numpy. The embedder that turns audio into vectors and the wiring into the turn
-live elsewhere, so these rules can be tested with hand-made vectors.
+The matching rules are pure numpy so they can be tested with hand-made vectors. The
+embedder that turns audio into vectors loads its library lazily; the wiring into the
+turn lives elsewhere.
 """
 
 from __future__ import annotations
@@ -12,12 +13,45 @@ import os
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
+
+from .audio import MIC_RATE
 
 LOG = logging.getLogger("robin.speakers")
 
 UNKNOWN_SPEAKER = "Unknown Speaker"
+
+DEFAULT_SPEAKER_MODEL = Path(__file__).resolve().parent.parent / "models" / "wespeaker_en_voxceleb_resnet34_LM.onnx"
+
+
+class SpeakerEmbedder(Protocol):
+    name: str
+
+    def embed(self, pcm16: bytes) -> np.ndarray:
+        """A 1-D float32 voice embedding of unit length."""
+        ...
+
+
+class SherpaEmbedder:
+    """Speaker embeddings from a sherpa-onnx model. The name is the model file name, so
+    voiceprints saved by a different model are recognised and ignored."""
+
+    def __init__(self, model_path: str) -> None:
+        import sherpa_onnx
+
+        LOG.info("Loading speaker model %s", model_path)
+        self.name = Path(model_path).name
+        config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=model_path, num_threads=2)
+        self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
+
+    def embed(self, pcm16: bytes) -> np.ndarray:
+        samples = np.frombuffer(pcm16, dtype="<i2").astype(np.float32) / 32768.0
+        stream = self._extractor.create_stream()
+        stream.accept_waveform(sample_rate=MIC_RATE, waveform=samples)
+        stream.input_finished()
+        return _unit(np.asarray(self._extractor.compute(stream), dtype=np.float32))
 
 
 @dataclass

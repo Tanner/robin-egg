@@ -41,6 +41,14 @@ Download Robin's voice once. The server looks for it in `server/voices/`, which 
 mkdir -p voices && (cd voices && ../.venv/bin/python -m piper.download_voices en_US-ryan-medium)
 ```
 
+Speaker recognition needs a voice embedding model (WeSpeaker ResNet34, about 25 MB, run by sherpa-onnx). Download it once. The server looks for it in `server/models/`, which git ignores:
+
+```sh
+mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx
+```
+
+Voiceprints are tied to the model that made them. If you change the model, everyone has to be enrolled again.
+
 Use Python 3.14 for the venv for now. faster-whisper's onnxruntime dependency has no Python 3.15 build yet.
 
 ## Try it today, without the egg
