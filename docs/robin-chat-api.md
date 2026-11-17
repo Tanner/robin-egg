@@ -131,11 +131,24 @@ Sharing the chat with the phone has costs, accepted for v1:
 - What happens today when `user` is omitted or is not a `[users]` key, since the egg cannot identify speakers yet.
 - Anything in this doc that changed.
 
+### What changed while building
+
+Built 2026-11-16. Where the build differs from the plan above:
+
+- **The existing ids were not enough to match replies.** A revision's metadata is the last late message's, so it names only that message, not the original. A message steered into a running turn and read there is named nowhere. The pipeline now carries a separate `metadata.answers` list on the turn: every message merged into it, every late message a revision answers, and every steered message the turn read. It lives on the turn's metadata in memory and is never written to a row. `messageIds` is unchanged, so the React tool sees what it always did. The turn-end hook gets the same list as a fourth argument.
+- **An egg question asked during a phone turn** is answered by that turn when it was steered in and read, or by the revision when it was not. Either way the reply names it, so the wait returns it.
+- **The idle check runs once the turn's delivery has settled**, not at the turn end itself, so every reply is in before the wait ends.
+- **The exact-repeat check hid a switch back to `speaker`.** Stamps are to the minute, so speaker, phone, speaker inside one minute rendered the first speaker block exactly. The check now compares with the newest ambient block only, as the preamble blocks already do.
+- **The device row and memory:** compaction and the reviews pass the history as it is, so the device row reaches them as a system entry, never as the person's words.
+- **What is not returned:** a GIF from `SendGif` (`sendAnimation` is handed no metadata) and a reply with no words, such as an image or card alone.
+- **`wait=1` refuses any text that starts as a command**, not only a known one, because the plain chat sends every slash-led message down the command path.
+- **The idle timeout** is switched off by the route once it has read `wait=1` from the body, through a per-request switch the server offers (`src/admin/idle-timeout.ts`), since the server decides most timeouts from the path before routing.
+
 ## Robin Egg Server changes
 
 Done in this repo once the robin-assistant side lands.
 
-- A `RobinBrain` in `server/robin_egg_server/brain.py`, beside `ClaudeBrain` and `EchoBrain`, behind the same `Brain` protocol. It posts `text`, `device=speaker`, `wait=1`, and a fresh `send_id` to the plain web chat, reads the event stream, and yields each `reply`.
+- A `RobinBrain` in `server/robin_egg_server/brain.py`, beside `EchoBrain`, behind the same `Brain` protocol. It replaced the direct-Claude brain on 2026-11-16: Robin is the only brain, and `--echo` remains for testing the audio chain. It posts `text`, `device=speaker`, `wait=1`, and a fresh `send_id` to the plain web chat, reads the event stream, and yields each `reply`.
 - Yield a newline after each reply. `sentences()` only splits on punctuation or newlines (`brain.py:88`), so two replies would otherwise run together.
 - Strip markdown from each reply before speaking, as a backstop to the prompt.
 - Outcomes:
@@ -143,15 +156,16 @@ Done in this repo once the robin-assistant side lands.
   - `error`: speak the apology row if there is one and skip the error sound. Play the error sound only if there was no reply.
   - `stopped`, a connection error, or no `end` within `--robin-timeout`: the error sound.
 - After a timeout or a barge-in, Robin's turn keeps running and its late answer lands in the chat unheard. The next thing said may be steered into that turn. Accept this for v1 and log it. An approval card from a speaker turn has the same effect until the timeout.
-- New options: `--brain robin`, `--robin-url` (default `http://127.0.0.1:8273`), `--robin-agent`, `--robin-user`, `--robin-timeout`. `claude` stays the default until the robin brain has worked on the bench.
-- The server's own conversation history and idle reset only apply to `ClaudeBrain`.
+- Options: `--robin-url` (default `http://127.0.0.1:8273`), `--robin-agent`, `--robin-user`, `--robin-timeout`. There is no brain choice: always Robin, or `--echo`.
+- The server keeps no conversation history. Robin keeps its own.
+- At startup it fetches `GET /api/chat/:agent` and exits if the agent has no web chat or is disabled. If robin-assistant is unreachable it warns and starts anyway.
 
 ### Preventing regressions
 
 - A fake robin-assistant in the tests, serving the `wait=1` event stream: several replies, `quiet`, `error` with an apology, `stopped`, a dropped connection, and a wait that never ends.
-- The existing fake-egg tests keep running against the echo and Claude brains unchanged.
+- The existing fake-egg tests keep running unchanged.
 - A bench check with the real egg and real robin-assistant before switching the default.
 
 ### Complexity
 
-Small. One brain class about the size of `ClaudeBrain`, a silent-end path in `egg.py`, its options and the fake.
+Small. One brain class, a silent-end path in `egg.py`, its options and the fake.

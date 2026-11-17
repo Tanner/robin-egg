@@ -27,13 +27,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--psk", help="Base64 API encryption key, only if one was set on the egg")
     p.add_argument("--http-port", type=int, default=8765, help="Port the egg fetches replies from, and /announce listens on")
     p.add_argument("--advertise-ip", help="This Mac's LAN IP, if auto-detection picks the wrong one")
-    p.add_argument("--brain", choices=["claude", "robin", "echo"], default="claude", help="claude (needs ANTHROPIC_API_KEY), robin (robin-assistant) or echo (repeats what it heard)")
-    p.add_argument("--robin-url", default="http://127.0.0.1:8273", help="robin-assistant's address, with --brain robin")
-    p.add_argument("--robin-agent", default="robin", help="robin-assistant agent name, with --brain robin")
+    p.add_argument("--echo", action="store_true", help="Repeat what was heard instead of asking Robin, to test the audio chain with no robin-assistant")
+    p.add_argument("--robin-url", default="http://127.0.0.1:8273", help="robin-assistant's address (default http://127.0.0.1:8273)")
+    p.add_argument("--robin-agent", default="robin", help="robin-assistant agent to ask (default robin)")
     p.add_argument("--robin-user", help="A [users] key to send as the speaker. Left out until the egg can tell who is speaking")
     p.add_argument("--robin-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
-    p.add_argument("--model", default="claude-opus-5-5", help="Claude model id")
-    p.add_argument("--effort", default="low", choices=["low", "medium", "high"], help="Claude effort; low is fastest")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
     p.add_argument("--tts", choices=["piper", "say"], default="piper", help="Text-to-speech engine: piper (Robin's voice) or macOS say")
     p.add_argument("--piper-voice", default=str(DEFAULT_PIPER_VOICE), help="Path to a Piper .onnx voice (default: Robin's voice, Piper Ryan)")
@@ -70,18 +68,14 @@ def build(args: argparse.Namespace):
         tts = PiperTTS(args.piper_voice)
     else:
         tts = SayTTS(args.say_voice)
-    if args.brain == "echo":
+    if args.echo:
         from .brain import EchoBrain
 
         brain = EchoBrain()
-    elif args.brain == "robin":
+    else:
         from .brain import RobinBrain
 
         brain = RobinBrain(args.robin_url, args.robin_agent, user=args.robin_user, timeout_s=args.robin_timeout)
-    else:
-        from .brain import ClaudeBrain
-
-        brain = ClaudeBrain(model=args.model, effort=args.effort)
     start, end = (int(x) for x in args.speaking_hours.split("-"))
     opts = Options(
         stream=not args.no_stream,
@@ -96,18 +90,20 @@ def build(args: argparse.Namespace):
 
 async def run(args: argparse.Namespace) -> None:
     robin, web = build(args)
-    if hasattr(robin.brain, "check"):
-        await robin.brain.check()
-    if args.demo:
-        await demo(args, robin, web)
-        return
-    ip = args.advertise_ip or local_ip_toward(args.host)
-    await web.start("0.0.0.0", args.http_port, ip)
-    LOG.info("Proactive speech: curl -d 'Hello from Robin' %s/announce", web.base_url)
     try:
-        await robin.run_forever(args.host, args.port, args.psk, show_logs=args.logs)
+        if hasattr(robin.brain, "check"):
+            await robin.brain.check()
+        if args.demo:
+            await demo(args, robin, web)
+            return
+        ip = args.advertise_ip or local_ip_toward(args.host)
+        await web.start("0.0.0.0", args.http_port, ip)
+        LOG.info("Proactive speech: curl -d 'Hello from Robin' %s/announce", web.base_url)
+        try:
+            await robin.run_forever(args.host, args.port, args.psk, show_logs=args.logs)
+        finally:
+            await web.stop()
     finally:
-        await web.stop()
         if hasattr(robin.brain, "close"):
             await robin.brain.close()
 

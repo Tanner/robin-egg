@@ -2,7 +2,6 @@ aioesphomeapi>=46.30
 numpy
 soundfile
 faster-whisper>=1.1
-anthropic>=2.8
 pytest
 piper-tts
 httpx2

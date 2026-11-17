@@ -67,3 +67,4 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | No `voice` Method for now | It is only needed for Robin to choose to speak unprompted, with a text fallback. Revisit once the egg is in daily use |
 | The egg talks in the plain web chat, shared with the phone. No project for the egg | Something asked out loud can be followed up on the phone |
 | The Robin Egg Server does speech-to-text and text-to-speech. Only text crosses to robin-assistant | Lets speech start sentence by sentence, keeps Robin's local Piper voice, and keeps Robin a text agent |
+| The egg always talks to Robin. The direct-Claude brain and `--brain` are gone; `--echo` stays for testing the audio chain | The egg is Robin's room presence, not a separate assistant |

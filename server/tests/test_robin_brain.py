@@ -33,8 +33,8 @@ def pause(seconds: float) -> tuple:
 class FakeRobinAssistant:
     """A minimal HTTP server standing in for POST /api/chat/:agent/messages with wait=1."""
 
-    def __init__(self, scripts: list[list[tuple]], status: int = 200) -> None:
-        self.scripts, self.status = list(scripts), status
+    def __init__(self, scripts: list[list[tuple]], status: int = 200, agent_lookup: tuple[int, dict] = (200, {})) -> None:
+        self.scripts, self.status, self.agent_lookup = list(scripts), status, agent_lookup
         self.requests: list[dict] = []
         self._server: asyncio.base_events.Server | None = None
         self.url = ""
@@ -57,6 +57,12 @@ class FakeRobinAssistant:
             body = await reader.readexactly(int(headers.get("content-length", "0")))
             fields = dict(re.findall(r'name="([^"]+)"\r\n\r\n(.*?)\r\n--', body.decode(), re.S))
             self.requests.append({"line": request_line, "headers": headers, "fields": fields})
+            if request_line.startswith("GET "):  # GET /api/chat/:agent, the startup check
+                status, payload = self.agent_lookup
+                body = json.dumps(payload).encode()
+                writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode() + body)
+                await writer.drain()
+                return
             if self.status != 200:
                 writer.write(f"HTTP/1.1 {self.status} Nope\r\nContent-Length: 13\r\nConnection: close\r\n\r\nUnknown agent".encode())
                 await writer.drain()
@@ -213,6 +219,36 @@ def test_strip_markdown_leaves_plain_spoken_words():
         "More at",
     ]
     assert strip_markdown("It's 3*4 = 12, a snake_case name.") == "It's 3*4 = 12, a snake_case name."
+
+
+async def check(agent_lookup=None, url=None):
+    fake = FakeRobinAssistant([], agent_lookup=agent_lookup or (200, {}))
+    brain = RobinBrain(url or await fake.start(), "robin")
+    try:
+        await brain.check()
+        return fake.requests, None
+    except SystemExit as err:
+        return fake.requests, err
+    finally:
+        await brain.close()
+        await fake.stop()
+
+
+def test_startup_check_looks_up_the_agent_chat():
+    reqs, err = asyncio.run(check())
+    assert err is None and reqs[0]["line"] == "GET /api/chat/robin HTTP/1.1"
+
+
+@pytest.mark.parametrize("status, error", [(404, 'Agent "robin" has no web chat'), (409, 'Agent "robin" is disabled')])
+def test_startup_check_exits_when_the_agent_cannot_answer(status, error):
+    _, err = asyncio.run(check((status, {"error": error})))
+    assert isinstance(err, SystemExit) and error in str(err) and "--robin-agent" in str(err)
+
+
+def test_startup_check_only_warns_when_robin_assistant_is_down(caplog):
+    with caplog.at_level("WARNING"):
+        _, err = asyncio.run(check(url="http://127.0.0.1:9"))
+    assert err is None and "starting anyway" in caplog.text
 
 
 # ---- through the egg ----

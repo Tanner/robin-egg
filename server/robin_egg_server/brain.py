@@ -1,4 +1,4 @@
-"""The reply: Robin through robin-assistant, Claude directly, or an echo for testing.
+"""The reply: Robin through robin-assistant, or an echo for testing the audio chain.
 
 Every brain is one async generator of text per turn, so the egg side does not care
 which one it talks to. See docs/robin-chat-api.md for the robin-assistant side.
@@ -24,17 +24,6 @@ class QuietTurn(Exception):
 class RobinUnavailable(Exception):
     """robin-assistant could not answer: unreachable, failed, stopped or too slow."""
 
-SYSTEM_PROMPT = """\
-You are Robin, a voice assistant living in a small egg-shaped speaker in Tanner and Ryan's home. \
-Everything you write is read aloud by a text-to-speech voice, so:
-- Answer in one to three short sentences unless someone asks for more detail.
-- Write plain spoken English. No markdown, bullet points, headings, emoji, code or URLs.
-- Write numbers, times and units the way you would say them.
-Your input comes from speech-to-text and can contain misheard words. Guess the likely meaning; \
-if you really cannot tell, ask one short question. You cannot tell yet which person is speaking. \
-Each message starts with the current local time in square brackets; use it only when it matters. \
-For now you have no tools: no calendar, web search, timers, reminders or home control. \
-If asked for one of those, say briefly that you cannot do that yet."""
 
 
 class Brain(Protocol):
@@ -42,78 +31,10 @@ class Brain(Protocol):
 
 
 class EchoBrain:
-    """Repeats what it heard. Tests STT and TTS with no LLM and no key."""
+    """Repeats what it heard. Tests speech-to-text and the voice with no robin-assistant."""
 
     async def reply(self, heard: str) -> AsyncIterator[str]:
         yield f"I heard: {heard}"
-
-
-class ClaudeBrain:
-    """One shared conversation for the household, kept in memory, streamed."""
-
-    def __init__(self, model: str = "claude-opus-5-5", effort: str = "low", max_turns: int = 20, idle_reset_s: float = 30 * 60) -> None:
-        from anthropic import AsyncAnthropic
-
-        self.client = AsyncAnthropic()  # ANTHROPIC_API_KEY, or a profile from `ant auth login`
-        self.model, self.effort = model, effort
-        self.max_turns, self.idle_reset_s = max_turns, idle_reset_s
-        self.history: list[dict] = []
-        self._last = 0.0
-
-    async def check(self) -> None:
-        """Fail at startup, not on the first question, when Claude cannot answer."""
-        import anthropic
-
-        LOG.info("Checking the Claude API key and model %s", self.model)
-        try:
-            await self.client.models.retrieve(self.model)
-        except TypeError as err:  # the SDK found no API key and no `ant auth login` profile
-            raise SystemExit(
-                "No Claude credentials. Set ANTHROPIC_API_KEY or run `ant auth login`, "
-                "or start with --brain echo to test without a key."
-            ) from err
-        except anthropic.AuthenticationError as err:
-            raise SystemExit("The Claude API rejected the API key. Check ANTHROPIC_API_KEY.") from err
-        except anthropic.NotFoundError as err:
-            raise SystemExit(f"The Claude API has no model {self.model!r}. Check --model.") from err
-        except anthropic.APIConnectionError as err:
-            LOG.warning("Could not reach the Claude API to check the key, starting anyway: %s", err)
-
-    async def reply(self, heard: str) -> AsyncIterator[str]:
-        now = time.time()
-        if self.history and now - self._last > self.idle_reset_s:
-            LOG.info("Starting a fresh conversation after %d idle minutes", (now - self._last) // 60)
-            self.history = []
-        self._last = now
-        stamp = time.strftime("%A %d %B %Y, %I:%M %p")
-        self.history.append({"role": "user", "content": f"[{stamp}] {heard}"})
-        self.history = self.history[-2 * self.max_turns + 1 :]
-        said: list[str] = []
-        try:
-            async with self.client.beta.messages.stream(
-                model=self.model,
-                max_tokens=16000,
-                system=SYSTEM_PROMPT,
-                messages=self.history,
-                output_config={"effort": self.effort},  # low effort keeps spoken replies fast
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",  # if the model declines, the API retries on a fallback model
-            ) as stream:
-                async for text in stream.text_stream:
-                    said.append(text)
-                    yield text
-                final = await stream.get_final_message()
-            if final.stop_reason == "refusal" and not "".join(said).strip():
-                msg = "Sorry, I can't help with that one."
-                said.append(msg)
-                yield msg
-        finally:
-            # Keep what was actually said, even if the turn was cut off. If nothing was
-            # said (an API error), forget the question so the history still alternates.
-            if "".join(said).strip():
-                self.history.append({"role": "assistant", "content": "".join(said).strip()})
-            else:
-                self.history.pop()
 
 
 class RobinBrain:
@@ -133,7 +54,9 @@ class RobinBrain:
     ) -> None:
         import httpx2
 
-        self.endpoint = f"{url.rstrip('/')}/api/chat/{agent}/messages"
+        self.agent = agent
+        self.chat_url = f"{url.rstrip('/')}/api/chat/{agent}"
+        self.endpoint = f"{self.chat_url}/messages"
         self.user, self.timeout_s = user, timeout_s
         # No read timeout from the client: the overall deadline below covers a silent server.
         self.client = httpx2.AsyncClient(timeout=httpx2.Timeout(10.0, read=None))
@@ -188,6 +111,30 @@ class RobinBrain:
         if outcome in ("response", "quiet"):
             raise QuietTurn()
         raise RobinUnavailable(f"Robin's turn ended with outcome {outcome!r}")
+
+    async def check(self) -> None:
+        """Fail at startup, not on the first question, when the agent cannot answer.
+
+        robin-assistant being down only warns, since it may come up after the egg server.
+        """
+        import httpx2
+
+        LOG.info("Checking that robin-assistant has a web chat for agent %s at %s", self.agent, self.chat_url)
+        try:
+            resp = await self.client.get(self.chat_url)
+        except httpx2.HTTPError as err:
+            LOG.warning("Could not reach robin-assistant at %s, starting anyway: %s", self.chat_url, err)
+            return
+        if resp.status_code in (404, 409):
+            try:
+                reason = resp.json().get("error") or resp.text
+            except ValueError:
+                reason = resp.text
+            raise SystemExit(f"robin-assistant cannot answer as agent {self.agent!r}: {reason}. Check --robin-agent.")
+        if resp.status_code != 200:
+            LOG.warning("robin-assistant answered %d when checking agent %s, starting anyway", resp.status_code, self.agent)
+            return
+        LOG.info("robin-assistant is ready to answer as agent %s", self.agent)
 
     async def close(self) -> None:
         await self.client.aclose()

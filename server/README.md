@@ -6,21 +6,23 @@ One turn:
 
 1. The egg hears the wake word and streams its mic audio to the server.
 2. The server finds the end of speech, then transcribes it locally with Whisper.
-3. Claude writes the reply, streamed.
-4. Each sentence is spoken locally as soon as it is complete, and the egg starts playing the first sentence while the rest is still being written.
+3. Robin answers through robin-assistant, in the plain web chat the phone uses.
+4. Each of Robin's messages is spoken locally, sentence by sentence, and the egg starts playing the first sentence while the rest is still being spoken.
 5. The egg reopens its mic for a few seconds, so a follow-up needs no wake word.
 
-This is the MVP, to prove egg to Mac mini end to end. It does not yet know who is speaking, talk to robin-assistant, check presence, or set an API key on the egg.
+This is the MVP, to prove egg to Mac mini end to end. It does not yet know who is speaking, check presence, or set an API key on the egg. The robin-assistant side is in [docs/robin-chat-api.md](../docs/robin-chat-api.md).
 
 ## What it uses
 
 | Job | Choice | Why |
 | --- | --- | --- |
 | Speech-to-text | faster-whisper, `base.en`, on the CPU | Local, pip install, fast enough on Apple Silicon. The model downloads on first run. |
-| Reply | Claude (`claude-opus-5-5`, low effort), streamed | One pip package and an API key. `--brain echo` repeats what it heard, for testing with no key. |
+| Reply | Robin, through robin-assistant's web chat API with `device=speaker` and `wait=1` | Robin keeps the conversation, memory and tools. `--echo` repeats what was heard, to test the audio chain with no robin-assistant. |
 | Text-to-speech | Piper with the `en_US-ryan-medium` voice, Robin's voice. macOS `say` with `--tts say` | Both local. Ryan was picked on the bench on 2026-11-16. |
 
-The server keeps one shared conversation in memory for the household. It starts fresh after 30 idle minutes or a restart.
+robin-assistant keeps the conversation. The egg server keeps no history of its own.
+
+robin-assistant must be running on the same Mac mini, listening on `127.0.0.1:8273`, or wherever `--robin-url` points. At startup the server checks that the agent has a web chat and exits with a clear message if it does not. If robin-assistant is down it only warns and starts anyway.
 
 ## Setup on the Mac mini
 
@@ -31,7 +33,6 @@ cd server
 python3.14 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pytest -q          # offline tests against a fake egg, no keys or models needed
-export ANTHROPIC_API_KEY=sk-ant-...    # or run `ant auth login` once
 ```
 
 Download Robin's voice once. The server looks for it in `server/voices/`, which git ignores:
@@ -44,7 +45,7 @@ Use Python 3.14 for the venv for now. faster-whisper's onnxruntime dependency ha
 
 ## Try it today, without the egg
 
-`--demo` runs the real server (real Whisper, real Claude, real voice) against a fake egg that "says" audio files, one per turn:
+`--demo` runs the real server (real Whisper, real Robin, real voice) against a fake egg that "says" audio files, one per turn:
 
 ```sh
 say -o q1.aiff "Hey, what's a good name for a robin?"
@@ -80,7 +81,7 @@ That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
-| `--brain robin\|claude\|echo` | `claude` | `robin` asks Robin through robin-assistant, in the plain web chat the phone uses. `claude` calls Claude directly. `echo` repeats what was heard, to test the audio chain with no key. |
+| `--echo` | off | Repeat what was heard instead of asking Robin. Tests the audio chain with no robin-assistant. |
 | `--robin-url` | `http://127.0.0.1:8273` | robin-assistant's address. |
 | `--robin-agent` | `robin` | The robin-assistant agent to ask. |
 | `--robin-user` | none | A `[users]` key to send as the speaker. Left out until the egg can tell who is speaking. |
@@ -107,7 +108,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/egg.py` | The ESPHome connection with reconnects, and the voice turn |
 | `robin_egg_server/audio.py` | End-of-speech detection and the streamed FLAC reply |
 | `robin_egg_server/voices.py` | Whisper, `say` and Piper |
-| `robin_egg_server/brain.py` | Robin through robin-assistant, Claude, the echo brain, markdown stripping and sentence splitting |
+| `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
 | `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
