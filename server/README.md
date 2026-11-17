@@ -84,8 +84,8 @@ That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 | `--echo` | off | Repeat what was heard instead of asking Robin. Tests the audio chain with no robin-assistant. |
 | `--server` | required | robin-assistant's address: a host or IP, `host:port`, or a URL. The port defaults to 8273. Not needed with `--echo`. |
 | `--agent-name` | required | The robin-assistant agent to ask: its folder name under `~/.robin/agents/`. Not needed with `--echo`. |
-| `--robin-user` | none | A `[users]` key to send as the speaker. Left out until the egg can tell who is speaking. |
-| `--robin-timeout` | 90 s | How long to wait for Robin to finish answering before the error sound. |
+| `--default-speaker-name` | none | The robin-assistant `[users]` key sent as the speaker when the egg cannot tell who is speaking, which for now is always. Without it no speaker is sent. |
+| `--server-timeout` | 90 s | How long to wait for Robin to finish answering before the error sound. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
 | `--tts piper\|say` | `piper` | Which text-to-speech engine to use. |
 | `--piper-voice` | `voices/en_US-ryan-medium.onnx` | Another Piper voice, to audition. |

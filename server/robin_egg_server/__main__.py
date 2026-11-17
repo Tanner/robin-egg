@@ -31,8 +31,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--echo", action="store_true", help="Repeat what was heard instead of asking Robin, to test the audio chain with no robin-assistant")
     p.add_argument("--server", help="robin-assistant's address: a host or IP, host:port, or a URL. The port defaults to 8273. Required unless --echo")
     p.add_argument("--agent-name", help="The robin-assistant agent to ask, its folder name under ~/.robin/agents/. Required unless --echo")
-    p.add_argument("--robin-user", help="A [users] key to send as the speaker. Left out until the egg can tell who is speaking")
-    p.add_argument("--robin-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
+    p.add_argument("--default-speaker-name", help="The [users] key sent as the speaker when the egg cannot tell who is speaking, which for now is always. Without it no speaker is sent")
+    p.add_argument("--server-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
     p.add_argument("--tts", choices=["piper", "say"], default="piper", help="Text-to-speech engine: piper (Robin's voice) or macOS say")
     p.add_argument("--piper-voice", default=str(DEFAULT_PIPER_VOICE), help="Path to a Piper .onnx voice (default: Robin's voice, Piper Ryan)")
@@ -84,7 +84,7 @@ def build(args: argparse.Namespace):
     else:
         from .brain import RobinBrain
 
-        brain = RobinBrain(args.server, args.agent_name, user=args.robin_user, timeout_s=args.robin_timeout)
+        brain = RobinBrain(args.server, args.agent_name, user=args.default_speaker_name, timeout_s=args.server_timeout)
     start, end = (int(x) for x in args.speaking_hours.split("-"))
     opts = Options(
         stream=not args.no_stream,

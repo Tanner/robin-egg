@@ -154,9 +154,9 @@ Done in this repo once the robin-assistant side lands.
 - Outcomes:
   - `quiet`: say nothing. `_speak` currently says `NO_REPLY` for an empty turn (`egg.py:206-208`), so `RobinBrain` needs a way to end silently.
   - `error`: speak the apology row if there is one and skip the error sound. Play the error sound only if there was no reply.
-  - `stopped`, a connection error, or no `end` within `--robin-timeout`: the error sound.
+  - `stopped`, a connection error, or no `end` within `--server-timeout`: the error sound.
 - After a timeout or a barge-in, Robin's turn keeps running and its late answer lands in the chat unheard. The next thing said may be steered into that turn. Accept this for v1 and log it. An approval card from a speaker turn has the same effect until the timeout.
-- Options: `--server` (a host or IP, `host:port` or URL, port 8273 by default) and `--agent-name`, both required unless `--echo`, then `--robin-user` and `--robin-timeout`. There is no brain choice: always Robin, or `--echo`.
+- Options: `--server` (a host or IP, `host:port` or URL, port 8273 by default) and `--agent-name`, both required unless `--echo`, then `--default-speaker-name` and `--server-timeout`. There is no brain choice: always Robin, or `--echo`.
 - The server keeps no conversation history. Robin keeps its own.
 - At startup it fetches `GET /api/chat/:agent` and exits if the agent has no web chat or is disabled. If robin-assistant is unreachable it warns and starts anyway.
 
