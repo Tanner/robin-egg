@@ -13,9 +13,8 @@ secrets.yaml
 wakeword/recordings/*
 !wakeword/recordings/.gitkeep
 
-# Piper voices and voice audition clips are downloads, not source
+# Piper voices are downloads, not source
 server/voices/
-voice-auditions/
 
 # ESPHome build output
 firmware/.esphome/
