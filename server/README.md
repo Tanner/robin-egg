@@ -98,6 +98,25 @@ To remove your voice, say the wake word, then "forget my voice", and answer yes.
 
 Voiceprints are kept in `~/.robin-egg/voiceprints.json`. They hold no audio.
 
+## Measuring accuracy
+
+To pick the accept threshold from real numbers, record clips with `--save-audio` and sort them into folders, one per person, plus `unknown` for guests, the TV and anyone not enrolled:
+
+```
+clips/
+  tanner/*.wav
+  ryan/*.wav
+  unknown/*.wav
+```
+
+Then run, from `server/`:
+
+```sh
+.venv/bin/python -m robin_egg_server.speakers evaluate clips
+```
+
+It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json` (`--voiceprints` and `--speaker-model` change that). For each threshold from 0.30 to 0.70 it counts clips judged right, given to the wrong person, and sent as Unknown Speaker, with clips under 2 s apart from longer ones. The last line suggests the lowest threshold that gave no clip to the wrong person. Only 16 kHz mono 16-bit WAV files are read; others are skipped with a warning. These clips are audio the server otherwise never keeps, so delete the folder when you are done.
+
 ## Useful options
 
 | Option | Default | What it does |

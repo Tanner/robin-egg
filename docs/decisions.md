@@ -34,6 +34,18 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | No separate Arduino | The XIAO ESP32-S3 is the microcontroller |
 | Wall power, no battery | It sits in one place |
 
+## Speaker recognition, decided 2026-11-16
+
+| Decision | Why |
+| --- | --- |
+| The Mac mini works out who is speaking by comparing each turn to saved voiceprints | robin-assistant trusts whatever user label it is given, and the egg cannot tell Tanner from Ryan on its own |
+| Enrolment happens only when someone asks, by saying "learn my voice" to the egg | Nobody is recorded without choosing it, and no phone app or setup screen is needed |
+| The list of people comes from robin-assistant's `/api/users` | One list of household members, kept where Robin already keeps it |
+| A voice the server cannot place is sent as "Unknown Speaker" | A guess could give one of us the other's calendar and memories |
+| Enrolment has light checks: the person repeats each sentence back and the voice must not match someone already enrolled | Catches a TV, a bad take or a second person, without making setup tiresome |
+| Voiceprints are retrained from turns the server is very confident about | Voices change with colds, rooms and microphones, and nobody has to re-enrol |
+| `--speaker-recognition` is off by default | Existing setups behave as before until someone turns it on |
+
 ## Dropped ideas
 
 - 13.3" Spectra 6 e-ink frame

@@ -12,14 +12,15 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass
+import wave
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Awaitable, Callable, Protocol
 
 import numpy as np
 
-from .audio import MIC_RATE
+from .audio import MIC_RATE, EnergyVad, VadConfig
 
 LOG = logging.getLogger("robin.speakers")
 
@@ -304,3 +305,98 @@ def _describe(m: Match, ranked: list[tuple[str, float]]) -> str:
         return f"Did not recognise the speaker: nobody in the people list has enrolled; sending {UNKNOWN_SPEAKER}"
     closest = ", ".join(f"{key} at {score:.2f}" for key, score in ranked[:2])
     return f"Did not recognise the speaker ({m.seconds:.1f} s of speech, closest {closest}); sending {UNKNOWN_SPEAKER}"
+
+
+EVAL_THRESHOLDS = [round(0.30 + 0.05 * i, 2) for i in range(9)]
+SHORT_CLIP_S = 2.0
+
+
+def _read_clip(path: Path) -> bytes | None:
+    """The clip's samples, or None with a warning when it is not 16 kHz mono 16-bit, the format --save-audio writes."""
+    try:
+        with wave.open(str(path), "rb") as w:
+            if (w.getnchannels(), w.getsampwidth(), w.getframerate()) != (1, 2, MIC_RATE):
+                LOG.warning("Skipping %s: it is not 16 kHz mono 16-bit audio, the format --save-audio writes", path)
+                return None
+            return w.readframes(w.getnframes())
+    except (wave.Error, EOFError, OSError) as err:
+        LOG.warning("Skipping %s: it could not be read as a WAV file (%s)", path, err)
+        return None
+
+
+def _speech_seconds(pcm16: bytes) -> float:
+    vad = EnergyVad(VadConfig())
+    vad.feed(pcm16)
+    return vad.speech_frames * vad.cfg.frame_ms / 1000
+
+
+def evaluate(root: Path, ids: SpeakerId) -> str:
+    """Score the clips in root/<person>/*.wav and root/unknown/*.wav at a range of accept thresholds.
+
+    Every enrolled person is a candidate, since an offline run has no robin-assistant to say who lives here.
+    Each clip is judged alone, with no previous turn to fall back on.
+    """
+    keys = set(ids.store.prints)
+    clips: list[tuple[str | None, float, list[tuple[str, float]]]] = []
+    for folder in sorted(p for p in root.iterdir() if p.is_dir()):
+        truth = None if folder.name == "unknown" else folder.name
+        for path in sorted(folder.glob("*.wav")):
+            pcm = _read_clip(path)
+            if pcm is None:
+                continue
+            try:
+                ranked = scores(ids.embedder.embed(pcm), ids.store, keys)
+            except ValueError as err:
+                LOG.warning("Scoring %s as an unknown voice: the speaker model could not use it (%s)", path, err)
+                ranked = []
+            clips.append((truth, _speech_seconds(pcm), ranked))
+
+    lines = [
+        f"Scored {len(clips)} clips against {', '.join(sorted(keys)) or 'nobody'}.",
+        "",
+        f"{'accept':<8}{'under 2 s':^22}{'2 s or longer':^22}",
+        f"{'':<8}{'right':>7}{'wrong':>7}{'unknown':>8}{'right':>7}{'wrong':>7}{'unknown':>8}",
+    ]
+    suggested = None
+    for accept in EVAL_THRESHOLDS:
+        t = replace(ids.thresholds, accept=accept)
+        counts = {short: [0, 0, 0] for short in (True, False)}
+        for truth, seconds, ranked in clips:
+            got = decide(ranked, seconds, t, None).key
+            outcome = 2 if got is None and truth is not None else 0 if got == truth else 1
+            counts[seconds < SHORT_CLIP_S][outcome] += 1
+        lines.append(f"{accept:<8.2f}" + "".join(f"{n:>{w}}" for n, w in zip(counts[True] + counts[False], (7, 7, 8, 7, 7, 8))))
+        if suggested is None and counts[True][1] + counts[False][1] == 0:
+            suggested = accept
+    lines.append("")
+    if suggested is None:
+        lines.append("No threshold from 0.30 to 0.70 kept every clip off the wrong person.")
+    else:
+        lines.append(f"Suggested accept threshold: {suggested:.2f}")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    p = argparse.ArgumentParser(prog="python -m robin_egg_server.speakers", description="Measure how well enrolled voices are recognised")
+    sub = p.add_subparsers(dest="command", required=True)
+    ev = sub.add_parser("evaluate", help="Score WAV clips from the egg against the enrolled voiceprints")
+    ev.add_argument("dir", type=Path, help="A folder holding <person>/*.wav and unknown/*.wav, saved with --save-audio")
+    ev.add_argument("--voiceprints", type=Path, default=Path("~/.robin-egg/voiceprints.json").expanduser(), help="Where the enrolled voiceprints are kept")
+    ev.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model")
+    args = p.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if not args.dir.is_dir():
+        p.error(f"{args.dir} is not a folder")
+    store = VoiceprintStore(args.voiceprints, Path(args.speaker_model).name)
+    store.load()
+    if not store.prints:
+        p.error(f"no voiceprints loaded from {args.voiceprints}: enrol first, with the same speaker model")
+    print(evaluate(args.dir, SpeakerId(SherpaEmbedder(args.speaker_model), store)))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

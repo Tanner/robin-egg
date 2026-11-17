@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import wave
 
 import numpy as np
 import pytest
@@ -20,10 +21,12 @@ from robin_egg_server.speakers import (
     Match,
     People,
     Person,
+    SpeakerId,
     Thresholds,
     Voiceprint,
     VoiceprintStore,
     decide,
+    evaluate,
     people_for_agent,
     scores,
     should_learn,
@@ -285,3 +288,59 @@ def test_people_waits_before_retrying_a_failed_fetch(caplog):
             assert attempts == 3
 
     asyncio.run(run())
+
+
+class QueuedEmbedder:
+    name = MODEL
+
+    def __init__(self, vectors):
+        self.vectors = list(vectors)
+
+    def embed(self, pcm16: bytes) -> np.ndarray:
+        return unit(*self.vectors.pop(0))
+
+
+def write_clip(path, seconds: float, rate: int = MIC_RATE) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    t = np.arange(int(rate * seconds)) / rate
+    samples = (8000 * np.sin(2 * np.pi * 220 * t)).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(samples.tobytes())
+
+
+def test_evaluate_reports_confusion_by_threshold_and_length(tmp_path, caplog):
+    store = VoiceprintStore(tmp_path / "v.json", MODEL)
+    store.replace("tanner", [unit(1, 0, 0)])
+    store.replace("ryan", [unit(0, 1, 0)])
+    clips = tmp_path / "clips"
+    write_clip(clips / "ryan" / "a.wav", 3.0)
+    write_clip(clips / "ryan" / "b-eight-khz.wav", 3.0, rate=8000)
+    write_clip(clips / "tanner" / "a.wav", 1.5)
+    write_clip(clips / "tanner" / "b.wav", 3.0)
+    write_clip(clips / "unknown" / "a.wav", 3.0)
+    # Read in folder then file order: ryan/a, tanner/a, tanner/b, unknown/a.
+    embedder = QueuedEmbedder([(0, 1, 0), (1, 0, 0), (1, 1, 1), (0.5, 0.1, 1)])
+
+    with caplog.at_level(logging.WARNING):
+        report = evaluate(clips, SpeakerId(embedder, store))
+
+    assert "b-eight-khz.wav" in caplog.text
+    lines = report.splitlines()
+    thresholds = [line.split()[0] for line in lines if line[:1].isdigit()]
+    assert thresholds == ["0.30", "0.35", "0.40", "0.45", "0.50", "0.55", "0.60", "0.65", "0.70"]
+    row = {line.split()[0]: line for line in lines if line[:1].isdigit()}
+    assert row["0.30"].split()[1:] == ["1", "0", "0", "1", "1", "1"]
+    assert row["0.45"].split()[1:] == ["1", "0", "0", "2", "0", "1"]
+    assert lines[-1] == "Suggested accept threshold: 0.45"
+
+
+def test_evaluate_says_so_when_no_threshold_avoids_wrong_people(tmp_path):
+    store = VoiceprintStore(tmp_path / "v.json", MODEL)
+    store.replace("tanner", [unit(1, 0, 0)])
+    store.replace("ryan", [unit(0, 1, 0)])
+    write_clip(tmp_path / "clips" / "tanner" / "a.wav", 3.0)
+    report = evaluate(tmp_path / "clips", SpeakerId(QueuedEmbedder([(0, 1, 0)]), store))
+    assert report.splitlines()[-1] == "No threshold from 0.30 to 0.70 kept every clip off the wrong person."

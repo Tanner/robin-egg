@@ -36,7 +36,6 @@ See [architecture.md](architecture.md) for the recommendation.
 
 ## Who is speaking
 
-- **Telling Tanner from Ryan.** robin-assistant trusts whatever user label it is given. Options: voice identification on the Mac mini, asking, or treating the egg as a shared household user.
 - **Guests.** What may someone who is neither of us ask?
 
 ## Remote mic
