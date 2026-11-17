@@ -136,7 +136,7 @@ Done in this repo once the robin-assistant side lands.
   - `error`: speak the apology row if there is one and skip the error sound. Play the error sound only if there was no reply.
   - `stopped`, a connection error, or no `end` within `--robin-timeout`: the error sound.
 - After a timeout or a barge-in, Robin's turn keeps running and its late answer lands in the chat unheard. The next thing said may be steered into that turn. Accept this for v1 and log it. An approval card from a speaker turn has the same effect until the timeout.
-- New options: `--brain robin`, `--robin-url` (default `http://127.0.0.1:8273`), `--robin-agent`, `--robin-project`, `--robin-timeout`. `claude` stays the default until the robin brain has worked on the bench.
+- New options: `--brain robin`, `--robin-url` (default `http://127.0.0.1:8273`), `--robin-agent`, `--robin-project`, `--robin-user`, `--robin-timeout`. `claude` stays the default until the robin brain has worked on the bench.
 - The server's own conversation history and idle reset only apply to `ClaudeBrain`.
 
 ### Preventing regressions
