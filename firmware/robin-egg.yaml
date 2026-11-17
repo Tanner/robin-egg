@@ -44,10 +44,11 @@ wifi:
 # The API keeps the factory setup: encryption on, key set by the first client.
 # The server and the bench script rely on that.
 
+# No update password, like the factory firmware. Anyone on the local network
+# can flash the egg.
 ota:
   - platform: esphome
     id: ota_esphome
-    password: !secret ota_password
 
 # Lets the web installer or a serial tool set Wi-Fi again over USB.
 improv_serial:
