@@ -369,6 +369,14 @@ def evaluate(root: Path, ids: SpeakerId) -> str:
         if suggested is None and counts[True][1] + counts[False][1] == 0:
             suggested = accept
     lines.append("")
+    if not clips:
+        lines.append("No clips to measure, so there is no suggested threshold.")
+        return "\n".join(lines)
+    # Without these clips a zero wrong-person count says little, so the suggestion comes with a caveat.
+    if not any(truth is None for truth, _, _ in clips):
+        lines.append("No clips from unknown/, so this does not show how often a guest would be taken for one of you.")
+    if len({truth for truth, _, _ in clips if truth is not None}) < 2:
+        lines.append("Clips from only one person, so this does not show how often you two would be mixed up.")
     if suggested is None:
         lines.append("No threshold from 0.30 to 0.70 kept every clip off the wrong person.")
     else:

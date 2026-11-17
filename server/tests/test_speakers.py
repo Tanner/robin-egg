@@ -344,3 +344,39 @@ def test_evaluate_says_so_when_no_threshold_avoids_wrong_people(tmp_path):
     write_clip(tmp_path / "clips" / "tanner" / "a.wav", 3.0)
     report = evaluate(tmp_path / "clips", SpeakerId(QueuedEmbedder([(0, 1, 0)]), store))
     assert report.splitlines()[-1] == "No threshold from 0.30 to 0.70 kept every clip off the wrong person."
+
+
+NO_UNKNOWN = "No clips from unknown/, so this does not show how often a guest would be taken for one of you."
+ONE_PERSON = "Clips from only one person, so this does not show how often you two would be mixed up."
+
+
+def two_people_store(tmp_path):
+    store = VoiceprintStore(tmp_path / "v.json", MODEL)
+    store.replace("tanner", [unit(1, 0, 0)])
+    store.replace("ryan", [unit(0, 1, 0)])
+    return store
+
+
+def test_evaluate_with_no_clips_suggests_nothing(tmp_path):
+    (tmp_path / "clips").mkdir()
+    report = evaluate(tmp_path / "clips", SpeakerId(QueuedEmbedder([]), two_people_store(tmp_path)))
+    assert report.splitlines()[-1] == "No clips to measure, so there is no suggested threshold."
+    assert "Suggested accept threshold" not in report
+
+
+def test_evaluate_warns_when_there_are_no_unknown_clips(tmp_path):
+    write_clip(tmp_path / "clips" / "ryan" / "a.wav", 3.0)
+    write_clip(tmp_path / "clips" / "tanner" / "a.wav", 3.0)
+    report = evaluate(tmp_path / "clips", SpeakerId(QueuedEmbedder([(0, 1, 0), (1, 0, 0)]), two_people_store(tmp_path)))
+    assert NO_UNKNOWN in report
+    assert ONE_PERSON not in report
+    assert report.splitlines()[-1] == "Suggested accept threshold: 0.30"
+
+
+def test_evaluate_warns_when_clips_are_from_one_person(tmp_path):
+    write_clip(tmp_path / "clips" / "tanner" / "a.wav", 3.0)
+    write_clip(tmp_path / "clips" / "unknown" / "a.wav", 3.0)
+    report = evaluate(tmp_path / "clips", SpeakerId(QueuedEmbedder([(1, 0, 0), (0, 0, 1)]), two_people_store(tmp_path)))
+    assert ONE_PERSON in report
+    assert NO_UNKNOWN not in report
+    assert report.splitlines()[-1].startswith("Suggested accept threshold")
