@@ -270,3 +270,15 @@ def test_reply_audio_serves_finished_file_to_late_readers():
 
     got, final = asyncio.run(scenario())
     assert got == final and decode(final)[1] == 48000
+
+
+def test_utterance_length_limit_comes_from_options():
+    async def start(opts: Options, follow_up: bool) -> float:
+        robin = Robin(FakeSTT([]), SlowBrain([]), ToneTTS(), AudioServer(), VoiceAssistantEventType, opts)
+        robin._follow_up_pending = follow_up
+        await robin.handle_start("c", 0, None, None if follow_up else "Okay Nabu")
+        return robin.turn.vad.cfg.max_utterance_s
+
+    assert asyncio.run(start(Options(), False)) == 30.0
+    assert asyncio.run(start(Options(max_utterance_s=45.0), False)) == 45.0
+    assert asyncio.run(start(Options(max_utterance_s=45.0), True)) == 45.0

@@ -44,6 +44,7 @@ class Options:
     stream: bool = True  # start playback at the first sentence instead of after the whole reply
     follow_up: str = "always"  # always | questions | off
     follow_up_window_s: float = 5.0
+    max_utterance_s: float = 30.0  # longest request before the mic closes mid-sentence
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours
     save_audio: Path | None = None
 
@@ -93,7 +94,9 @@ class Robin:
                 await self.turn.reply.close()  # it never got to answer
         follow_up = self._follow_up_pending and not wake_word_phrase
         self._follow_up_pending = False
-        cfg = VadConfig(no_speech_timeout_s=self.opts.follow_up_window_s) if follow_up else VadConfig()
+        cfg = VadConfig(max_utterance_s=self.opts.max_utterance_s)
+        if follow_up:
+            cfg.no_speech_timeout_s = self.opts.follow_up_window_s
         reply = ReplyAudio()
         url = self.web.add(reply)
         self.turn = Turn(EnergyVad(cfg), reply, url, wake_word_phrase, follow_up)
