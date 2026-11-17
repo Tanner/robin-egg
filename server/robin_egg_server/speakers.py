@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -23,6 +24,8 @@ LOG = logging.getLogger("robin.speakers")
 
 UNKNOWN_SPEAKER = "Unknown Speaker"
 
+MIN_EMBED_SAMPLES = MIC_RATE // 10
+
 DEFAULT_SPEAKER_MODEL = Path(__file__).resolve().parent.parent / "models" / "wespeaker_en_voxceleb_resnet34_LM.onnx"
 
 
@@ -30,7 +33,10 @@ class SpeakerEmbedder(Protocol):
     name: str
 
     def embed(self, pcm16: bytes) -> np.ndarray:
-        """A 1-D float32 voice embedding of unit length."""
+        """A 1-D float32 voice embedding of unit length.
+
+        Raises ValueError when the audio is too short or the model gives no usable vector.
+        """
         ...
 
 
@@ -45,13 +51,21 @@ class SherpaEmbedder:
         self.name = Path(model_path).name
         config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=model_path, num_threads=2)
         self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
+        # One instance is shared by every turn's worker thread, and sherpa does not promise concurrent compute is safe.
+        self._lock = threading.Lock()
 
     def embed(self, pcm16: bytes) -> np.ndarray:
         samples = np.frombuffer(pcm16, dtype="<i2").astype(np.float32) / 32768.0
-        stream = self._extractor.create_stream()
-        stream.accept_waveform(sample_rate=MIC_RATE, waveform=samples)
-        stream.input_finished()
-        return _unit(np.asarray(self._extractor.compute(stream), dtype=np.float32))
+        if len(samples) < MIN_EMBED_SAMPLES:
+            raise ValueError(f"Only {len(samples)} audio samples, too short to tell who is speaking")
+        with self._lock:
+            stream = self._extractor.create_stream()
+            stream.accept_waveform(sample_rate=MIC_RATE, waveform=samples)
+            stream.input_finished()
+            raw = np.asarray(self._extractor.compute(stream), dtype=np.float32)
+        if raw.ndim != 1 or raw.size == 0 or not float(np.linalg.norm(raw)) > 0:
+            raise ValueError("The speaker model gave no usable voice embedding for this audio")
+        return _unit(raw)
 
 
 @dataclass

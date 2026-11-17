@@ -199,3 +199,14 @@ def test_sherpa_embedder_gives_a_unit_vector():
     assert first.ndim == 1 and first.dtype == np.float32
     assert abs(np.linalg.norm(first) - 1) < 1e-5
     assert np.allclose(first, again)
+
+
+@pytest.mark.skipif(not DEFAULT_SPEAKER_MODEL.exists(), reason="speaker model not downloaded (see server/README.md)")
+def test_sherpa_embedder_rejects_audio_too_short_to_judge():
+    embedder = SherpaEmbedder(str(DEFAULT_SPEAKER_MODEL))
+    with pytest.raises(ValueError):
+        embedder.embed(b"")
+    with pytest.raises(ValueError):
+        embedder.embed(speech(100 / MIC_RATE))
+    v = embedder.embed(speech(0.1))
+    assert abs(np.linalg.norm(v) - 1) < 1e-5
