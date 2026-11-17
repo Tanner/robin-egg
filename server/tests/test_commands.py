@@ -265,6 +265,25 @@ def test_replacing_needs_a_yes(tmp_path):
     assert store.prints["tanner"].pool == []
 
 
+def test_a_yes_can_come_with_more_words(tmp_path):
+    for reply in ("yeah, go ahead", "Yes, replace it.", "sure thing", "go ahead", "do it"):
+        commands, _ = make(tmp_path, enrolled=[("tanner", TANNER_VOICE)])
+        reach_sentences(commands, match=heard_as("tanner"))
+        assert say(commands, reply).say == INTRO + ENROL_SENTENCES[0], reply
+
+        commands, store = make(tmp_path, enrolled=[("tanner", TANNER_VOICE)])
+        say(commands, "forget my voice", heard_as("tanner"))
+        assert say(commands, reply).say == "Done. I've forgotten your voice.", reply
+
+
+def test_a_reply_that_only_contains_a_yes_is_not_one(tmp_path):
+    for reply in ("no, not yes", "yesterday was better", "don't do it", "go ahead and stop"):
+        commands, store = make(tmp_path, enrolled=[("tanner", TANNER_VOICE)])
+        say(commands, "forget my voice", heard_as("tanner"))
+        assert say(commands, reply).say == KEEP, reply
+        assert "tanner" in store.prints
+
+
 def test_forget_asks_then_deletes(tmp_path):
     commands, store = make(tmp_path, enrolled=[("tanner", TANNER_VOICE)])
     step = say(commands, "forget my voice", heard_as("tanner"))

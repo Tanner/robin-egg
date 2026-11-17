@@ -35,7 +35,8 @@ LEARN_PHRASE = "learn my voice"
 FORGET_PHRASE = "forget my voice"
 
 _FILLER = {"robin", "hey", "okay", "ok", "please", "can", "could", "you"}
-_YES = {"yes", "yeah", "yep", "sure", "do it", "go ahead"}
+_YES_WORDS = {"yes", "yeah", "yep", "sure"}
+_YES_PHRASES = {"do it", "go ahead"}
 _STOP = {"stop", "cancel"}
 _NAME_LEAD_INS = ("my name is", "this is", "its", "im", "i am")
 
@@ -75,7 +76,9 @@ def same_sentence(heard: str, expected: str) -> bool:
 
 
 def _is_yes(heard: str) -> bool:
-    return " ".join(_normalise(heard)) in _YES
+    # People add to a yes ("yeah, go ahead"), but a yes buried later in the reply is not one ("no, not yes").
+    words = _normalise(heard)
+    return bool(words) and (words[0] in _YES_WORDS or " ".join(words) in _YES_PHRASES)
 
 
 def _is_stop(heard: str) -> bool:
