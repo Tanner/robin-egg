@@ -16,15 +16,15 @@ It complements the Apple HomeView we already own. The egg has no screen and does
 
 ## Status
 
-Updated 2026-11-14.
+Updated 2026-11-16.
 
 | Step | State |
 | --- | --- |
-| 1. Bench test the parts | Plan written. Parts arrive Monday Nov 16, 2026 |
-| 2. Flash ESPHome firmware, get a wake word and spoken reply | Not started. Needs Home Assistant on the Mac mini |
-| 3. Train a "Hey Robin" wake word | Not started |
-| 4. Choose Home Assistant pipeline or our own server, draft the protocol | Open |
-| 5. Measure parts and design the egg | Blocked on step 1 |
+| 1. Bench test the parts | In progress. Board powers up, sound out works. Results in [docs/bench-test.md](docs/bench-test.md) |
+| 2. Flash ESPHome firmware, get a wake word and spoken reply | Done 2026-11-16 with formatBCE firmware and no Home Assistant |
+| 3. Train a "Hey Robin" wake word | In progress. Notebook in `wakeword/`, waiting on recordings from the egg. "Okay Nabu" for now |
+| 4. Choose Home Assistant pipeline or our own server, draft the protocol | Done. Our own Robin Egg Server speaks ESPHome's API and talks to robin-assistant's web chat API ([docs/robin-chat-api.md](docs/robin-chat-api.md)). First real conversation with Robin through the egg on 2026-11-16 |
+| 5. Measure parts and design the egg | Started. CAD in `cad/` |
 
 ## Docs
 
