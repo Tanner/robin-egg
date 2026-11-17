@@ -340,3 +340,9 @@ def test_server_and_agent_name_are_required_unless_echo(capsys):
     args = parse_args(["egg.local", "--server", "10.0.0.5", "--agent-name", "clara"])
     assert (args.server, args.agent_name) == ("http://10.0.0.5:8273", "clara")
     assert parse_args(["egg.local", "--echo"]).echo
+
+
+def test_agent_name_must_be_a_robin_assistant_name(capsys):
+    with pytest.raises(SystemExit):
+        parse_args(["egg.local", "--server", "10.0.0.5", "--agent-name", "Wesleybot"])
+    assert "Did you mean --agent-name wesleybot?" in capsys.readouterr().err

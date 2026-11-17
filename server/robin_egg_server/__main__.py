@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import re
 import socket
 import sys
 from pathlib import Path
@@ -55,6 +56,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             args.server = server_url(args.server)
         except ValueError as err:
             p.error(str(err))
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", args.agent_name):  # robin-assistant's agentNameRegex
+            hint = f" Did you mean --agent-name {args.agent_name.lower()}?" if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", args.agent_name.lower()) else ""
+            p.error(f"--agent-name {args.agent_name!r} is not an agent name: robin-assistant names are lowercase letters, digits, - and _, the folder name under ~/.robin/agents/.{hint}")
     return args
 
 
