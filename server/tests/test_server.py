@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import shutil
 import subprocess
 import time
@@ -24,8 +25,10 @@ from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.audio import MIC_RATE, ReplyAudio
 from robin_egg_server.brain import sentences
+from robin_egg_server.commands import ENROL_SENTENCES, KEEP_IT, SPEAKER_ID_OFF, VoiceCommands
 from robin_egg_server.egg import FAILED_TURN, PROACTIVE_CHIME, Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
+from robin_egg_server.speakers import Match, People, Person, SpeakerId, VoiceprintStore
 from robin_egg_server.web import AudioServer
 
 
@@ -47,10 +50,11 @@ class SlowBrain:
     """Streams its reply in pieces, with a pause, the way an LLM does."""
 
     def __init__(self, replies: list[list[str]], pause: float = 0.4) -> None:
-        self.replies, self.pause, self.heard = list(replies), pause, []
+        self.replies, self.pause, self.heard, self.users = list(replies), pause, [], []
 
-    async def reply(self, heard: str):
+    async def reply(self, heard: str, user: str):
         self.heard.append(heard)
+        self.users.append(user)
         for i, piece in enumerate(self.replies.pop(0)):
             if i:
                 await asyncio.sleep(self.pause)
@@ -58,7 +62,7 @@ class SlowBrain:
 
 
 class BrokenBrain:
-    async def reply(self, heard: str):
+    async def reply(self, heard: str, user: str):
         raise RuntimeError("no API key")
         yield ""
 
@@ -66,7 +70,7 @@ class BrokenBrain:
 class FailsAfterReplying:
     """Says one sentence, then fails, the way a dropped robin-assistant stream does."""
 
-    async def reply(self, heard: str):
+    async def reply(self, heard: str, user: str):
         yield "Hello there, nice to meet you. "
         await asyncio.sleep(0.2)
         raise RuntimeError("the stream dropped")
@@ -93,16 +97,17 @@ def decode(data: bytes) -> tuple[np.ndarray, int]:
     return sf.read(io.BytesIO(data), dtype="float32")
 
 
-async def converse(utterances, stt, brain, tts, opts=None) -> tuple[FakeEgg, Robin]:
-    egg = FakeEgg(utterances)
+async def converse(utterances, stt, brain, tts, opts=None, egg=None, until=None, **robin_kwargs) -> tuple[FakeEgg, Robin]:
+    """Runs Robin against a fake egg until the egg is done, or until `until` is set."""
+    egg = egg or FakeEgg(utterances)
     port = await egg.start()
     web = AudioServer()
     await web.start("127.0.0.1", 0, "127.0.0.1")
-    robin = Robin(stt, brain, tts, web, VoiceAssistantEventType, opts or Options())
+    robin = Robin(stt, brain, tts, web, VoiceAssistantEventType, opts or Options(), **robin_kwargs)
     stop = asyncio.Event()
     task = asyncio.create_task(robin.run_forever("127.0.0.1", port, stop=stop))
     try:
-        await asyncio.wait_for(egg.done.wait(), 20)
+        await asyncio.wait_for((until or egg.done).wait(), 20)
     finally:
         stop.set()
         await task
@@ -122,6 +127,7 @@ def test_conversation_with_streaming_and_follow_up():
     first, second, third = egg.runs
     assert first.wake_word == "Okay Nabu" and second.wake_word == "" and third.wake_word == ""
     assert brain.heard == ["what's the weather like", "and tomorrow"]
+    assert brain.users == ["Unknown Speaker", "Unknown Speaker"]
 
     assert first.types() == [
         pb.VOICE_ASSISTANT_RUN_START, pb.VOICE_ASSISTANT_STT_START, pb.VOICE_ASSISTANT_STT_VAD_START,
@@ -289,3 +295,287 @@ def test_utterance_length_limit_comes_from_options():
     assert asyncio.run(start(Options(), False)) == 30.0
     assert asyncio.run(start(Options(max_utterance_s=45.0), False)) == 45.0
     assert asyncio.run(start(Options(max_utterance_s=45.0), True)) == 45.0
+
+
+# ---- who is speaking ----
+
+TANNER = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+RYAN = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+BORDERLINE = np.array([0.4, 0.3, 0.866], dtype=np.float32)
+MODEL = "fake-speaker-model"
+
+
+class FakeEmbedder:
+    """Returns queued voice vectors in turn order, the way FakeSTT returns transcripts."""
+
+    name = MODEL
+
+    def __init__(self, vectors: list[np.ndarray]) -> None:
+        self.vectors = list(vectors)
+
+    def embed(self, pcm16: bytes) -> np.ndarray:
+        v = self.vectors.pop(0)
+        return v / np.linalg.norm(v)
+
+
+class BrokenEmbedder:
+    name = MODEL
+
+    def embed(self, pcm16: bytes) -> np.ndarray:
+        raise ValueError("Only 12 audio samples, too short to tell who is speaking")
+
+
+def household_store(tmp_path) -> VoiceprintStore:
+    store = VoiceprintStore(tmp_path / "voiceprints.json", MODEL)
+    store.replace("tanner", [TANNER])
+    store.replace("ryan", [RYAN])
+    return store
+
+
+def household(*keys: str) -> People:
+    async def fetch():
+        return [Person(k, k.title()) for k in keys]
+
+    return People(fetch)
+
+
+def identify_with(embedder, tmp_path, people=None) -> dict:
+    return {"speakers": SpeakerId(embedder, household_store(tmp_path)), "people": people or household("tanner", "ryan")}
+
+
+def test_each_turn_sends_the_identified_speaker(tmp_path):
+    brain = SlowBrain([["Hi Tanner. "], ["Hi Ryan. "]], pause=0)
+    asyncio.run(converse([speech(2.0), speech(2.0)], FakeSTT(["hello", "hello too"]), brain, ToneTTS(),
+                         **identify_with(FakeEmbedder([TANNER, RYAN]), tmp_path)))
+    assert brain.users == ["tanner", "ryan"]
+
+
+def test_a_short_follow_up_inherits_the_speaker(tmp_path):
+    brain = SlowBrain([["Sunny. "], ["Rain. "]], pause=0)
+    _, robin = asyncio.run(converse([speech(2.0), speech(0.6)], FakeSTT(["what's the weather", "and tomorrow"]), brain, ToneTTS(),
+                                    **identify_with(FakeEmbedder([TANNER, BORDERLINE]), tmp_path)))
+    assert brain.users == ["tanner", "tanner"]
+    assert robin.last_match is None  # forgotten when the egg disconnected
+
+
+def test_a_failing_embedder_still_answers_as_unknown(tmp_path, caplog):
+    tts, brain = ToneTTS(), SlowBrain([["Hello. "]], pause=0)
+    asyncio.run(converse([speech(2.0)], FakeSTT(["hi"]), brain, tts, Options(follow_up="off"),
+                         **identify_with(BrokenEmbedder(), tmp_path)))
+    assert FAILED_TURN not in tts.said
+    assert tts.said == ["Hello."]
+    assert brain.users == ["Unknown Speaker"]
+    assert "Could not identify the speaker; treating them as Unknown Speaker" in caplog.text
+
+
+def test_a_confident_long_turn_is_learned(tmp_path):
+    def pool_sizes() -> int:
+        return len(json.loads((tmp_path / "voiceprints.json").read_text())["people"]["tanner"]["pool"])
+
+    brain = SlowBrain([["Noted. "]], pause=0)
+    asyncio.run(converse([speech(4.0)], FakeSTT(["remember this"]), brain, ToneTTS(), Options(follow_up="off"),
+                         **identify_with(FakeEmbedder([TANNER]), tmp_path)))
+    assert brain.users == ["tanner"]
+    assert pool_sizes() == 1
+
+    (tmp_path / "voiceprints.json").unlink()
+    brain = SlowBrain([["Noted. "]], pause=0)
+    asyncio.run(converse([speech(2.0)], FakeSTT(["remember this"]), brain, ToneTTS(), Options(follow_up="off"),
+                         **identify_with(FakeEmbedder([TANNER]), tmp_path)))
+    assert brain.users == ["tanner"]
+    assert pool_sizes() == 0
+
+
+def test_no_speaker_id_sends_unknown():
+    brain = SlowBrain([["Hello. "]], pause=0)
+    asyncio.run(converse([speech(2.0)], FakeSTT(["hi"]), brain, ToneTTS(), Options(follow_up="off"), speakers=None, people=household("tanner")))
+    assert brain.users == ["Unknown Speaker"]
+
+
+def test_someone_removed_from_users_is_not_sent(tmp_path):
+    brain = SlowBrain([["Hello. "]], pause=0)
+    asyncio.run(converse([speech(2.0)], FakeSTT(["hi"]), brain, ToneTTS(), Options(follow_up="off"),
+                         **identify_with(FakeEmbedder([RYAN]), tmp_path, people=household("tanner"))))
+    assert brain.users == ["Unknown Speaker"]
+
+
+def test_an_inherited_speaker_removed_from_users_is_not_sent(tmp_path):
+    lists = [["tanner", "ryan"], ["ryan"]]
+
+    async def fetch():
+        return [Person(k, k.title()) for k in lists.pop(0)]
+
+    brain = SlowBrain([["Sunny. "], ["Rain. "]], pause=0)
+    asyncio.run(converse([speech(2.0), speech(0.6)], FakeSTT(["what's the weather", "and tomorrow"]), brain, ToneTTS(),
+                         **identify_with(FakeEmbedder([TANNER, BORDERLINE]), tmp_path, people=People(fetch, max_age_s=0.0))))
+    assert brain.users == ["tanner", "Unknown Speaker"]
+
+
+def test_without_a_people_list_nobody_is_identified(tmp_path):
+    brain = SlowBrain([["Hello. "]], pause=0)
+    asyncio.run(converse([speech(2.0)], FakeSTT(["hi"]), brain, ToneTTS(), Options(follow_up="off"),
+                         speakers=SpeakerId(FakeEmbedder([TANNER]), household_store(tmp_path)), people=None))
+    assert brain.users == ["Unknown Speaker"]
+
+
+def test_the_wake_word_forgets_the_previous_speaker():
+    async def run() -> Robin:
+        robin = Robin(FakeSTT([]), SlowBrain([]), ToneTTS(), AudioServer(), VoiceAssistantEventType)
+        robin.last_match = Match("tanner", 0.9, None, -1.0, 2.0, False, None)
+        await robin.handle_start("", 0, None, "Okay Nabu")
+        await robin.turn.reply.close()
+        return robin
+
+    assert asyncio.run(run()).last_match is None
+
+
+# ---- voice commands over the egg ----
+
+
+def enrolment(tmp_path) -> tuple[VoiceprintStore, VoiceCommands, dict]:
+    """An empty voiceprint store and the commands and speaker id that share it."""
+    store = VoiceprintStore(tmp_path / "voiceprints.json", MODEL)
+    people = household("tanner")
+    speakers = SpeakerId(FakeEmbedder([TANNER] * 20), store)
+    commands = VoiceCommands(people, store, speakers.thresholds)
+    return store, commands, {"speakers": speakers, "people": people, "commands": commands}
+
+
+def saved_keys(tmp_path) -> set[str]:
+    store = VoiceprintStore(tmp_path / "voiceprints.json", MODEL)
+    store.load()
+    return set(store.prints)
+
+
+def test_enrolment_over_the_egg(tmp_path):
+    _, commands, kwargs = enrolment(tmp_path)
+    texts = ["learn my voice", "Tanner", *ENROL_SENTENCES]
+    brain = SlowBrain([])
+    egg, _ = asyncio.run(converse([speech(2.0) for _ in texts], FakeSTT(texts), brain, ToneTTS(), **kwargs))
+    assert len(egg.runs) == len(texts)
+    assert [r.data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] for r in egg.runs] == ["1"] * (len(texts) - 1) + ["0"]
+    assert brain.heard == []
+    assert saved_keys(tmp_path) == {"tanner"}
+    assert egg.runs[-1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Thanks, Tanner, I'll know your voice now."
+    assert commands.active is False
+
+
+def test_enrolment_uses_the_longer_follow_up_window(tmp_path):
+    async def follow_up_window(start_enrolment: bool) -> float:
+        _, commands, kwargs = enrolment(tmp_path)
+        opts = Options(follow_up_window_s=5.0, enrol_window_s=10.0)
+        robin = Robin(FakeSTT([]), SlowBrain([]), ToneTTS(), AudioServer(), VoiceAssistantEventType, opts, **kwargs)
+        if start_enrolment:
+            await commands.handle("learn my voice", Match(None, -1.0, None, -1.0, 2.0, False, None))
+        robin._follow_up_pending = True
+        await robin.handle_start("", 0, None, "")
+        await robin.turn.reply.close()
+        return robin.turn.vad.cfg.no_speech_timeout_s
+
+    assert asyncio.run(follow_up_window(start_enrolment=True)) == 10.0
+    assert asyncio.run(follow_up_window(start_enrolment=False)) == 5.0
+
+
+def test_wake_word_mid_enrolment_ends_it(tmp_path):
+    _, commands, kwargs = enrolment(tmp_path)
+    texts = ["learn my voice", "Tanner", ENROL_SENTENCES[0], "what time is it"]
+    brain = SlowBrain([["It's noon. "]], pause=0)
+    egg = FakeEgg([speech(2.0) for _ in texts], wake_words=["Okay Nabu", None, None, "Okay Nabu"])
+    asyncio.run(converse([], FakeSTT(texts), brain, ToneTTS(), Options(follow_up="off"), egg=egg, **kwargs))
+    assert [r.wake_word for r in egg.runs] == ["Okay Nabu", "", "", "Okay Nabu"]
+    assert brain.heard == ["what time is it"]
+    assert commands.active is False
+    assert saved_keys(tmp_path) == set()
+
+
+def test_disconnect_mid_enrolment_drops_it(tmp_path):
+    _, commands, kwargs = enrolment(tmp_path)
+    texts = ["learn my voice", "Tanner"]
+    asked_for_a_sentence = asyncio.Event()
+    handle = commands.handle
+
+    async def handle_and_signal(heard, match):
+        step = await handle(heard, match)
+        if heard == "Tanner" and commands.active:
+            asked_for_a_sentence.set()
+        return step
+
+    commands.handle = handle_and_signal
+    asyncio.run(converse([speech(2.0) for _ in texts], FakeSTT(texts), SlowBrain([]), ToneTTS(), until=asked_for_a_sentence, **kwargs))
+    assert asked_for_a_sentence.is_set()
+    assert commands.active is False
+    assert saved_keys(tmp_path) == set()
+
+
+def test_silence_mid_enrolment_ends_it(tmp_path):
+    async def answer_with_silence() -> VoiceCommands:
+        _, commands, kwargs = enrolment(tmp_path)
+        robin = Robin(FakeSTT([]), SlowBrain([]), ToneTTS(), AudioServer(), VoiceAssistantEventType, Options(), **kwargs)
+        await commands.handle("learn my voice", Match(None, -1.0, None, -1.0, 2.0, False, None))
+        assert commands.active
+        robin._follow_up_pending = True
+        await robin.handle_start("", 0, None, "")
+        await robin._respond(robin.turn)  # the window closes with nobody speaking
+        return commands
+
+    assert asyncio.run(answer_with_silence()).active is False
+
+
+def test_command_turns_are_not_learned(tmp_path):
+    store = household_store(tmp_path)
+    people = household("tanner", "ryan")
+    speakers = SpeakerId(FakeEmbedder([TANNER] * 3), store)
+    commands = VoiceCommands(people, store, speakers.thresholds)
+    texts = ["learn my voice", "Tanner", "no"]
+    egg, _ = asyncio.run(converse([speech(4.0) for _ in texts], FakeSTT(texts), SlowBrain([]), ToneTTS(),
+                                  speakers=speakers, people=people, commands=commands))
+    assert egg.runs[-1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == KEEP_IT
+    assert json.loads((tmp_path / "voiceprints.json").read_text())["people"]["tanner"]["pool"] == []
+
+
+def test_a_mumble_mid_enrolment_asks_for_the_sentence_again(tmp_path):
+    _, commands, kwargs = enrolment(tmp_path)
+    texts = ["learn my voice", "Tanner", "", *ENROL_SENTENCES]
+    brain = SlowBrain([])
+    egg, _ = asyncio.run(converse([speech(2.0) for _ in texts], FakeSTT(texts), brain, ToneTTS(), **kwargs))
+    assert len(egg.runs) == len(texts)
+    assert egg.runs[2].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Sorry, let's try that one again. " + ENROL_SENTENCES[0]
+    assert egg.runs[2].data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] == "1"
+    assert egg.runs[-1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Thanks, Tanner, I'll know your voice now."
+    assert brain.heard == []
+    assert saved_keys(tmp_path) == {"tanner"}
+
+
+def test_a_mumble_while_asking_for_the_name_counts_as_a_miss(tmp_path):
+    _, commands, kwargs = enrolment(tmp_path)
+    texts = ["learn my voice", "", "Tanner", "stop"]
+    egg, _ = asyncio.run(converse([speech(2.0) for _ in texts], FakeSTT(texts), SlowBrain([]), ToneTTS(), **kwargs))
+    assert egg.runs[1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "I only know Tanner. Who am I talking to?"
+    assert egg.runs[2].data(pb.VOICE_ASSISTANT_TTS_START)["text"].endswith(ENROL_SENTENCES[0])
+
+
+def test_voice_commands_say_speaker_recognition_is_off_when_it_is():
+    assert SPEAKER_ID_OFF == "Speaker recognition is turned off, so I can't learn or forget voices right now."
+    for command in ("learn my voice", "Robin, forget my voice."):
+        brain = SlowBrain([])
+        egg, _ = asyncio.run(converse([speech(2.0)], FakeSTT([command]), brain, ToneTTS()))
+        (run,) = egg.runs
+        assert run.data(pb.VOICE_ASSISTANT_TTS_START)["text"] == SPEAKER_ID_OFF
+        assert run.data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] == "0"
+        assert brain.heard == []
+
+
+def test_a_failure_while_learning_is_not_apologised_for(tmp_path, caplog):
+    store = household_store(tmp_path)
+
+    def broken(key, embedding, cap):
+        raise ValueError("the pool is malformed")
+
+    store.learn = broken
+    tts, brain = ToneTTS(), SlowBrain([["Noted. "]], pause=0)
+    egg, _ = asyncio.run(converse([speech(4.0)], FakeSTT(["remember this"]), brain, tts, Options(follow_up="off"),
+                                  speakers=SpeakerId(FakeEmbedder([TANNER]), store), people=household("tanner", "ryan")))
+    assert brain.users == ["tanner"]
+    assert tts.said == ["Noted."]
+    assert FAILED_TURN not in tts.said
+    assert "Could not save what was learned from this turn for tanner" in caplog.text

@@ -11,12 +11,15 @@ import asyncio
 import json
 import re
 import time
+from pathlib import Path
 
+import numpy as np
 import pytest
 from aioesphomeapi import api_pb2 as pb
 
-from robin_egg_server.__main__ import parse_args
+from robin_egg_server.__main__ import build, log_enrolment, parse_args
 from robin_egg_server.brain import QuietTurn, RobinBrain, RobinUnavailable, server_url, strip_markdown
+from robin_egg_server.speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from robin_egg_server.egg import FAILED_TURN, NO_REPLY, Options
 from test_server import FakeSTT, ToneTTS, converse, speech
 
@@ -55,6 +58,9 @@ class FakeRobinAssistant:
         self.speaker = list(speaker or [])  # one script per speaker-stream connection, then streams that hang
         self.requests: list[dict] = []
         self.speaker_connects: list[float] = []  # when each speaker-stream request arrived
+        self.users_reply: tuple[int, dict] = (200, {"users": []})
+        self.users_hang = False  # accept GET /api/users and never answer it
+        self._release = asyncio.Event()
         self._server: asyncio.base_events.Server | None = None
         self.url = ""
 
@@ -64,6 +70,7 @@ class FakeRobinAssistant:
         return self.url
 
     async def stop(self) -> None:
+        self._release.set()
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
@@ -80,8 +87,11 @@ class FakeRobinAssistant:
                 self.speaker_connects.append(time.monotonic())
                 await self._speaker(writer, self.speaker.pop(0) if self.speaker else [HANG])
                 return
-            if request_line.startswith("GET "):  # GET /api/chat/:agent, the startup check
-                status, payload = self.agent_lookup
+            if self.users_hang and request_line.startswith("GET /api/users"):
+                await self._release.wait()
+                return
+            if request_line.startswith("GET "):  # /api/users, or /api/chat/:agent for the startup check
+                status, payload = self.users_reply if request_line.startswith("GET /api/users") else self.agent_lookup
                 body = json.dumps(payload).encode()
                 writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n{self.headers}Connection: close\r\n\r\n".encode() + body)
                 await writer.drain()
@@ -142,7 +152,7 @@ async def ask(scripts, heard="what's on tomorrow", status=200, headers="", **kw)
     brain = RobinBrain(url, "robin", **kw)
     got: list[str] = []
     try:
-        async for piece in brain.reply(heard):
+        async for piece in brain.reply(heard, user="Unknown Speaker"):
             got.append(piece)
         return got, fake.requests, None
     except Exception as err:  # noqa: BLE001 - returned for the test to inspect
@@ -171,15 +181,15 @@ def test_posts_as_a_speaker_and_yields_each_reply_separately():
     assert {k: f[k] for k in ("text", "device", "wait")} == {"text": "what's on tomorrow", "device": "speaker", "wait": "1"}
     assert not {"chat", "project", "thread"} & f.keys()  # the plain web chat, shared with the phone
     assert re.fullmatch(r"[A-Za-z0-9_-]{8,64}", f["send_id"])  # the route's SEND_ID pattern
-    assert "user" not in f  # the egg cannot tell who is speaking yet
+    assert f["user"] == "Unknown Speaker"
 
 
-def test_each_turn_gets_its_own_send_id_and_an_optional_user():
+def test_each_turn_gets_its_own_send_id_and_its_own_user():
     async def two():
         fake = FakeRobinAssistant([answer("One."), answer("Two.")])
-        brain = RobinBrain(await fake.start(), "robin", user="tanner")
-        for heard in ("first", "second"):
-            async for _ in brain.reply(heard):
+        brain = RobinBrain(await fake.start(), "robin")
+        for heard, user in (("first", "tanner"), ("second", "Unknown Speaker")):
+            async for _ in brain.reply(heard, user=user):
                 pass
         await brain.close()
         await fake.stop()
@@ -188,6 +198,59 @@ def test_each_turn_gets_its_own_send_id_and_an_optional_user():
     first, second = asyncio.run(two())
     assert first["fields"]["send_id"] != second["fields"]["send_id"]
     assert first["fields"]["user"] == "tanner"
+    assert second["fields"]["user"] == "Unknown Speaker"
+
+
+def test_people_lists_users_who_see_the_agent():
+    async def fetch():
+        fake = FakeRobinAssistant([])
+        fake.users_reply = (200, {"users": [
+            {"key": "tanner", "name": "Tanner", "agents": None},
+            {"key": "ryan", "name": "Ryan", "agents": ["robin"]},
+            {"key": "guest", "name": "Guest", "agents": ["other"]},
+        ]})
+        brain = RobinBrain(await fake.start(), "robin")
+        try:
+            return await brain.people(), fake.requests
+        finally:
+            await brain.close()
+            await fake.stop()
+
+    people, reqs = asyncio.run(fetch())
+    assert people == [Person("tanner", "Tanner"), Person("ryan", "Ryan")]
+    assert reqs[0]["line"] == "GET /api/users HTTP/1.1"
+
+
+def test_people_is_unavailable_when_robin_assistant_refuses():
+    async def fetch():
+        fake = FakeRobinAssistant([])
+        fake.users_reply = (500, {})
+        brain = RobinBrain(await fake.start(), "robin")
+        try:
+            await brain.people()
+        finally:
+            await brain.close()
+            await fake.stop()
+
+    with pytest.raises(RobinUnavailable):
+        asyncio.run(fetch())
+
+
+def test_people_gives_up_on_a_robin_assistant_that_never_answers():
+    async def fetch():
+        fake = FakeRobinAssistant([])
+        fake.users_hang = True
+        brain = RobinBrain(await fake.start(), "robin", people_timeout_s=0.2)
+        start = time.monotonic()
+        try:
+            with pytest.raises(RobinUnavailable):
+                await brain.people()
+            return time.monotonic() - start
+        finally:
+            await brain.close()
+            await fake.stop()
+
+    assert asyncio.run(fetch()) < 2.0
 
 
 def test_a_quiet_turn_raises_quiet():
@@ -234,7 +297,7 @@ def test_unreachable_robin_assistant_is_an_error():
     async def scenario():
         brain = RobinBrain("http://127.0.0.1:9", "robin")  # nothing listens on the discard port
         try:
-            async for _ in brain.reply("hello"):
+            async for _ in brain.reply("hello", user="Unknown Speaker"):
                 pass
         except Exception as err:  # noqa: BLE001
             return err
@@ -362,6 +425,12 @@ def test_bookkeeping_events_are_not_spoken(name):
 # ---- the command line ----
 
 
+def test_default_speaker_name_is_refused(capsys):
+    with pytest.raises(SystemExit):
+        parse_args(["egg.local", "--server", "10.0.0.5", "--agent-name", "clara", "--default-speaker-name", "tanner"])
+    assert "Unknown Speaker" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("given, url", [
     ("192.168.1.20", "http://192.168.1.20:8273"),
     ("robin-mini.local:9000", "http://robin-mini.local:9000"),
@@ -395,3 +464,59 @@ def test_agent_name_must_be_a_robin_assistant_name(capsys):
     with pytest.raises(SystemExit):
         parse_args(["egg.local", "--server", "10.0.0.5", "--agent-name", "Wesleybot"])
     assert "Did you mean --agent-name wesleybot?" in capsys.readouterr().err
+
+
+# ---- turning speaker recognition on ----
+
+
+@pytest.fixture
+def no_whisper(monkeypatch):
+    from robin_egg_server import voices
+
+    monkeypatch.setattr(voices.WhisperSTT, "load", lambda self: None)
+
+
+def built(argv: list[str]):
+    robin, _ = build(parse_args(argv))
+    if hasattr(robin.brain, "close"):
+        asyncio.run(robin.brain.close())
+    return robin
+
+
+def test_speaker_recognition_off_loads_no_model(no_whisper, tmp_path, caplog):
+    missing = str(tmp_path / "no-such-model.onnx")
+    common = ["egg.local", "--tts", "say", "--speaker-model", missing, "--voiceprints", str(tmp_path / "v.json")]
+    with caplog.at_level("INFO"):
+        for argv in (common + ["--server", "10.0.0.5", "--agent-name", "robin"], common + ["--echo", "--speaker-recognition"]):
+            robin = built(argv)
+            assert robin.speakers is None and robin.commands is None
+    assert "Speaker recognition is off, so every voice is sent as Unknown Speaker" in caplog.text
+
+
+def test_speaker_recognition_without_the_model_exits_with_the_download_line(no_whisper, tmp_path):
+    missing = tmp_path / "no-such-model.onnx"
+    argv = ["egg.local", "--tts", "say", "--server", "10.0.0.5", "--agent-name", "robin", "--speaker-recognition", "--speaker-model", str(missing)]
+    with pytest.raises(SystemExit) as exit_info:
+        build(parse_args(argv))
+    message = str(exit_info.value)
+    assert str(missing) in message
+    assert "curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx" in message
+
+
+def test_speaker_flag_defaults():
+    args = parse_args(["egg.local", "--echo"])
+    assert args.speaker_recognition is False
+    assert args.voiceprints == str(Path("~/.robin-egg/voiceprints.json").expanduser())
+    assert args.speaker_model == str(DEFAULT_SPEAKER_MODEL)
+
+
+def test_startup_names_who_is_enrolled(tmp_path, caplog):
+    store = VoiceprintStore(tmp_path / "v.json", "m")
+    store.replace("tanner", [np.array([1.0, 0.0], dtype=np.float32)])
+    with caplog.at_level("INFO"):
+        log_enrolment([Person("tanner", "Tanner"), Person("ryan", "Ryan")], store)
+        log_enrolment([Person("ryan", "Ryan")], store)
+        log_enrolment(None, store)
+    assert "Voiceprints loaded for tanner; not enrolled: ryan" in caplog.text
+    assert "No voiceprints loaded yet; not enrolled: ryan" in caplog.text
+    assert "No people list from robin-assistant yet, so nobody is identified until it arrives" in caplog.text

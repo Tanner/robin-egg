@@ -148,7 +148,7 @@ Built 2026-11-16. Where the build differs from the plan above:
 
 Done in this repo once the robin-assistant side lands.
 
-- A `RobinBrain` in `server/robin_egg_server/brain.py`, beside `EchoBrain`, behind the same `Brain` protocol. It replaced the direct-Claude brain on 2026-11-16: Robin is the only brain, and `--echo` remains for testing the audio chain. It posts `text`, `device=speaker`, `wait=1`, and a fresh `send_id` to the plain web chat, reads the event stream, and yields each `reply`.
+- A `RobinBrain` in `server/robin_egg_server/brain.py`, beside `EchoBrain`, behind the same `Brain` protocol. It replaced the direct-Claude brain on 2026-11-16: Robin is the only brain, and `--echo` remains for testing the audio chain. It posts `text`, `device=speaker`, `wait=1`, the speaker as `user` ("Unknown Speaker" until the voice is identified), and a fresh `send_id` to the plain web chat, reads the event stream, and yields each `reply`.
 - Yield a newline after each reply. `sentences()` only splits on punctuation or newlines (`brain.py:88`), so two replies would otherwise run together.
 - Strip markdown from each reply before speaking, as a backstop to the prompt.
 - Outcomes:
@@ -156,7 +156,7 @@ Done in this repo once the robin-assistant side lands.
   - `error`: speak the apology row if there is one. With no reply, it counts as a failed turn.
   - `stopped`, a connection error, or no `end` within `--server-timeout`: a failed turn. The server says `FAILED_TURN` in its own voice, after whatever part of the reply was already spoken. The firmware has no error sound, only a one-second error LED, so the error event is sent only if that apology cannot be spoken.
 - After a timeout or a barge-in, Robin's turn keeps running and its late answer lands in the chat unheard. The next thing said may be steered into that turn. Accept this for v1 and log it. An approval card from a speaker turn has the same effect until the timeout.
-- Options: `--server` (a host or IP, `host:port` or URL; a bare host gets port 8273, a URL keeps its scheme's port) and `--agent-name`, both required unless `--echo`, then `--default-speaker-name` and `--server-timeout`. There is no brain choice: always Robin, or `--echo`.
+- Options: `--server` (a host or IP, `host:port` or URL; a bare host gets port 8273, a URL keeps its scheme's port) and `--agent-name`, both required unless `--echo`, then `--server-timeout`. There is no brain choice: always Robin, or `--echo`.
 - The server keeps no conversation history. Robin keeps its own.
 - At startup it fetches `GET /api/chat/:agent` and exits if the agent has no web chat or is disabled. If robin-assistant is unreachable it warns and starts anyway.
 

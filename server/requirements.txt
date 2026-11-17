@@ -5,3 +5,4 @@ faster-whisper>=1.1
 pytest
 piper-tts
 httpx2
+sherpa-onnx>=2.0

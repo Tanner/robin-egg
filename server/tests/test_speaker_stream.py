@@ -152,7 +152,7 @@ class SlowStartBrain:
         self.reply_text, self.pause_s = reply, pause_s
         self.started = asyncio.Event()
 
-    async def reply(self, heard: str):
+    async def reply(self, heard: str, user: str):
         self.started.set()
         await asyncio.sleep(self.pause_s)
         yield self.reply_text
