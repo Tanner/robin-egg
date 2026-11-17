@@ -49,11 +49,12 @@ Tanner's point (2026-11-15): a lone egg looks awkward and like it could roll. Ry
 
 | Item | Value | Source |
 | --- | --- | --- |
-| Board diameter | 99 to 100 mm, about 4 mm thick | CNX Software says 99 mm. Seeed's drawing has Ø100 |
+| Board diameter | 100 mm round, about 4 mm thick, with ports and side buttons sticking out past the edge | Measured on the bench 2026-11-17, matching Seeed's drawing (Ø100). The CAD allows 103 mm across the buttons |
 | Mic positions | Square with corners at ±33 mm, so 46.7 mm from centre, 90° apart | DSP geometry output. Drawing has an unlabelled 66.00 × 66.00 that matches |
 | Mounting holes, component heights, port positions | Unknown | Not in any text I could read. Measure on the bench |
 | DMA70-4 | Fs 113 Hz, Qts 0.44, Vas about 1.4 L, Sd 22.9 cm², Xmax 2 mm, 86 dB at 2.83 V | Dayton spec sheet via BRL |
-| DMA70-4 frame, cutout, depth | Unknown | Dayton's page blocked automated reads. Measure with calipers |
+| DMA70-4 frame | 70 mm square | Measured on the bench 2026-11-17. Matches the 70 × 70 envelope in `cad/check.py` |
+| DMA70-4 screw spacing, basket diameter, depth | CAD assumes M3 on a 59.5 mm square, 64 mm basket, 35.6 mm deep | Dayton's drawing. Not yet measured |
 
 ## Speaker chamber
 
