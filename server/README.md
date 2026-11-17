@@ -92,7 +92,7 @@ With `--speaker-recognition`, the server works out which household member is tal
 
 At startup the log says who is enrolled, for example `Voiceprints loaded for tanner; not enrolled: ryan`.
 
-To enrol, say the wake word, then "learn my voice". Robin asks who is talking. Answer with your name as robin-assistant knows it. Robin then reads ten short sentences, one at a time, and you repeat each one. The mic stays open for 10 seconds after each sentence. When it is done, Robin says "Thanks, Tanner, I'll know your voice now." Saying "stop" or "cancel", staying quiet, or saying the wake word ends enrolment, and nothing is saved.
+To enrol, say the wake word, then "learn my voice". Robin asks who is talking. Answer with your name as robin-assistant knows it. Robin then reads ten short sentences, one at a time, and you repeat each one. The mic stays open for 10 seconds after each sentence. If it misses a sentence, a cough or a mumble included, it asks for that one again. When it is done, Robin says "Thanks, Tanner, I'll know your voice now." Saying "stop" or "cancel", staying quiet, or saying the wake word ends enrolment, and nothing is saved.
 
 To remove your voice, say the wake word, then "forget my voice", and answer yes.
 
@@ -122,7 +122,7 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 | Option | Default | What it does |
 | --- | --- | --- |
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
-| `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. |
+| `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. Enrolling and forgetting a voice still reopen it, whatever this is set to. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
 | `--echo` | off | Repeat what was heard instead of asking Robin. Tests the audio chain with no robin-assistant. |
 | `--server` | required | robin-assistant's address: a host or IP, `host:port`, or a URL such as `https://robin.example.net`. A bare host gets port 8273; a URL keeps its scheme's port. Not needed with `--echo`. |
@@ -144,6 +144,8 @@ The fake egg follows the firmware source, but these are untested on hardware:
 
 - Streamed replies. The server sends the reply URL at the start of the run and tells the egg to start playing after the first sentence, which is how Home Assistant streams. The FLAC header says "length unknown" until the end. If replies cut out, use `--no-stream`.
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
+- Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
+- Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 
 ## Files
