@@ -40,6 +40,7 @@ _STOP = {"stop", "cancel"}
 _NAME_LEAD_INS = ("my name is", "this is", "its", "im", "i am")
 
 KEEP_IT = "Okay, I'll keep it."
+SAVE_FAILED = "Sorry, I couldn't save that. Try again in a bit."
 STOPPED = "Okay, I've stopped. Nothing was saved."
 
 
@@ -219,7 +220,11 @@ class VoiceCommands:
         if other is not None:
             LOG.info("Enrolment for %s: the sentences sound like %s, nothing saved", person.key, other.key)
             return self._end(_not_you(other, person))
-        self.store.replace(person.key, flow.kept)
+        try:
+            self.store.replace(person.key, flow.kept)
+        except OSError as err:
+            LOG.warning("Enrolment for %s: could not save the voiceprint (%s)", person.key, err)
+            return self._end(SAVE_FAILED)
         LOG.info("Enrolment for %s: saved %d sentences", person.key, len(flow.kept))
         return self._end(f"Thanks, {person.name}, I'll know your voice now.")
 
@@ -257,7 +262,11 @@ class VoiceCommands:
         if not _is_yes(heard):
             LOG.info("Forget for %s: keeping the voiceprint", flow.person.key)
             return self._end(KEEP_IT)
-        self.store.forget(flow.person.key)
+        try:
+            self.store.forget(flow.person.key)
+        except OSError as err:
+            LOG.warning("Forget for %s: could not delete the voiceprint (%s)", flow.person.key, err)
+            return self._end(SAVE_FAILED)
         LOG.info("Forget for %s: voiceprint deleted", flow.person.key)
         return self._end("Done. I've forgotten your voice.")
 

@@ -293,3 +293,35 @@ def test_reset_drops_the_flow(tmp_path):
     assert not commands.active
     assert store.prints == {}
     assert say(commands, "hello there") is None
+
+
+SAVE_FAILED = "Sorry, I couldn't save that. Try again in a bit."
+
+
+def test_a_failed_save_ends_the_enrolment(tmp_path, monkeypatch):
+    commands, store = make(tmp_path)
+    reach_sentences(commands)
+
+    def broken(key, enrolled):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "replace", broken)
+    for sentence in ENROL_SENTENCES:
+        step = say(commands, sentence, heard_as("tanner"))
+    assert (step.say, step.listen) == (SAVE_FAILED, False)
+    assert not commands.active
+    assert say(commands, "what's the weather") is None
+
+
+def test_a_failed_forget_ends_the_conversation(tmp_path, monkeypatch):
+    commands, store = make(tmp_path, enrolled=[("tanner", TANNER_VOICE)])
+
+    def broken(key):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(store, "forget", broken)
+    say(commands, "forget my voice", heard_as("tanner"))
+    step = say(commands, "yes")
+    assert (step.say, step.listen) == (SAVE_FAILED, False)
+    assert not commands.active
+    assert say(commands, "what's the weather") is None
