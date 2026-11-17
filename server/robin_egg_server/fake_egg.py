@@ -73,10 +73,13 @@ class Run:
 
 
 class FakeEgg:
-    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu") -> None:
+    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu", wake_words: list[str | None] | None = None) -> None:
+        """wake_words, when given, says how each run starts, one per utterance: a wake word
+        starts that run even if the server did not ask for a follow-up, and None means a follow-up."""
         self.utterances = list(utterances)
         self.realtime = realtime
         self.wake_word = wake_word
+        self.wake_words = list(wake_words) if wake_words is not None else None
         self.runs: list[Run] = []
         self.announcements: list[tuple[str, bytes]] = []
         self.done = asyncio.Event()
@@ -132,7 +135,8 @@ class FakeEgg:
             self.send(pb.DisconnectResponse())
         elif isinstance(msg, pb.SubscribeVoiceAssistantRequest) and msg.subscribe:
             await asyncio.sleep(0.05)
-            self._start_run(self.wake_word)
+            first = self.wake_words[0] if self.wake_words else None
+            self._start_run(first or self.wake_word)
         elif isinstance(msg, pb.VoiceAssistantResponse):
             assert msg.port == 0 and not msg.error
             asyncio.create_task(self._stream_mic())
@@ -181,7 +185,10 @@ class FakeEgg:
                 url = run.data(pb.VOICE_ASSISTANT_TTS_END).get("url")
                 if url:
                     run.final = await asyncio.to_thread(self._get, url)
-            if run.data(pb.VOICE_ASSISTANT_INTENT_END).get("continue_conversation") == "1":
+            following = self.wake_words[len(self.runs)] if self.wake_words and len(self.runs) < len(self.wake_words) else None
+            if following is not None:
+                self._start_run(following)  # someone said the wake word instead of waiting
+            elif run.data(pb.VOICE_ASSISTANT_INTENT_END).get("continue_conversation") == "1":
                 self._start_run("")  # the egg reopens its mic with no wake word
             else:
                 self.done.set()

@@ -13,12 +13,19 @@ from pathlib import Path
 
 from .brain import server_url
 from .egg import Options, Robin
+from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .web import AudioServer
 
 LOG = logging.getLogger("robin")
 
 # Robin's voice, chosen on the bench on 2026-11-16.
 DEFAULT_PIPER_VOICE = Path(__file__).resolve().parent.parent / "voices" / "en_US-ryan-medium.onnx"
+DEFAULT_VOICEPRINTS = Path("~/.robin-egg/voiceprints.json").expanduser()
+# The same line as in server/README.md, run from server/.
+SPEAKER_MODEL_DOWNLOAD = (
+    "mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx "
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx"
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -41,6 +48,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-stream", action="store_true", help="Play the reply only once it is complete (fallback if streaming misbehaves)")
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
+    p.add_argument("--speaker-recognition", action="store_true", help="Tell household members apart by voice and let them enrol by saying 'learn my voice'. Ignored with --echo")
+    p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
+    p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when /announce may speak, e.g. 8-20; 0-24 for always")
     p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
@@ -75,6 +85,10 @@ def build(args: argparse.Namespace):
 
     from .voices import PiperTTS, SayTTS, WhisperSTT
 
+    # There is no robin-assistant behind --echo to say who lives here.
+    recognise = args.speaker_recognition and not args.echo
+    if recognise and not Path(args.speaker_model).exists():
+        raise SystemExit(f"Speaker model not found at {args.speaker_model}. Download it from server/ as described in server/README.md:\n  {SPEAKER_MODEL_DOWNLOAD}")
     stt = WhisperSTT(args.whisper_model)
     stt.load()  # load now, so the first question is not slow
     if args.tts == "piper":
@@ -99,8 +113,37 @@ def build(args: argparse.Namespace):
         speaking_hours=(start, end),
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
     )
+    speakers = people = commands = None
+    if recognise:
+        from .commands import VoiceCommands
+        from .speakers import People, SherpaEmbedder, SpeakerId
+
+        embedder = SherpaEmbedder(args.speaker_model)
+        store = VoiceprintStore(Path(args.voiceprints).expanduser(), embedder.name)
+        store.load()
+        speakers = SpeakerId(embedder, store)
+        people = People(brain.people)
+        commands = VoiceCommands(people, store, speakers.thresholds)
+    else:
+        LOG.info("Speaker recognition is off, so every voice is sent as Unknown Speaker")
     web = AudioServer()
-    return Robin(stt, brain, tts, web, VoiceAssistantEventType, opts), web
+    return Robin(stt, brain, tts, web, VoiceAssistantEventType, opts, speakers=speakers, people=people, commands=commands), web
+
+
+def log_enrolment(people: list[Person] | None, store: VoiceprintStore) -> None:
+    if people is None:
+        LOG.warning("No people list from robin-assistant yet, so nobody is identified until it arrives")
+        return
+    if not people:
+        LOG.warning("robin-assistant lists nobody who can talk to this agent, so nobody can be identified or enrol")
+        return
+    enrolled = [p.key for p in people if p.key in store.prints]
+    missing = [p.key for p in people if p.key not in store.prints]
+    rest = f"not enrolled: {', '.join(missing)}" if missing else "everyone is enrolled"
+    if enrolled:
+        LOG.info("Voiceprints loaded for %s; %s", ", ".join(enrolled), rest)
+    else:
+        LOG.info("No voiceprints loaded yet; %s. Say 'learn my voice' to enrol", rest)
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -108,6 +151,8 @@ async def run(args: argparse.Namespace) -> None:
     try:
         if hasattr(robin.brain, "check"):
             await robin.brain.check()
+        if robin.people is not None and robin.speakers is not None:
+            log_enrolment(await robin.people.current(), robin.speakers.store)
         if args.demo:
             await demo(args, robin, web)
             return

@@ -25,6 +25,7 @@ from typing import Any, AsyncIterator, Protocol
 
 from .audio import MIC_RATE, EnergyVad, ReplyAudio, VadConfig
 from .brain import Brain, QuietTurn, sentences
+from .commands import VoiceCommands
 from .speakers import Match, People, SpeakerId
 from .voices import SpeechToText, TextToSpeech
 from .web import AudioServer
@@ -45,6 +46,7 @@ class Options:
     stream: bool = True  # start playback at the first sentence instead of after the whole reply
     follow_up: str = "always"  # always | questions | off
     follow_up_window_s: float = 5.0
+    enrol_window_s: float = 10.0  # people need a moment to repeat an enrolment sentence
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours
     save_audio: Path | None = None
 
@@ -76,11 +78,12 @@ class Robin:
         opts: Options | None = None,
         speakers: SpeakerId | None = None,
         people: People | None = None,
+        commands: VoiceCommands | None = None,
     ) -> None:
         self.stt, self.brain, self.tts, self.web = stt, brain, tts, web
         self.E = events  # aioesphomeapi.VoiceAssistantEventType
         self.opts = opts or Options()
-        self.speakers, self.people = speakers, people
+        self.speakers, self.people, self.commands = speakers, people, commands
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
         self.client: Any = None  # an APIClient while the egg is connected
         self.turn: Turn | None = None
@@ -108,7 +111,11 @@ class Robin:
         self._follow_up_pending = False
         if not follow_up:
             self.last_match = None  # a new conversation never inherits the last speaker
-        cfg = VadConfig(no_speech_timeout_s=self.opts.follow_up_window_s) if follow_up else VadConfig()
+            self._reset_commands()  # a wake word mid-enrolment means the person wants Robin, not the next sentence
+        cfg = VadConfig()
+        if follow_up:
+            enrolling = self.commands is not None and self.commands.active
+            cfg = VadConfig(no_speech_timeout_s=self.opts.enrol_window_s if enrolling else self.opts.follow_up_window_s)
         reply = ReplyAudio()
         url = self.web.add(reply)
         self.turn = Turn(EnergyVad(cfg), reply, url, wake_word_phrase, follow_up)
@@ -158,6 +165,7 @@ class Robin:
         # which leaves it stuck "thinking". An error ends the run from any state, and the
         # firmware shows no error LED for this code.
         self._follow_up_pending = False
+        self._reset_commands()  # the mic will not reopen, so a voice conversation cannot go on
         self.send(self.E.VOICE_ASSISTANT_ERROR, {"code": "stt-no-text-recognized", "message": "No speech was recognised"})
         self.send(self.E.VOICE_ASSISTANT_RUN_END)
 
@@ -177,6 +185,14 @@ class Robin:
                 return
             self.send(E.VOICE_ASSISTANT_STT_END, {"text": heard})
             self.send(E.VOICE_ASSISTANT_INTENT_START)
+            step = await self.commands.handle(heard, match) if self.commands is not None else None
+            if step is not None:
+                await self._speak(_once(step.say), t.reply, turn=t, t0=t0)
+                LOG.info('Robin: "%s"', step.say)
+                await self._finish_reply(t, step.say, cont=step.listen)
+                # No learning: these turns decide whose voice this is, so they must not quietly reshape a voiceprint.
+                self.last_match = match
+                return
             spoken = await self._speak(self.brain.reply(heard, user=match.user), t.reply, turn=t, t0=t0)
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
@@ -193,9 +209,14 @@ class Robin:
             self._end_without_reply()
         except Exception as err:  # noqa: BLE001 - the person in the room must hear that it failed
             LOG.exception("The turn failed")
+            self._reset_commands()  # the apology ends the conversation
             await self._apologise(t, err)
         finally:
             await t.reply.close()
+
+    def _reset_commands(self) -> None:
+        if self.commands is not None:
+            self.commands.reset()
 
     async def _transcribe(self, t: Turn) -> tuple[str, float]:
         start = time.monotonic()
@@ -374,6 +395,7 @@ class Robin:
                 self.last_match = None  # the next conversation starts fresh, whoever is in the room by then
                 if self.turn is not None and self.turn.task is not None:
                     self.turn.task.cancel()
+                self._reset_commands()  # half an enrolment must not resume with whoever speaks after a reconnect
                 with contextlib.suppress(Exception):
                     await client.disconnect()
 

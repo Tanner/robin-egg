@@ -9,13 +9,15 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from pathlib import Path
 
+import numpy as np
 import pytest
 from aioesphomeapi import api_pb2 as pb
 
-from robin_egg_server.__main__ import parse_args
+from robin_egg_server.__main__ import build, log_enrolment, parse_args
 from robin_egg_server.brain import QuietTurn, RobinBrain, RobinUnavailable, server_url, strip_markdown
-from robin_egg_server.speakers import Person
+from robin_egg_server.speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from robin_egg_server.egg import FAILED_TURN, NO_REPLY, Options
 from test_server import FakeSTT, ToneTTS, converse, speech
 
@@ -391,3 +393,59 @@ def test_agent_name_must_be_a_robin_assistant_name(capsys):
     with pytest.raises(SystemExit):
         parse_args(["egg.local", "--server", "10.0.0.5", "--agent-name", "Wesleybot"])
     assert "Did you mean --agent-name wesleybot?" in capsys.readouterr().err
+
+
+# ---- turning speaker recognition on ----
+
+
+@pytest.fixture
+def no_whisper(monkeypatch):
+    from robin_egg_server import voices
+
+    monkeypatch.setattr(voices.WhisperSTT, "load", lambda self: None)
+
+
+def built(argv: list[str]):
+    robin, _ = build(parse_args(argv))
+    if hasattr(robin.brain, "close"):
+        asyncio.run(robin.brain.close())
+    return robin
+
+
+def test_speaker_recognition_off_loads_no_model(no_whisper, tmp_path, caplog):
+    missing = str(tmp_path / "no-such-model.onnx")
+    common = ["egg.local", "--tts", "say", "--speaker-model", missing, "--voiceprints", str(tmp_path / "v.json")]
+    with caplog.at_level("INFO"):
+        for argv in (common + ["--server", "10.0.0.5", "--agent-name", "robin"], common + ["--echo", "--speaker-recognition"]):
+            robin = built(argv)
+            assert robin.speakers is None and robin.commands is None
+    assert "Speaker recognition is off, so every voice is sent as Unknown Speaker" in caplog.text
+
+
+def test_speaker_recognition_without_the_model_exits_with_the_download_line(no_whisper, tmp_path):
+    missing = tmp_path / "no-such-model.onnx"
+    argv = ["egg.local", "--tts", "say", "--server", "10.0.0.5", "--agent-name", "robin", "--speaker-recognition", "--speaker-model", str(missing)]
+    with pytest.raises(SystemExit) as exit_info:
+        build(parse_args(argv))
+    message = str(exit_info.value)
+    assert str(missing) in message
+    assert "curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx" in message
+
+
+def test_speaker_flag_defaults():
+    args = parse_args(["egg.local", "--echo"])
+    assert args.speaker_recognition is False
+    assert args.voiceprints == str(Path("~/.robin-egg/voiceprints.json").expanduser())
+    assert args.speaker_model == str(DEFAULT_SPEAKER_MODEL)
+
+
+def test_startup_names_who_is_enrolled(tmp_path, caplog):
+    store = VoiceprintStore(tmp_path / "v.json", "m")
+    store.replace("tanner", [np.array([1.0, 0.0], dtype=np.float32)])
+    with caplog.at_level("INFO"):
+        log_enrolment([Person("tanner", "Tanner"), Person("ryan", "Ryan")], store)
+        log_enrolment([Person("ryan", "Ryan")], store)
+        log_enrolment(None, store)
+    assert "Voiceprints loaded for tanner; not enrolled: ryan" in caplog.text
+    assert "No voiceprints loaded yet; not enrolled: ryan" in caplog.text
+    assert "No people list from robin-assistant yet, so nobody is identified until it arrives" in caplog.text

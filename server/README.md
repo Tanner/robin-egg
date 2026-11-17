@@ -82,6 +82,22 @@ curl -d "Time to leave for the airport." http://localhost:8765/announce
 
 That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 
+## Telling voices apart
+
+With `--speaker-recognition`, the server works out which household member is talking and sends their name to Robin with each question. Anyone it does not recognise is sent as "Unknown Speaker". It needs the speaker model downloaded as above, and the people robin-assistant lists for the agent.
+
+```sh
+.venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin --speaker-recognition
+```
+
+At startup the log says who is enrolled, for example `Voiceprints loaded for tanner; not enrolled: ryan`.
+
+To enrol, say the wake word, then "learn my voice". Robin asks who is talking. Answer with your name as robin-assistant knows it. Robin then reads ten short sentences, one at a time, and you repeat each one. The mic stays open for 10 seconds after each sentence. When it is done, Robin says "Thanks, Tanner, I'll know your voice now." Saying "stop" or "cancel", staying quiet, or saying the wake word ends enrolment, and nothing is saved.
+
+To remove your voice, say the wake word, then "forget my voice", and answer yes.
+
+Voiceprints are kept in `~/.robin-egg/voiceprints.json`. They hold no audio.
+
 ## Useful options
 
 | Option | Default | What it does |
@@ -99,6 +115,9 @@ That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 | `--say-voice` | system voice | Any name from `say -v '?'`, with `--tts say`. |
 | `--save-audio DIR` | off | Keep each mic capture as a WAV. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. |
+| `--speaker-recognition` | off | Tell household members apart by voice, and allow enrolling with "learn my voice". Ignored with `--echo`. |
+| `--voiceprints` | `~/.robin-egg/voiceprints.json` | Where the enrolled voiceprints are kept. |
+| `--speaker-model` | `models/wespeaker_en_voxceleb_resnet34_LM.onnx` | Another speaker embedding model. Changing it means everyone enrols again. |
 
 ## Not yet tried on the real egg
 
@@ -116,6 +135,8 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/audio.py` | End-of-speech detection and the streamed FLAC reply |
 | `robin_egg_server/voices.py` | Whisper, `say` and Piper |
 | `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
+| `robin_egg_server/speakers.py` | Speaker embeddings, the voiceprint store, and matching a voice to a person |
+| `robin_egg_server/commands.py` | The "learn my voice" and "forget my voice" conversations |
 | `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
