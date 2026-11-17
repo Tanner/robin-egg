@@ -125,7 +125,8 @@ def test_conversation_with_streaming_and_follow_up():
     # Two answered turns, then a follow-up where nobody spoke.
     assert len(egg.runs) == 3
     first, second, third = egg.runs
-    assert first.wake_word == "Okay Nabu" and second.wake_word == "" and third.wake_word == ""
+    # Like the firmware, the fake egg reports the last wake word on follow-ups too.
+    assert first.wake_word == second.wake_word == third.wake_word == "Okay Nabu"
     assert brain.heard == ["what's the weather like", "and tomorrow"]
     assert brain.users == ["Unknown Speaker", "Unknown Speaker"]
 
@@ -476,16 +477,40 @@ def test_enrolment_uses_the_longer_follow_up_window(tmp_path):
     assert asyncio.run(follow_up_window(start_enrolment=False)) == 5.0
 
 
-def test_wake_word_mid_enrolment_ends_it(tmp_path):
-    _, commands, kwargs = enrolment(tmp_path)
+def test_wake_word_mid_enrolment_ends_it(tmp_path, monkeypatch):
+    import robin_egg_server.egg as egg_module
+
     texts = ["learn my voice", "Tanner", ENROL_SENTENCES[0], "what time is it"]
+    _, commands, kwargs = enrolment(tmp_path)
     brain = SlowBrain([["It's noon. "]], pause=0)
     egg = FakeEgg([speech(2.0) for _ in texts], wake_words=["Okay Nabu", None, None, "Okay Nabu"])
+    handle = commands.handle
+
+    async def handle_then_wait(heard, match):
+        step = await handle(heard, match)
+        if heard == ENROL_SENTENCES[0]:
+            # The next wake word comes long after this reply, not as the egg reopening its mic.
+            monkeypatch.setattr(egg_module, "FOLLOW_UP_GRACE_S", -3600.0)
+        return step
+
+    commands.handle = handle_then_wait
     asyncio.run(converse([], FakeSTT(texts), brain, ToneTTS(), Options(follow_up="off"), egg=egg, **kwargs))
-    assert [r.wake_word for r in egg.runs] == ["Okay Nabu", "", "", "Okay Nabu"]
     assert brain.heard == ["what time is it"]
     assert commands.active is False
     assert saved_keys(tmp_path) == set()
+
+
+def test_a_follow_up_that_reports_the_wake_word_is_still_a_follow_up(tmp_path):
+    async def start(seconds_after_reply: float) -> bool:
+        robin = Robin(FakeSTT([]), SlowBrain([]), ToneTTS(), AudioServer(), VoiceAssistantEventType)
+        robin._follow_up_pending = True
+        robin._playback_until = time.monotonic() - seconds_after_reply
+        await robin.handle_start("c1", 0, None, "Okay Nabu")
+        await robin.turn.reply.close()
+        return robin.turn.follow_up
+
+    assert asyncio.run(start(0.5)) is True
+    assert asyncio.run(start(30.0)) is False
 
 
 def test_disconnect_mid_enrolment_drops_it(tmp_path):

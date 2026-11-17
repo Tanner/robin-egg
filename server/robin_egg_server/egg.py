@@ -127,7 +127,11 @@ class Robin:
                 self.turn.task.cancel()
             elif self.turn.task is None:
                 await self.turn.reply.close()  # it never got to answer
-        follow_up = self._follow_up_pending and not wake_word_phrase
+        # The firmware reports the last wake word on every run, follow-ups included, so the
+        # phrase alone cannot say whether someone just woke the egg. A follow-up starts as
+        # soon as the reply finishes playing; a wake word heard later is a new conversation.
+        reopened = time.monotonic() <= self._playback_until + FOLLOW_UP_GRACE_S
+        follow_up = self._follow_up_pending and (not wake_word_phrase or reopened)
         self._follow_up_pending = False
         if not follow_up:
             self.last_match = None  # a new conversation never inherits the last speaker

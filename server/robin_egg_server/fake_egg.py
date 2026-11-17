@@ -207,7 +207,9 @@ class FakeEgg:
             if following is not None:
                 self._start_run(following)  # someone said the wake word instead of waiting
             elif run.data(pb.VOICE_ASSISTANT_INTENT_END).get("continue_conversation") == "1":
-                self._start_run("")  # the egg reopens its mic with no wake word
+                # The firmware reopens its mic without listening for a wake word, but still
+                # reports the last one it heard, so a follow-up looks like a fresh wake word.
+                self._start_run(run.wake_word or self.wake_word)
             else:
                 self.done.set()
 
