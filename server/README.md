@@ -95,10 +95,10 @@ The egg plays the proactive chime first, then speaks, within the same speaking h
 
 ## Telling voices apart
 
-With `--speaker-recognition`, the server works out which household member is talking and sends their name to Robin with each question. Anyone it does not recognise is sent as "Unknown Speaker". It needs the speaker model downloaded as above, and the people robin-assistant lists for the agent.
+The server works out which household member is talking and sends their name to Robin with each question. Anyone it does not recognise is sent as "Unknown Speaker". It needs the speaker model downloaded as above, and the people robin-assistant lists for the agent. It is on by default; `--no-speaker-recognition` turns it off, and then every voice is "Unknown Speaker".
 
 ```sh
-.venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin --speaker-recognition
+.venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin
 ```
 
 At startup the log says who is enrolled, for example `Voiceprints loaded for tanner; not enrolled: ryan`.
@@ -149,7 +149,7 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 | `--say-voice` | system voice | Any name from `say -v '?'`, with `--tts say`. |
 | `--save-audio DIR` | off | Keep each mic capture as a WAV. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. |
-| `--speaker-recognition` | off | Tell household members apart by voice, and allow enrolling with "learn my voice". Ignored with `--echo`. |
+| `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice". Not used with `--echo`. |
 | `--voiceprints` | `~/.robin-egg/voiceprints.json` | Where the enrolled voiceprints are kept. |
 | `--speaker-model` | `models/wespeaker_en_voxceleb_resnet34_LM.onnx` | Another speaker embedding model. Changing it means everyone enrols again. |
 

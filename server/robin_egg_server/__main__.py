@@ -51,7 +51,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
     p.add_argument("--max-utterance", type=float, default=30.0, help="Longest request in seconds; listening stops here even if the speaker has not paused")
-    p.add_argument("--speaker-recognition", action="store_true", help="Tell household members apart by voice and let them enrol by saying 'learn my voice'. Ignored with --echo")
+    p.add_argument("--speaker-recognition", action=argparse.BooleanOptionalAction, default=True, help="Tell household members apart by voice and let them enrol by saying 'learn my voice' (default on; --no-speaker-recognition turns it off; not used with --echo)")
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 0-24 for always")
@@ -91,7 +91,7 @@ def build(args: argparse.Namespace):
     # There is no robin-assistant behind --echo to say who lives here.
     recognise = args.speaker_recognition and not args.echo
     if recognise and not Path(args.speaker_model).exists():
-        raise SystemExit(f"Speaker model not found at {args.speaker_model}. Download it from server/ as described in server/README.md:\n  {SPEAKER_MODEL_DOWNLOAD}")
+        raise SystemExit(f"Speaker model not found at {args.speaker_model}. Download it from server/ as described in server/README.md, or start with --no-speaker-recognition:\n  {SPEAKER_MODEL_DOWNLOAD}")
     stt = WhisperSTT(args.whisper_model)
     stt.load()  # load now, so the first question is not slow
     if args.tts == "piper":

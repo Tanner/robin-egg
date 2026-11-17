@@ -487,7 +487,7 @@ def test_speaker_recognition_off_loads_no_model(no_whisper, tmp_path, caplog):
     missing = str(tmp_path / "no-such-model.onnx")
     common = ["egg.local", "--tts", "say", "--speaker-model", missing, "--voiceprints", str(tmp_path / "v.json")]
     with caplog.at_level("INFO"):
-        for argv in (common + ["--server", "10.0.0.5", "--agent-name", "robin"], common + ["--echo", "--speaker-recognition"]):
+        for argv in (common + ["--server", "10.0.0.5", "--agent-name", "robin", "--no-speaker-recognition"], common + ["--echo"]):
             robin = built(argv)
             assert robin.speakers is None and robin.commands is None
     assert "Speaker recognition is off, so every voice is sent as Unknown Speaker" in caplog.text
@@ -495,17 +495,19 @@ def test_speaker_recognition_off_loads_no_model(no_whisper, tmp_path, caplog):
 
 def test_speaker_recognition_without_the_model_exits_with_the_download_line(no_whisper, tmp_path):
     missing = tmp_path / "no-such-model.onnx"
-    argv = ["egg.local", "--tts", "say", "--server", "10.0.0.5", "--agent-name", "robin", "--speaker-recognition", "--speaker-model", str(missing)]
+    argv = ["egg.local", "--tts", "say", "--server", "10.0.0.5", "--agent-name", "robin", "--speaker-model", str(missing)]
     with pytest.raises(SystemExit) as exit_info:
         build(parse_args(argv))
     message = str(exit_info.value)
     assert str(missing) in message
     assert "curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx" in message
+    assert "--no-speaker-recognition" in message
 
 
 def test_speaker_flag_defaults():
     args = parse_args(["egg.local", "--echo"])
-    assert args.speaker_recognition is False
+    assert args.speaker_recognition is True
+    assert parse_args(["egg.local", "--echo", "--no-speaker-recognition"]).speaker_recognition is False
     assert args.voiceprints == str(Path("~/.robin-egg/voiceprints.json").expanduser())
     assert args.speaker_model == str(DEFAULT_SPEAKER_MODEL)
 

@@ -44,7 +44,7 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | A voice the server cannot place is sent as "Unknown Speaker" | A guess could give one of us the other's calendar and memories |
 | Enrolment has light checks: the person repeats each sentence back and the voice must not match someone already enrolled | Catches a TV, a bad take or a second person, without making setup tiresome |
 | Voiceprints are retrained from turns the server is very confident about | Voices change with colds, rooms and microphones, and nobody has to re-enrol |
-| `--speaker-recognition` is off by default | Existing setups behave as before until someone turns it on |
+| Speaker recognition is on by default; `--no-speaker-recognition` turns it off. Changed 2026-11-16 | It is the point of the feature, so it should not need remembering. Off means every voice is "Unknown Speaker" |
 
 ## Dropped ideas
 
