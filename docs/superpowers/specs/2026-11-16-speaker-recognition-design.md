@@ -68,7 +68,7 @@ Tanner picked A on 2026-11-16, because it keeps enrolment where the audio alread
 - An identified person is sent as their `[users]` key.
 - A voice that is not identified is sent as `user` "Unknown Speaker" (Tanner's choice, 2026-11-16). That includes every turn while nobody is enrolled. Checked in robin-assistant (`senderFor` in `src/admin/chat-routes.ts`, `findUser` in `src/users/types.ts`): a `user` that is not a `[users]` key reads as nobody and never falls back to a person, so this is safe before robin-assistant has an "Unknown Speaker" entry.
 - `--default-speaker-name` is removed. Sending a named person for a voice that was not identified breaks the anti-goal. If the flag is given, the server stops at startup with a message saying that unidentified voices are now sent as "Unknown Speaker".
-- `--people tanner:Tanner,ryan:Ryan` lists the `[users]` keys that may enrol, each with the name Robin says and listens for. The name defaults to the key with a capital letter. (Builder's call.)
+- `--people tanner:Tanner,ryan:Ryan` lists the `[users]` keys that may enrol, each with the name Robin says and listens for. The name defaults to the key with a capital letter. (Builder's call.) Speaker recognition is on exactly when `--people` is given. Without it the model is not loaded, nobody can enrol, and every turn is "Unknown Speaker" (Tanner's call, 2026-11-16).
 
 ### Enrolment conversation
 
@@ -113,7 +113,7 @@ A small pretrained speaker-embedding model run in onnxruntime. The first candida
 
 ## Preventing regressions
 
-- With no voiceprints file, or speaker recognition switched off, turns are sent as today except that `user` is "Unknown Speaker". Existing tests in `server/tests/` must pass, with only the tests that use `--default-speaker-name` updated.
+- With no voiceprints file, or without `--people`, turns are sent as today except that `user` is "Unknown Speaker". Existing tests in `server/tests/` must pass, with only the tests that use `--default-speaker-name` updated.
 - The speaker module sits behind a small interface, so tests use fixed embeddings and run without the model or hardware.
 - The fake egg (`server/robin_egg_server/fake_egg.py`) drives an enrolment conversation end to end in tests: the trigger, the name, the sentences, a failed sentence, cancel, a voice that matches a different person, declining and accepting a replacement, and the saved file.
 - Tests check that Unknown Speaker never sends a named `user`.

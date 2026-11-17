@@ -278,18 +278,18 @@ What Robin says, word for word (from the spec, with names filled in):
 - Produces:
   - `Options.enrol_window_s: float = 10.0`
   - `Robin(..., speakers: SpeakerId | None = None, commands: VoiceCommands | None = None)`
-  - Flags: `--people` (e.g. `tanner:Tanner,ryan:Ryan`; required unless `--no-speaker-id`), `--voiceprints` (default `~/.robin-egg/voiceprints.json`), `--speaker-model` (default `DEFAULT_SPEAKER_MODEL`), `--no-speaker-id`.
+  - Flags: `--people` (e.g. `tanner:Tanner,ryan:Ryan`; optional, and speaker recognition is on only when it is given), `--voiceprints` (default `~/.robin-egg/voiceprints.json`), `--speaker-model` (default `DEFAULT_SPEAKER_MODEL`).
 
 - [ ] **Step 1: Write the failing tests**, end to end on the fake egg with `FakeSTT`, `FakeEmbedder` and a `tmp_path` store:
   - `test_enrolment_over_the_egg`: utterances are the trigger, "Tanner", then the ten sentences. Every run but the last has `continue_conversation == "1"`. The brain is never called. The store holds `tanner`. The last TTS text is "Thanks, Tanner, I'll know your voice now."
   - `test_enrolment_uses_the_longer_follow_up_window`: while `commands.active`, the follow-up turn's `VadConfig.no_speech_timeout_s == opts.enrol_window_s`.
   - `test_wake_word_mid_enrolment_ends_it`: a run started with a wake word in the middle → `commands.active is False`, nothing saved, that turn's text goes to the brain. (Review Focus 3.) Needs `FakeEgg` to accept a per-utterance wake word: add an optional `wake_words: list[str | None]` parameter, where `None` means a follow-up.
   - `test_disconnect_mid_enrolment_drops_it`: `run_forever`'s `finally` calls `commands.reset()`; assert after the egg stops that `active is False` and the store is empty. (Review Focus 4.)
-  - `test_people_required_unless_no_speaker_id(capsys)` in `test_robin_brain.py`.
+  - `test_without_people_no_model_is_loaded` in `test_robin_brain.py`: `build` on args without `--people` gives a `Robin` whose `speakers` and `commands` are `None`, and never touches `--speaker-model` (point it at a missing file).
 
 - [ ] **Step 2: Run them to see them fail.**
 
-- [ ] **Step 3: Implement.** In `_respond`, after transcribing and identifying, call `self.commands.handle(heard, match)` when commands exist. A `Step` is spoken with `_speak(_once(step.say), ...)` and `_finish_reply(t, step.say, cont=step.listen)`, and no learning happens on command turns. In `handle_start`, a wake word calls `commands.reset()`, and a follow-up while `commands.active` uses `enrol_window_s`. In `build`, construct `SherpaEmbedder`, `VoiceprintStore.load()`, `SpeakerId` and `VoiceCommands` unless `--no-speaker-id`. A missing model file exits with the README's download line, like the Piper check. Log at startup who is enrolled, e.g. `Voiceprints loaded for tanner; not enrolled: ryan`.
+- [ ] **Step 3: Implement.** In `_respond`, after transcribing and identifying, call `self.commands.handle(heard, match)` when commands exist. A `Step` is spoken with `_speak(_once(step.say), ...)` and `_finish_reply(t, step.say, cont=step.listen)`, and no learning happens on command turns. In `handle_start`, a wake word calls `commands.reset()`, and a follow-up while `commands.active` uses `enrol_window_s`. In `build`, construct `SherpaEmbedder`, `VoiceprintStore.load()`, `SpeakerId` and `VoiceCommands` only when `--people` is given; otherwise log `Speaker recognition is off: no --people given, so every voice is Unknown Speaker`. A missing model file exits with the README's download line, like the Piper check. Log at startup who is enrolled, e.g. `Voiceprints loaded for tanner; not enrolled: ryan`.
 
 - [ ] **Step 4: Run the whole suite to see it pass.**
 
