@@ -179,7 +179,9 @@ class Robin:
             t0 = time.monotonic()
             (heard, stt_s), (match, id_s) = await asyncio.gather(self._transcribe(t), self._identify(t))
             LOG.info('Heard: "%s" (STT %.2f s, speaker %.2f s)', heard, stt_s, id_s)
-            if not heard:
+            enrolling = self.commands is not None and self.commands.active
+            # A cough mid-enrolment is a missed answer to ask again, not a reason to drop the enrolment.
+            if not heard and not enrolling:
                 LOG.info("Nothing recognisable was said; closing quietly")
                 self._end_without_reply()
                 return

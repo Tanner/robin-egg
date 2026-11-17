@@ -512,3 +512,24 @@ def test_command_turns_are_not_learned(tmp_path):
                                   speakers=speakers, people=people, commands=commands))
     assert egg.runs[-1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Okay, I'll keep it."
     assert json.loads((tmp_path / "voiceprints.json").read_text())["people"]["tanner"]["pool"] == []
+
+
+def test_a_mumble_mid_enrolment_asks_for_the_sentence_again(tmp_path):
+    _, commands, kwargs = enrolment(tmp_path)
+    texts = ["learn my voice", "Tanner", "", *ENROL_SENTENCES]
+    brain = SlowBrain([])
+    egg, _ = asyncio.run(converse([speech(2.0) for _ in texts], FakeSTT(texts), brain, ToneTTS(), **kwargs))
+    assert len(egg.runs) == len(texts)
+    assert egg.runs[2].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Sorry, let's try that one again. " + ENROL_SENTENCES[0]
+    assert egg.runs[2].data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] == "1"
+    assert egg.runs[-1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Thanks, Tanner, I'll know your voice now."
+    assert brain.heard == []
+    assert saved_keys(tmp_path) == {"tanner"}
+
+
+def test_a_mumble_while_asking_for_the_name_counts_as_a_miss(tmp_path):
+    _, commands, kwargs = enrolment(tmp_path)
+    texts = ["learn my voice", "", "Tanner", "stop"]
+    egg, _ = asyncio.run(converse([speech(2.0) for _ in texts], FakeSTT(texts), SlowBrain([]), ToneTTS(), **kwargs))
+    assert egg.runs[1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "I only know Tanner. Who am I talking to?"
+    assert egg.runs[2].data(pb.VOICE_ASSISTANT_TTS_START)["text"].endswith(ENROL_SENTENCES[0])
