@@ -82,7 +82,7 @@ That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
 | `--echo` | off | Repeat what was heard instead of asking Robin. Tests the audio chain with no robin-assistant. |
-| `--server` | required | robin-assistant's address: a host or IP, `host:port`, or a URL. The port defaults to 8273. Not needed with `--echo`. |
+| `--server` | required | robin-assistant's address: a host or IP, `host:port`, or a URL such as `https://robin.example.net`. A bare host gets port 8273; a URL keeps its scheme's port. Not needed with `--echo`. |
 | `--agent-name` | required | The robin-assistant agent to ask: its folder name under `~/.robin/agents/`. Not needed with `--echo`. |
 | `--default-speaker-name` | none | The robin-assistant `[users]` key sent as the speaker when the egg cannot tell who is speaking, which for now is always. Without it no speaker is sent. |
 | `--server-timeout` | 90 s | How long to wait for Robin to finish answering before the error sound. |

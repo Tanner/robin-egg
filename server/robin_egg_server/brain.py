@@ -45,7 +45,8 @@ def server_url(server: str) -> str:
     from urllib.parse import urlsplit
 
     raw = server.strip()
-    parts = urlsplit(raw if "://" in raw else f"http://{raw}")
+    explicit = "://" in raw  # a URL keeps its scheme's own port; a bare host gets robin-assistant's
+    parts = urlsplit(raw if explicit else f"http://{raw}")
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ValueError(f"--server {server!r} is not a host, host:port or http(s) URL")
     try:
@@ -53,7 +54,17 @@ def server_url(server: str) -> str:
     except ValueError:
         raise ValueError(f"--server {server!r} has a port that is not a number") from None
     host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
-    return f"{parts.scheme}://{host}:{port or DEFAULT_ROBIN_PORT}{parts.path.rstrip('/')}"
+    if port is None and not explicit:
+        port = DEFAULT_ROBIN_PORT
+    netloc = host if port is None else f"{host}:{port}"
+    return f"{parts.scheme}://{netloc}{parts.path.rstrip('/')}"
+
+
+def _redirect_target(resp) -> str:
+    """Where a 3xx points, as the base URL to give --server, so the log can say what to use."""
+    location = resp.headers.get("location", "")
+    base = location.split("/api/chat/", 1)[0].rstrip("/")
+    return base or location or "somewhere else"
 
 
 class RobinBrain:
@@ -97,6 +108,8 @@ class RobinBrain:
                 files={k: (None, v) for k, v in fields.items()},  # the route reads multipart form data
                 headers={"Accept": "text/event-stream"},
             ) as resp:
+                if resp.is_redirect:
+                    raise RobinUnavailable(f"robin-assistant at {self.endpoint} redirects to {_redirect_target(resp)}. Start with --server {_redirect_target(resp)}")
                 if resp.status_code != 200:
                     body = (await resp.aread()).decode("utf-8", "replace")[:200]
                     raise RobinUnavailable(f"robin-assistant answered {resp.status_code}: {body}")
@@ -150,6 +163,9 @@ class RobinBrain:
             except ValueError:
                 reason = resp.text
             raise SystemExit(f"robin-assistant cannot answer as agent {self.agent!r}: {reason}. Check --agent-name.")
+        if resp.is_redirect:
+            target = _redirect_target(resp)
+            raise SystemExit(f"robin-assistant at {self.chat_url} redirects to {target}. Start with --server {target}")
         if resp.status_code != 200:
             LOG.warning("robin-assistant answered %d when checking agent %s, starting anyway", resp.status_code, self.agent)
             return

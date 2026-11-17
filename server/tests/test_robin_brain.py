@@ -34,8 +34,8 @@ def pause(seconds: float) -> tuple:
 class FakeRobinAssistant:
     """A minimal HTTP server standing in for POST /api/chat/:agent/messages with wait=1."""
 
-    def __init__(self, scripts: list[list[tuple]], status: int = 200, agent_lookup: tuple[int, dict] = (200, {})) -> None:
-        self.scripts, self.status, self.agent_lookup = list(scripts), status, agent_lookup
+    def __init__(self, scripts: list[list[tuple]], status: int = 200, agent_lookup: tuple[int, dict] = (200, {}), headers: str = "") -> None:
+        self.scripts, self.status, self.agent_lookup, self.headers = list(scripts), status, agent_lookup, headers
         self.requests: list[dict] = []
         self._server: asyncio.base_events.Server | None = None
         self.url = ""
@@ -61,11 +61,11 @@ class FakeRobinAssistant:
             if request_line.startswith("GET "):  # GET /api/chat/:agent, the startup check
                 status, payload = self.agent_lookup
                 body = json.dumps(payload).encode()
-                writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode() + body)
+                writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n{self.headers}Connection: close\r\n\r\n".encode() + body)
                 await writer.drain()
                 return
             if self.status != 200:
-                writer.write(f"HTTP/1.1 {self.status} Nope\r\nContent-Length: 13\r\nConnection: close\r\n\r\nUnknown agent".encode())
+                writer.write(f"HTTP/1.1 {self.status} Nope\r\nContent-Length: 13\r\n{self.headers}Connection: close\r\n\r\nUnknown agent".encode())
                 await writer.drain()
                 return
             writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")
@@ -88,8 +88,8 @@ class FakeRobinAssistant:
             writer.close()
 
 
-async def ask(scripts, heard="what's on tomorrow", status=200, **kw):
-    fake = FakeRobinAssistant(scripts, status)
+async def ask(scripts, heard="what's on tomorrow", status=200, headers="", **kw):
+    fake = FakeRobinAssistant(scripts, status, headers=headers)
     url = await fake.start()
     brain = RobinBrain(url, "robin", **kw)
     got: list[str] = []
@@ -222,8 +222,8 @@ def test_strip_markdown_leaves_plain_spoken_words():
     assert strip_markdown("It's 3*4 = 12, a snake_case name.") == "It's 3*4 = 12, a snake_case name."
 
 
-async def check(agent_lookup=None, url=None):
-    fake = FakeRobinAssistant([], agent_lookup=agent_lookup or (200, {}))
+async def check(agent_lookup=None, url=None, headers=""):
+    fake = FakeRobinAssistant([], agent_lookup=agent_lookup or (200, {}), headers=headers)
     brain = RobinBrain(url or await fake.start(), "robin")
     try:
         await brain.check()
@@ -244,6 +244,19 @@ def test_startup_check_looks_up_the_agent_chat():
 def test_startup_check_exits_when_the_agent_cannot_answer(status, error):
     _, err = asyncio.run(check((status, {"error": error})))
     assert isinstance(err, SystemExit) and error in str(err) and "--agent-name" in str(err)
+
+
+REDIRECT = "Location: https://robin.example.net/api/chat/robin\r\n"
+
+
+def test_startup_check_exits_on_a_redirect_and_names_the_server_to_use():
+    _, err = asyncio.run(check((308, {}), headers=REDIRECT))
+    assert isinstance(err, SystemExit) and "--server https://robin.example.net" in str(err)
+
+
+def test_a_redirected_question_says_which_server_to_use():
+    _, _, err = asyncio.run(ask([], status=308, headers="Location: https://robin.example.net/api/chat/robin/messages\r\n"))
+    assert isinstance(err, RobinUnavailable) and "--server https://robin.example.net" in str(err)
 
 
 def test_startup_check_only_warns_when_robin_assistant_is_down(caplog):
@@ -303,8 +316,10 @@ def test_bookkeeping_events_are_not_spoken(name):
 @pytest.mark.parametrize("given, url", [
     ("192.168.1.20", "http://192.168.1.20:8273"),
     ("robin-mini.local:9000", "http://robin-mini.local:9000"),
-    ("https://robin.example.net/", "https://robin.example.net:8273"),
+    ("https://robin.example.net/", "https://robin.example.net"),  # a URL keeps its scheme's port
+    ("http://robin.example.net", "http://robin.example.net"),
     ("http://127.0.0.1:8273", "http://127.0.0.1:8273"),
+    ("robin.example.net:443", "http://robin.example.net:443"),
     ("[::1]:8300", "http://[::1]:8300"),
 ])
 def test_server_accepts_a_host_host_port_or_url(given, url):
