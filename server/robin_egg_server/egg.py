@@ -21,7 +21,7 @@ import time
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, AsyncIterator, Protocol
 
 from .audio import MIC_RATE, EnergyVad, ReplyAudio, VadConfig
 from .brain import Brain, QuietTurn, sentences
@@ -32,6 +32,7 @@ LOG = logging.getLogger("robin.egg")
 
 ZERO_PSK = base64.b64encode(bytes(32)).decode()  # formatBCE: encryption on, no key set yet
 NO_REPLY = "Sorry, I didn't get an answer for that."
+FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 
 
 class EventSink(Protocol):
@@ -57,6 +58,7 @@ class Turn:
     audio: bytearray = field(default_factory=bytearray)
     started: float = field(default_factory=time.monotonic)
     listening: bool = True
+    playing: bool = False  # the egg was told to start playing the streamed reply
     task: asyncio.Task | None = None
 
 
@@ -139,7 +141,7 @@ class Robin:
     def _end_without_reply(self) -> None:
         # A bare RUN_END is ignored if it lands before the egg has finished stopping its mic,
         # which leaves it stuck "thinking". An error ends the run from any state, and the
-        # firmware plays no error sound for this code.
+        # firmware shows no error LED for this code.
         self._follow_up_pending = False
         self.send(self.E.VOICE_ASSISTANT_ERROR, {"code": "stt-no-text-recognized", "message": "No speech was recognised"})
         self.send(self.E.VOICE_ASSISTANT_RUN_END)
@@ -160,32 +162,53 @@ class Robin:
                 return
             self.send(E.VOICE_ASSISTANT_STT_END, {"text": heard})
             self.send(E.VOICE_ASSISTANT_INTENT_START)
-            spoken = await self._speak(self.brain.reply(heard), t.reply, stream=self.opts.stream, t0=t0)
+            spoken = await self._speak(self.brain.reply(heard), t.reply, turn=t, t0=t0)
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
             cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))
-            self._follow_up_pending = cont
-            self.send(E.VOICE_ASSISTANT_INTENT_END, {"continue_conversation": "1" if cont else "0"})
-            self.send(E.VOICE_ASSISTANT_TTS_START, {"text": reply_text[:480]})
-            await t.reply.close()
-            self.send(E.VOICE_ASSISTANT_TTS_END, {"url": t.url})
-            self.send(E.VOICE_ASSISTANT_RUN_END)
+            await self._finish_reply(t, reply_text, cont)
             LOG.info("Reply %.1f s long, finished %.2f s after end of speech", t.reply.seconds, time.monotonic() - t0)
         except asyncio.CancelledError:
             raise
         except QuietTurn:
             LOG.info("Robin chose to say nothing; closing quietly")
             self._end_without_reply()
-        except Exception as err:  # noqa: BLE001 - tell the egg, so it plays its error sound
+        except Exception as err:  # noqa: BLE001 - the person in the room must hear that it failed
             LOG.exception("The turn failed")
-            self._follow_up_pending = False
-            self.send(E.VOICE_ASSISTANT_ERROR, {"code": "robin-error", "message": str(err)[:200] or type(err).__name__})
-            self.send(E.VOICE_ASSISTANT_RUN_END)
+            await self._apologise(t, err)
         finally:
             await t.reply.close()
 
-    async def _speak(self, deltas: Any, reply: ReplyAudio, stream: bool, t0: float | None = None) -> list[str]:
-        """Turns streamed text into audio, one sentence at a time, while the LLM keeps writing."""
+    async def _finish_reply(self, t: Turn, reply_text: str, cont: bool) -> None:
+        E = self.E
+        self._follow_up_pending = cont
+        self.send(E.VOICE_ASSISTANT_INTENT_END, {"continue_conversation": "1" if cont else "0"})
+        self.send(E.VOICE_ASSISTANT_TTS_START, {"text": reply_text[:480]})
+        await t.reply.close()
+        self.send(E.VOICE_ASSISTANT_TTS_END, {"url": t.url})
+        self.send(E.VOICE_ASSISTANT_RUN_END)
+
+    async def _apologise(self, t: Turn, err: Exception) -> None:
+        """Says the turn failed, after whatever part of the reply was already spoken.
+
+        The firmware has no error sound, only a one-second LED, so the error event is
+        the fallback for when the voice itself is what failed.
+        """
+        try:
+            LOG.info('Telling the person in the room the turn failed: "%s"', FAILED_TURN)
+            await self._speak(_once(FAILED_TURN), t.reply, turn=t)
+            await self._finish_reply(t, FAILED_TURN, cont=False)
+        except Exception:  # noqa: BLE001 - fall back to the error event
+            LOG.exception("Could not speak the apology for the failed turn; sending the egg an error instead")
+            self._follow_up_pending = False
+            self.send(self.E.VOICE_ASSISTANT_ERROR, {"code": "robin-error", "message": str(err)[:200] or type(err).__name__})
+            self.send(self.E.VOICE_ASSISTANT_RUN_END)
+
+    async def _speak(self, deltas: Any, reply: ReplyAudio, turn: Turn | None = None, t0: float | None = None) -> list[str]:
+        """Turns streamed text into audio, one sentence at a time, while the LLM keeps writing.
+
+        With a turn and streaming on, the egg is told to start playing at the first sentence.
+        """
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         spoken: list[str] = []
 
@@ -198,7 +221,9 @@ class Robin:
                     first = False
                     if t0 is not None:
                         LOG.info("First audio ready %.2f s after end of speech", time.monotonic() - t0)
-                    if stream:
+                    # A second tts_start_streaming would make the egg fetch the stream again from the start.
+                    if turn is not None and self.opts.stream and not turn.playing:
+                        turn.playing = True
                         self.send(self.E.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
 
         worker = asyncio.create_task(voice())
@@ -238,11 +263,8 @@ class Robin:
         if not start <= time.localtime().tm_hour < end:
             return 409, f"outside speaking hours ({start}:00 to {end}:00); not spoken"
 
-        async def once() -> Any:
-            yield text
-
         reply = ReplyAudio()
-        await self._speak(once(), reply, stream=False)
+        await self._speak(_once(text), reply)
         await reply.close()
         url = self.web.add(reply)
         LOG.info('Announcing: "%s"', text)
@@ -313,3 +335,7 @@ class Robin:
                     self.turn.task.cancel()
                 with contextlib.suppress(Exception):
                     await client.disconnect()
+
+
+async def _once(text: str) -> AsyncIterator[str]:
+    yield text

@@ -18,7 +18,7 @@ LOG = logging.getLogger("robin.brain")
 
 
 class QuietTurn(Exception):
-    """The brain chose to say nothing. The turn ends silently, with no error sound."""
+    """The brain chose to say nothing. The turn ends silently, with no apology."""
 
 
 class RobinUnavailable(Exception):
@@ -139,7 +139,7 @@ class RobinBrain:
             raise RobinUnavailable(f"Could not reach robin-assistant at {self.endpoint}: {err}") from err
         LOG.info("Robin's turn ended with outcome %s after %d replies", outcome, replies)
         if replies and outcome in ("response", "quiet", "error"):
-            return  # a failed turn's apology was spoken, so no error sound on top of it
+            return  # a failed turn's apology was spoken, so no second apology on top of it
         if outcome in ("response", "quiet"):
             raise QuietTurn()
         raise RobinUnavailable(f"Robin's turn ended with outcome {outcome!r}")

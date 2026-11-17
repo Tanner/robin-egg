@@ -85,7 +85,7 @@ That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 | `--server` | required | robin-assistant's address: a host or IP, `host:port`, or a URL such as `https://robin.example.net`. A bare host gets port 8273; a URL keeps its scheme's port. Not needed with `--echo`. |
 | `--agent-name` | required | The robin-assistant agent to ask: its folder name under `~/.robin/agents/`. Not needed with `--echo`. |
 | `--default-speaker-name` | none | The robin-assistant `[users]` key sent as the speaker when the egg cannot tell who is speaking, which for now is always. Without it no speaker is sent. |
-| `--server-timeout` | 90 s | How long to wait for Robin to finish answering before the error sound. |
+| `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the turn failed. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
 | `--tts piper\|say` | `piper` | Which text-to-speech engine to use. |
 | `--piper-voice` | `voices/en_US-ryan-medium.onnx` | Another Piper voice, to audition. |
@@ -99,7 +99,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 
 - Streamed replies. The server sends the reply URL at the start of the run and tells the egg to start playing after the first sentence, which is how Home Assistant streams. The FLAC header says "length unknown" until the end. If replies cut out, use `--no-stream`.
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
-- Errors. A failed turn sends an error event, which should play the firmware's error sound.
+- Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 
 ## Files
 

@@ -24,7 +24,7 @@ from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.audio import MIC_RATE, ReplyAudio
 from robin_egg_server.brain import sentences
-from robin_egg_server.egg import Options, Robin
+from robin_egg_server.egg import FAILED_TURN, Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.web import AudioServer
 
@@ -61,6 +61,20 @@ class BrokenBrain:
     async def reply(self, heard: str):
         raise RuntimeError("no API key")
         yield ""
+
+
+class FailsAfterReplying:
+    """Says one sentence, then fails, the way a dropped robin-assistant stream does."""
+
+    async def reply(self, heard: str):
+        yield "Hello there, nice to meet you. "
+        await asyncio.sleep(0.2)
+        raise RuntimeError("the stream dropped")
+
+
+class MuteTTS:
+    def synthesize(self, text: str):
+        raise RuntimeError("the voice model is missing")
 
 
 class ToneTTS:
@@ -168,8 +182,31 @@ def test_an_empty_transcript_ends_with_the_silent_error():
     assert run.types()[-1] == pb.VOICE_ASSISTANT_RUN_END
 
 
-def test_a_failure_tells_the_egg():
-    egg, _ = asyncio.run(converse([speech()], FakeSTT(["hi"]), BrokenBrain(), ToneTTS()))
+def test_a_failure_is_spoken_as_an_apology():
+    tts = ToneTTS()
+    egg, _ = asyncio.run(converse([speech()], FakeSTT(["hi"]), BrokenBrain(), tts))
+    (run,) = egg.runs  # no follow-up after a failure
+    assert tts.said == [FAILED_TURN]
+    assert pb.VOICE_ASSISTANT_ERROR not in run.types()
+    assert run.types().count(pb.VOICE_ASSISTANT_INTENT_PROGRESS) == 1
+    assert run.data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] == "0"
+    assert run.data(pb.VOICE_ASSISTANT_TTS_START)["text"] == FAILED_TURN
+    assert run.types()[-1] == pb.VOICE_ASSISTANT_RUN_END
+    assert len(decode(run.streamed)[0]) > 0
+
+
+def test_a_failure_mid_reply_adds_the_apology_to_the_same_stream():
+    tts = ToneTTS()
+    egg, _ = asyncio.run(converse([speech()], FakeSTT(["hi"]), FailsAfterReplying(), tts, Options(follow_up="off")))
+    (run,) = egg.runs
+    assert tts.said == ["Hello there, nice to meet you.", FAILED_TURN]
+    assert run.types().count(pb.VOICE_ASSISTANT_INTENT_PROGRESS) == 1  # a second one would restart playback
+    assert pb.VOICE_ASSISTANT_ERROR not in run.types()
+    assert run.types()[-1] == pb.VOICE_ASSISTANT_RUN_END
+
+
+def test_a_failure_that_cannot_be_spoken_tells_the_egg():
+    egg, _ = asyncio.run(converse([speech()], FakeSTT(["hi"]), BrokenBrain(), MuteTTS()))
     (run,) = egg.runs
     assert run.data(pb.VOICE_ASSISTANT_ERROR) == {"code": "robin-error", "message": "no API key"}
     assert run.types()[-1] == pb.VOICE_ASSISTANT_RUN_END

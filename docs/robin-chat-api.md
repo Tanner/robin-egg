@@ -153,8 +153,8 @@ Done in this repo once the robin-assistant side lands.
 - Strip markdown from each reply before speaking, as a backstop to the prompt.
 - Outcomes:
   - `quiet`: say nothing. `_speak` currently says `NO_REPLY` for an empty turn (`egg.py:206-208`), so `RobinBrain` needs a way to end silently.
-  - `error`: speak the apology row if there is one and skip the error sound. Play the error sound only if there was no reply.
-  - `stopped`, a connection error, or no `end` within `--server-timeout`: the error sound.
+  - `error`: speak the apology row if there is one. With no reply, it counts as a failed turn.
+  - `stopped`, a connection error, or no `end` within `--server-timeout`: a failed turn. The server says `FAILED_TURN` in its own voice, after whatever part of the reply was already spoken. The firmware has no error sound, only a one-second error LED, so the error event is sent only if that apology cannot be spoken.
 - After a timeout or a barge-in, Robin's turn keeps running and its late answer lands in the chat unheard. The next thing said may be steered into that turn. Accept this for v1 and log it. An approval card from a speaker turn has the same effect until the timeout.
 - Options: `--server` (a host or IP, `host:port` or URL; a bare host gets port 8273, a URL keeps its scheme's port) and `--agent-name`, both required unless `--echo`, then `--default-speaker-name` and `--server-timeout`. There is no brain choice: always Robin, or `--echo`.
 - The server keeps no conversation history. Robin keeps its own.
