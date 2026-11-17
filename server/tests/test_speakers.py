@@ -5,6 +5,7 @@ Run from server/:  python -m pytest tests/test_speakers.py -q
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -17,6 +18,7 @@ from robin_egg_server.speakers import (
     SherpaEmbedder,
     UNKNOWN_SPEAKER,
     Match,
+    People,
     Person,
     Thresholds,
     Voiceprint,
@@ -210,3 +212,53 @@ def test_sherpa_embedder_rejects_audio_too_short_to_judge():
         embedder.embed(speech(100 / MIC_RATE))
     v = embedder.embed(speech(0.1))
     assert abs(np.linalg.norm(v) - 1) < 1e-5
+
+
+def test_people_keeps_the_last_list_when_robin_assistant_is_down(caplog):
+    first = [Person("tanner", "Tanner")]
+    calls = 0
+
+    async def flaky():
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise RuntimeError("robin-assistant is down")
+        return first
+
+    async def never():
+        raise RuntimeError("robin-assistant is down")
+
+    async def run():
+        people = People(flaky)
+        assert await people.current(force=True) == first
+        with caplog.at_level(logging.WARNING, logger="robin.speakers"):
+            assert await people.current(force=True) == first
+        assert people.keys == {"tanner"}
+        empty = People(never)
+        assert await empty.current(force=True) is None
+        assert empty.keys == set()
+
+    asyncio.run(run())
+    assert "Could not refresh the people list from robin-assistant; keeping the last one" in caplog.text
+
+
+def test_people_refetches_only_when_stale_or_forced():
+    fetched = 0
+
+    async def fetch():
+        nonlocal fetched
+        fetched += 1
+        return [Person("tanner", "Tanner")]
+
+    async def run():
+        people = People(fetch, max_age_s=300.0)
+        await people.current()
+        await people.current()
+        assert fetched == 1
+        await people.current(force=True)
+        assert fetched == 2
+        people.max_age_s = 0.0
+        await people.current()
+        assert fetched == 3
+
+    asyncio.run(run())

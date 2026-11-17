@@ -11,10 +11,11 @@ import json
 import logging
 import os
 import threading
+import time
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Protocol
+from typing import Awaitable, Callable, Protocol
 
 import numpy as np
 
@@ -87,6 +88,28 @@ def people_for_agent(body: dict, agent: str) -> list[Person]:
         if agents is None or (isinstance(agents, list) and agent in agents):
             people.append(Person(key, name))
     return people
+
+
+class People:
+    """The household members robin-assistant knows, refetched when stale so a new person is picked up."""
+
+    def __init__(self, fetch: Callable[[], Awaitable[list[Person]]], max_age_s: float = 300.0) -> None:
+        self._fetch, self.max_age_s = fetch, max_age_s
+        self._people: list[Person] | None = None
+        self._fetched_at = 0.0
+
+    @property
+    def keys(self) -> set[str]:
+        return {p.key for p in self._people or []}
+
+    async def current(self, force: bool = False) -> list[Person] | None:
+        if force or self._people is None or time.monotonic() - self._fetched_at >= self.max_age_s:
+            try:
+                self._people = await self._fetch()
+                self._fetched_at = time.monotonic()
+            except Exception as err:  # noqa: BLE001 - any failure keeps the last good list
+                LOG.warning("Could not refresh the people list from robin-assistant; keeping the last one (%s)", err)
+        return self._people
 
 
 @dataclass

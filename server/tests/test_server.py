@@ -47,10 +47,11 @@ class SlowBrain:
     """Streams its reply in pieces, with a pause, the way an LLM does."""
 
     def __init__(self, replies: list[list[str]], pause: float = 0.4) -> None:
-        self.replies, self.pause, self.heard = list(replies), pause, []
+        self.replies, self.pause, self.heard, self.users = list(replies), pause, [], []
 
-    async def reply(self, heard: str):
+    async def reply(self, heard: str, user: str):
         self.heard.append(heard)
+        self.users.append(user)
         for i, piece in enumerate(self.replies.pop(0)):
             if i:
                 await asyncio.sleep(self.pause)
@@ -58,7 +59,7 @@ class SlowBrain:
 
 
 class BrokenBrain:
-    async def reply(self, heard: str):
+    async def reply(self, heard: str, user: str):
         raise RuntimeError("no API key")
         yield ""
 
@@ -66,7 +67,7 @@ class BrokenBrain:
 class FailsAfterReplying:
     """Says one sentence, then fails, the way a dropped robin-assistant stream does."""
 
-    async def reply(self, heard: str):
+    async def reply(self, heard: str, user: str):
         yield "Hello there, nice to meet you. "
         await asyncio.sleep(0.2)
         raise RuntimeError("the stream dropped")
@@ -122,6 +123,7 @@ def test_conversation_with_streaming_and_follow_up():
     first, second, third = egg.runs
     assert first.wake_word == "Okay Nabu" and second.wake_word == "" and third.wake_word == ""
     assert brain.heard == ["what's the weather like", "and tomorrow"]
+    assert brain.users == ["Unknown Speaker", "Unknown Speaker"]
 
     assert first.types() == [
         pb.VOICE_ASSISTANT_RUN_START, pb.VOICE_ASSISTANT_STT_START, pb.VOICE_ASSISTANT_STT_VAD_START,

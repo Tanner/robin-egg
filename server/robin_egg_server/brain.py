@@ -14,6 +14,8 @@ import secrets
 import time
 from typing import AsyncIterator, Protocol
 
+from .speakers import Person, people_for_agent
+
 LOG = logging.getLogger("robin.brain")
 
 
@@ -27,13 +29,13 @@ class RobinUnavailable(Exception):
 
 
 class Brain(Protocol):
-    def reply(self, heard: str) -> AsyncIterator[str]: ...
+    def reply(self, heard: str, user: str) -> AsyncIterator[str]: ...
 
 
 class EchoBrain:
     """Repeats what it heard. Tests speech-to-text and the voice with no robin-assistant."""
 
-    async def reply(self, heard: str) -> AsyncIterator[str]:
+    async def reply(self, heard: str, user: str) -> AsyncIterator[str]:
         yield f"I heard: {heard}"
 
 
@@ -79,7 +81,6 @@ class RobinBrain:
         self,
         url: str,
         agent: str,
-        user: str | None = None,
         timeout_s: float = 90.0,
     ) -> None:
         import httpx2
@@ -87,20 +88,18 @@ class RobinBrain:
         self.agent = agent
         self.chat_url = f"{url.rstrip('/')}/api/chat/{agent}"
         self.endpoint = f"{self.chat_url}/messages"
-        self.user, self.timeout_s = user, timeout_s
+        self.url, self.timeout_s = url.rstrip("/"), timeout_s
         # No read timeout from the client: the overall deadline below covers a silent server.
         self.client = httpx2.AsyncClient(timeout=httpx2.Timeout(10.0, read=None))
 
-    async def reply(self, heard: str) -> AsyncIterator[str]:
+    async def reply(self, heard: str, user: str) -> AsyncIterator[str]:
         import httpx2
 
-        fields = {"text": heard, "device": "speaker", "wait": "1", "send_id": secrets.token_urlsafe(16)}
-        if self.user:
-            fields["user"] = self.user
+        fields = {"text": heard, "device": "speaker", "wait": "1", "user": user, "send_id": secrets.token_urlsafe(16)}
         deadline = time.monotonic() + self.timeout_s
         replies = 0
         outcome = None
-        LOG.info('Asking Robin at %s: "%s"', self.endpoint, heard)
+        LOG.info('Asking Robin at %s as %s: "%s"', self.endpoint, user, heard)
         try:
             async with self.client.stream(
                 "POST",
@@ -143,6 +142,23 @@ class RobinBrain:
         if outcome in ("response", "quiet"):
             raise QuietTurn()
         raise RobinUnavailable(f"Robin's turn ended with outcome {outcome!r}")
+
+    async def people(self) -> list[Person]:
+        """The household members who can talk to this agent, from robin-assistant's user list."""
+        import httpx2
+
+        url = f"{self.url}/api/users"
+        try:
+            resp = await self.client.get(url)
+        except httpx2.HTTPError as err:
+            raise RobinUnavailable(f"Could not reach robin-assistant at {url}: {err}") from err
+        if resp.status_code != 200:
+            raise RobinUnavailable(f"robin-assistant answered {resp.status_code} for {url}")
+        try:
+            body = resp.json()
+        except ValueError:
+            raise RobinUnavailable(f"robin-assistant at {url} did not answer with JSON") from None
+        return people_for_agent(body, self.agent)
 
     async def check(self) -> None:
         """Fail at startup, not on the first question, when the agent cannot answer.

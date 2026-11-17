@@ -25,6 +25,7 @@ from typing import Any, AsyncIterator, Protocol
 
 from .audio import MIC_RATE, EnergyVad, ReplyAudio, VadConfig
 from .brain import Brain, QuietTurn, sentences
+from .speakers import UNKNOWN_SPEAKER
 from .voices import SpeechToText, TextToSpeech
 from .web import AudioServer
 
@@ -162,7 +163,7 @@ class Robin:
                 return
             self.send(E.VOICE_ASSISTANT_STT_END, {"text": heard})
             self.send(E.VOICE_ASSISTANT_INTENT_START)
-            spoken = await self._speak(self.brain.reply(heard), t.reply, turn=t, t0=t0)
+            spoken = await self._speak(self.brain.reply(heard, user=UNKNOWN_SPEAKER), t.reply, turn=t, t0=t0)
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
             cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))

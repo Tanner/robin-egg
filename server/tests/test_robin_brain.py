@@ -15,6 +15,7 @@ from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.__main__ import parse_args
 from robin_egg_server.brain import QuietTurn, RobinBrain, RobinUnavailable, server_url, strip_markdown
+from robin_egg_server.speakers import Person
 from robin_egg_server.egg import FAILED_TURN, NO_REPLY, Options
 from test_server import FakeSTT, ToneTTS, converse, speech
 
@@ -37,6 +38,7 @@ class FakeRobinAssistant:
     def __init__(self, scripts: list[list[tuple]], status: int = 200, agent_lookup: tuple[int, dict] = (200, {}), headers: str = "") -> None:
         self.scripts, self.status, self.agent_lookup, self.headers = list(scripts), status, agent_lookup, headers
         self.requests: list[dict] = []
+        self.users_reply: tuple[int, dict] = (200, {"users": []})
         self._server: asyncio.base_events.Server | None = None
         self.url = ""
 
@@ -58,8 +60,8 @@ class FakeRobinAssistant:
             body = await reader.readexactly(int(headers.get("content-length", "0")))
             fields = dict(re.findall(r'name="([^"]+)"\r\n\r\n(.*?)\r\n--', body.decode(), re.S))
             self.requests.append({"line": request_line, "headers": headers, "fields": fields})
-            if request_line.startswith("GET "):  # GET /api/chat/:agent, the startup check
-                status, payload = self.agent_lookup
+            if request_line.startswith("GET "):  # /api/users, or /api/chat/:agent for the startup check
+                status, payload = self.users_reply if request_line.startswith("GET /api/users") else self.agent_lookup
                 body = json.dumps(payload).encode()
                 writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n{self.headers}Connection: close\r\n\r\n".encode() + body)
                 await writer.drain()
@@ -94,7 +96,7 @@ async def ask(scripts, heard="what's on tomorrow", status=200, headers="", **kw)
     brain = RobinBrain(url, "robin", **kw)
     got: list[str] = []
     try:
-        async for piece in brain.reply(heard):
+        async for piece in brain.reply(heard, user="Unknown Speaker"):
             got.append(piece)
         return got, fake.requests, None
     except Exception as err:  # noqa: BLE001 - returned for the test to inspect
@@ -123,15 +125,15 @@ def test_posts_as_a_speaker_and_yields_each_reply_separately():
     assert {k: f[k] for k in ("text", "device", "wait")} == {"text": "what's on tomorrow", "device": "speaker", "wait": "1"}
     assert not {"chat", "project", "thread"} & f.keys()  # the plain web chat, shared with the phone
     assert re.fullmatch(r"[A-Za-z0-9_-]{8,64}", f["send_id"])  # the route's SEND_ID pattern
-    assert "user" not in f  # the egg cannot tell who is speaking yet
+    assert f["user"] == "Unknown Speaker"
 
 
-def test_each_turn_gets_its_own_send_id_and_an_optional_user():
+def test_each_turn_gets_its_own_send_id_and_its_own_user():
     async def two():
         fake = FakeRobinAssistant([answer("One."), answer("Two.")])
-        brain = RobinBrain(await fake.start(), "robin", user="tanner")
-        for heard in ("first", "second"):
-            async for _ in brain.reply(heard):
+        brain = RobinBrain(await fake.start(), "robin")
+        for heard, user in (("first", "tanner"), ("second", "Unknown Speaker")):
+            async for _ in brain.reply(heard, user=user):
                 pass
         await brain.close()
         await fake.stop()
@@ -140,6 +142,42 @@ def test_each_turn_gets_its_own_send_id_and_an_optional_user():
     first, second = asyncio.run(two())
     assert first["fields"]["send_id"] != second["fields"]["send_id"]
     assert first["fields"]["user"] == "tanner"
+    assert second["fields"]["user"] == "Unknown Speaker"
+
+
+def test_people_lists_users_who_see_the_agent():
+    async def fetch():
+        fake = FakeRobinAssistant([])
+        fake.users_reply = (200, {"users": [
+            {"key": "tanner", "name": "Tanner", "agents": None},
+            {"key": "ryan", "name": "Ryan", "agents": ["robin"]},
+            {"key": "guest", "name": "Guest", "agents": ["other"]},
+        ]})
+        brain = RobinBrain(await fake.start(), "robin")
+        try:
+            return await brain.people(), fake.requests
+        finally:
+            await brain.close()
+            await fake.stop()
+
+    people, reqs = asyncio.run(fetch())
+    assert people == [Person("tanner", "Tanner"), Person("ryan", "Ryan")]
+    assert reqs[0]["line"] == "GET /api/users HTTP/1.1"
+
+
+def test_people_is_unavailable_when_robin_assistant_refuses():
+    async def fetch():
+        fake = FakeRobinAssistant([])
+        fake.users_reply = (500, {})
+        brain = RobinBrain(await fake.start(), "robin")
+        try:
+            await brain.people()
+        finally:
+            await brain.close()
+            await fake.stop()
+
+    with pytest.raises(RobinUnavailable):
+        asyncio.run(fetch())
 
 
 def test_a_quiet_turn_raises_quiet():
@@ -186,7 +224,7 @@ def test_unreachable_robin_assistant_is_an_error():
     async def scenario():
         brain = RobinBrain("http://127.0.0.1:9", "robin")  # nothing listens on the discard port
         try:
-            async for _ in brain.reply("hello"):
+            async for _ in brain.reply("hello", user="Unknown Speaker"):
                 pass
         except Exception as err:  # noqa: BLE001
             return err
@@ -312,6 +350,12 @@ def test_bookkeeping_events_are_not_spoken(name):
 
 
 # ---- the command line ----
+
+
+def test_default_speaker_name_is_refused(capsys):
+    with pytest.raises(SystemExit):
+        parse_args(["egg.local", "--server", "10.0.0.5", "--agent-name", "clara", "--default-speaker-name", "tanner"])
+    assert "Unknown Speaker" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("given, url", [
