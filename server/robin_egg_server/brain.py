@@ -37,6 +37,25 @@ class EchoBrain:
         yield f"I heard: {heard}"
 
 
+DEFAULT_ROBIN_PORT = 8273
+
+
+def server_url(server: str) -> str:
+    """Turns --server (a host or IP, host:port, or a URL) into robin-assistant's base URL."""
+    from urllib.parse import urlsplit
+
+    raw = server.strip()
+    parts = urlsplit(raw if "://" in raw else f"http://{raw}")
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError(f"--server {server!r} is not a host, host:port or http(s) URL")
+    try:
+        port = parts.port
+    except ValueError:
+        raise ValueError(f"--server {server!r} has a port that is not a number") from None
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    return f"{parts.scheme}://{host}:{port or DEFAULT_ROBIN_PORT}{parts.path.rstrip('/')}"
+
+
 class RobinBrain:
     """Asks Robin through robin-assistant's web chat API and yields each reply as it arrives.
 
@@ -47,8 +66,8 @@ class RobinBrain:
 
     def __init__(
         self,
-        url: str = "http://127.0.0.1:8273",
-        agent: str = "robin",
+        url: str,
+        agent: str,
         user: str | None = None,
         timeout_s: float = 90.0,
     ) -> None:
@@ -130,7 +149,7 @@ class RobinBrain:
                 reason = resp.json().get("error") or resp.text
             except ValueError:
                 reason = resp.text
-            raise SystemExit(f"robin-assistant cannot answer as agent {self.agent!r}: {reason}. Check --robin-agent.")
+            raise SystemExit(f"robin-assistant cannot answer as agent {self.agent!r}: {reason}. Check --agent-name.")
         if resp.status_code != 200:
             LOG.warning("robin-assistant answered %d when checking agent %s, starting anyway", resp.status_code, self.agent)
             return

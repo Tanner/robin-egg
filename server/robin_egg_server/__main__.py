@@ -10,6 +10,7 @@ import socket
 import sys
 from pathlib import Path
 
+from .brain import server_url
 from .egg import Options, Robin
 from .web import AudioServer
 
@@ -28,8 +29,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--http-port", type=int, default=8765, help="Port the egg fetches replies from, and /announce listens on")
     p.add_argument("--advertise-ip", help="This Mac's LAN IP, if auto-detection picks the wrong one")
     p.add_argument("--echo", action="store_true", help="Repeat what was heard instead of asking Robin, to test the audio chain with no robin-assistant")
-    p.add_argument("--robin-url", default="http://127.0.0.1:8273", help="robin-assistant's address (default http://127.0.0.1:8273)")
-    p.add_argument("--robin-agent", default="robin", help="robin-assistant agent to ask (default robin)")
+    p.add_argument("--server", help="robin-assistant's address: a host or IP, host:port, or a URL. The port defaults to 8273. Required unless --echo")
+    p.add_argument("--agent-name", help="The robin-assistant agent to ask, its folder name under ~/.robin/agents/. Required unless --echo")
     p.add_argument("--robin-user", help="A [users] key to send as the speaker. Left out until the egg can tell who is speaking")
     p.add_argument("--robin-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
@@ -46,6 +47,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = p.parse_args(argv)
     if not args.host and not args.demo:
         p.error("give the egg's address, or --demo AUDIO to test without hardware")
+    if not args.echo:
+        missing = [flag for flag, value in (("--server", args.server), ("--agent-name", args.agent_name)) if not value]
+        if missing:
+            p.error(f"give {' and '.join(missing)} to say which Robin to ask (or --echo to test without Robin)")
+        try:
+            args.server = server_url(args.server)
+        except ValueError as err:
+            p.error(str(err))
     return args
 
 
@@ -75,7 +84,7 @@ def build(args: argparse.Namespace):
     else:
         from .brain import RobinBrain
 
-        brain = RobinBrain(args.robin_url, args.robin_agent, user=args.robin_user, timeout_s=args.robin_timeout)
+        brain = RobinBrain(args.server, args.agent_name, user=args.robin_user, timeout_s=args.robin_timeout)
     start, end = (int(x) for x in args.speaking_hours.split("-"))
     opts = Options(
         stream=not args.no_stream,

@@ -13,7 +13,8 @@ import re
 import pytest
 from aioesphomeapi import api_pb2 as pb
 
-from robin_egg_server.brain import QuietTurn, RobinBrain, RobinUnavailable, strip_markdown
+from robin_egg_server.__main__ import parse_args
+from robin_egg_server.brain import QuietTurn, RobinBrain, RobinUnavailable, server_url, strip_markdown
 from robin_egg_server.egg import NO_REPLY, Options
 from test_server import FakeSTT, ToneTTS, converse, speech
 
@@ -242,7 +243,7 @@ def test_startup_check_looks_up_the_agent_chat():
 @pytest.mark.parametrize("status, error", [(404, 'Agent "robin" has no web chat'), (409, 'Agent "robin" is disabled')])
 def test_startup_check_exits_when_the_agent_cannot_answer(status, error):
     _, err = asyncio.run(check((status, {"error": error})))
-    assert isinstance(err, SystemExit) and error in str(err) and "--robin-agent" in str(err)
+    assert isinstance(err, SystemExit) and error in str(err) and "--agent-name" in str(err)
 
 
 def test_startup_check_only_warns_when_robin_assistant_is_down(caplog):
@@ -294,3 +295,33 @@ def test_robin_being_down_plays_the_error_sound():
 def test_bookkeeping_events_are_not_spoken(name):
     got, _, err = asyncio.run(ask([[event(name, {"id": 1}), event("reply", {"id": 2, "text": "Hi."}), event("end", {"outcome": "response"})]]))
     assert got == ["Hi.\n"] and err is None
+
+
+# ---- the command line ----
+
+
+@pytest.mark.parametrize("given, url", [
+    ("192.168.1.20", "http://192.168.1.20:8273"),
+    ("robin-mini.local:9000", "http://robin-mini.local:9000"),
+    ("https://robin.example.net/", "https://robin.example.net:8273"),
+    ("http://127.0.0.1:8273", "http://127.0.0.1:8273"),
+    ("[::1]:8300", "http://[::1]:8300"),
+])
+def test_server_accepts_a_host_host_port_or_url(given, url):
+    assert server_url(given) == url
+
+
+@pytest.mark.parametrize("bad", ["", "ftp://robin", "robin:port"])
+def test_server_rejects_what_is_not_an_address(bad):
+    with pytest.raises(ValueError):
+        server_url(bad)
+
+
+def test_server_and_agent_name_are_required_unless_echo(capsys):
+    for argv in (["egg.local"], ["egg.local", "--server", "127.0.0.1"], ["egg.local", "--agent-name", "robin"]):
+        with pytest.raises(SystemExit):
+            parse_args(argv)
+    assert "--agent-name" in capsys.readouterr().err
+    args = parse_args(["egg.local", "--server", "10.0.0.5", "--agent-name", "clara"])
+    assert (args.server, args.agent_name) == ("http://10.0.0.5:8273", "clara")
+    assert parse_args(["egg.local", "--echo"]).echo

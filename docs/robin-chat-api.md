@@ -156,7 +156,7 @@ Done in this repo once the robin-assistant side lands.
   - `error`: speak the apology row if there is one and skip the error sound. Play the error sound only if there was no reply.
   - `stopped`, a connection error, or no `end` within `--robin-timeout`: the error sound.
 - After a timeout or a barge-in, Robin's turn keeps running and its late answer lands in the chat unheard. The next thing said may be steered into that turn. Accept this for v1 and log it. An approval card from a speaker turn has the same effect until the timeout.
-- Options: `--robin-url` (default `http://127.0.0.1:8273`), `--robin-agent`, `--robin-user`, `--robin-timeout`. There is no brain choice: always Robin, or `--echo`.
+- Options: `--server` (a host or IP, `host:port` or URL, port 8273 by default) and `--agent-name`, both required unless `--echo`, then `--robin-user` and `--robin-timeout`. There is no brain choice: always Robin, or `--echo`.
 - The server keeps no conversation history. Robin keeps its own.
 - At startup it fetches `GET /api/chat/:agent` and exits if the agent has no web chat or is disabled. If robin-assistant is unreachable it warns and starts anyway.
 

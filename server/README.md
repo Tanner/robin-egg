@@ -22,7 +22,7 @@ This is the MVP, to prove egg to Mac mini end to end. It does not yet know who i
 
 robin-assistant keeps the conversation. The egg server keeps no history of its own.
 
-robin-assistant must be running on the same Mac mini, listening on `127.0.0.1:8273`, or wherever `--robin-url` points. At startup the server checks that the agent has a web chat and exits with a clear message if it does not. If robin-assistant is down it only warns and starts anyway.
+robin-assistant must be running where `--server` points, normally the same Mac mini (`--server 127.0.0.1`). At startup the server checks that the agent has a web chat and exits with a clear message if it does not. If robin-assistant is down it only warns and starts anyway.
 
 ## Setup on the Mac mini
 
@@ -50,7 +50,7 @@ Use Python 3.14 for the venv for now. faster-whisper's onnxruntime dependency ha
 ```sh
 say -o q1.aiff "Hey, what's a good name for a robin?"
 say -o q2.aiff "Why that one?"
-.venv/bin/python -m robin_egg_server --demo q1.aiff q2.aiff
+.venv/bin/python -m robin_egg_server --server 127.0.0.1 --agent-name robin --demo q1.aiff q2.aiff
 afplay demo-replies/reply-1.flac
 ```
 
@@ -61,7 +61,7 @@ The log shows what was heard, what Robin said, and the timings: speech-to-text, 
 Flash and find the egg first, as in `tools/bench-voice-test/README.md`. Then:
 
 ```sh
-.venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --logs
+.venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin --logs
 ```
 
 Say "Okay Nabu" (the stock wake word), then a question. macOS asks whether Python may accept incoming connections the first time. Allow it, because the egg downloads the reply audio from the Mac.
@@ -82,8 +82,8 @@ That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
 | `--echo` | off | Repeat what was heard instead of asking Robin. Tests the audio chain with no robin-assistant. |
-| `--robin-url` | `http://127.0.0.1:8273` | robin-assistant's address. |
-| `--robin-agent` | `robin` | The robin-assistant agent to ask. |
+| `--server` | required | robin-assistant's address: a host or IP, `host:port`, or a URL. The port defaults to 8273. Not needed with `--echo`. |
+| `--agent-name` | required | The robin-assistant agent to ask: its folder name under `~/.robin/agents/`. Not needed with `--echo`. |
 | `--robin-user` | none | A `[users]` key to send as the speaker. Left out until the egg can tell who is speaking. |
 | `--robin-timeout` | 90 s | How long to wait for Robin to finish answering before the error sound. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
