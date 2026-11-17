@@ -291,8 +291,8 @@ class SpeakerId:
         LOG.info("Learning from this turn for %s", m.key)
         try:
             self.store.learn(m.key, m.embedding, self.thresholds.pool_cap)
-        except OSError as err:
-            LOG.warning("Could not save what was learned from this turn for %s (%s)", m.key, err)
+        except Exception as err:  # noqa: BLE001 - the reply was already spoken, so learning must not turn it into an apology
+            LOG.warning("Could not save what was learned from this turn for %s, so their voiceprint is unchanged (%s)", m.key, err)
 
 
 def _describe(m: Match, ranked: list[tuple[str, float]]) -> str:

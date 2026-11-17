@@ -543,3 +543,19 @@ def test_voice_commands_say_speaker_recognition_is_off_when_it_is():
         assert run.data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Speaker recognition is turned off, so I can't learn or forget voices right now."
         assert run.data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] == "0"
         assert brain.heard == []
+
+
+def test_a_failure_while_learning_is_not_apologised_for(tmp_path, caplog):
+    store = household_store(tmp_path)
+
+    def broken(key, embedding, cap):
+        raise ValueError("the pool is malformed")
+
+    store.learn = broken
+    tts, brain = ToneTTS(), SlowBrain([["Noted. "]], pause=0)
+    egg, _ = asyncio.run(converse([speech(4.0)], FakeSTT(["remember this"]), brain, tts, Options(follow_up="off"),
+                                  speakers=SpeakerId(FakeEmbedder([TANNER]), store), people=household("tanner", "ryan")))
+    assert brain.users == ["tanner"]
+    assert tts.said == ["Noted."]
+    assert FAILED_TURN not in tts.said
+    assert "Could not save what was learned from this turn for tanner" in caplog.text
