@@ -44,7 +44,7 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 
 | Decision | Why |
 | --- | --- |
-| A voice the server cannot identify is "Unknown Person", with a limited set of skills. No "household" fallback | Unsure means unknown, not one of us |
+| A voice the server cannot identify is "Unknown Speaker", with a limited set of skills. No "household" fallback | Unsure means unknown, not one of us |
 | Keep no audio. A debug switch keeps it for 24 hours | Privacy |
 | v1 prototype has no presence sensor. mmWave and light sensor come later | Keep v1 small |
 | Add the `voice` Method to robin-assistant after build step 3 | The server works end to end first |
