@@ -54,7 +54,9 @@ Tanner's point (2026-11-15): a lone egg looks awkward and like it could roll. Ry
 | Mounting holes, component heights, port positions | Unknown | Not in any text I could read. Measure on the bench |
 | DMA70-4 | Fs 113 Hz, Qts 0.44, Vas about 1.4 L, Sd 22.9 cm², Xmax 2 mm, 86 dB at 2.83 V | Dayton spec sheet via BRL |
 | DMA70-4 frame | 70 mm square | Measured on the bench 2026-11-17. Matches the 70 × 70 envelope in `cad/check.py` |
-| DMA70-4 screw spacing, basket diameter, depth | CAD assumes M3 on a 59.5 mm square, 64 mm basket, 35.6 mm deep | Dayton's drawing. Not yet measured |
+| DMA70-4 screw holes | About 3.65 mm across, 59.35 mm centre to centre along a side (55.7 mm inner edges, 63 mm outer edges). The CAD's 59.46 mm is 0.1 mm off, well inside the screw clearance | Measured on the bench 2026-11-17 |
+| DMA70-4 basket diameter | Passes the 66 mm baffle hole | Checked on the bench 2026-11-17 |
+| DMA70-4 depth behind the mounting face | Estimated at 36 to 37 mm. The fit check models 35.6 mm, but the chamber leaves 39 mm under the chassis, so up to about 38 mm fits | Bench estimate 2026-11-17. Not yet measured exactly |
 
 ## Speaker chamber
 
