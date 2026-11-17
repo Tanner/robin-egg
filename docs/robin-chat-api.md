@@ -29,7 +29,7 @@ So "the replies to my message" cannot be "the rows of my turn". This plan define
 
 ### Not in this plan
 
-- **Robin choosing to speak unprompted.** It needs robin-assistant to know something can speak, and to fall back to a text when nobody hears it. That is what a dedicated `voice` Method would be for. Leave it until the egg is in daily use.
+- **Robin choosing to speak unprompted.** It needs robin-assistant to know something can speak, and to fall back to a text when nobody hears it. That is what a dedicated `voice` Method would be for. Leave it until the egg is in daily use. Speaking the messages Robin already writes on its own is covered by the speaker stream, below.
 - **Token streaming.** robin-assistant sends whole messages. Measure the delay first.
 - **Telling Tanner from Ryan.**
 - **Choosing a target chat.** The egg sends no `chat`, `project` or `thread`, so its messages land in the plain web chat. A later version may let the egg name a project, a thread or the main chat.
@@ -169,3 +169,13 @@ Done in this repo once the robin-assistant side lands.
 ### Complexity
 
 Small. One brain class, a silent-end path in `egg.py`, its options and the fake.
+
+## The speaker stream: Robin speaking first
+
+Added 2026-11-16. robin-assistant's design is `docs/superpowers/specs/2026-11-16-speaker-stream-design.md` in that repo.
+
+`GET /api/chat/:agent/speaker` is a `text/event-stream` of the messages Robin writes into the plain web chat on its own: reminders, scheduled tasks, held updates, routines. It sends a `: connected` comment, a `: ping` every 15 s, and one `message` event per message, `{"id": 124, "text": "...", "label": "Dentist reminder"}`, with `label` missing when the message has no task. Replies to anyone's message never come through it, so nothing the egg hears through `wait=1` is spoken twice. There is no cursor and no replay. It closes when Robin reloads. It answers 404 for an unknown agent, 409 for a disabled one and 503 with `Retry-After` while reloading.
+
+On the egg server side, `speaker_stream.py` holds it open for the server's life, apart from `RobinBrain`. It reconnects after 1 s, doubling to 30 s, honours `Retry-After`, and resets the backoff once a connection has stayed up 30 s. A stream that sends nothing for 45 s, not even a ping, counts as dropped. 404 and 409 are logged as errors, since only a config change fixes them, and retried like the rest.
+
+`Robin.proactive` in `egg.py` drops a message outside speaking hours, or queues it until the egg is idle: not listening, not thinking, past the estimated end of the last reply's playback, and not about to reopen its mic for a follow-up. Then it plays the proactive sound and the message as one announcement, with markdown stripped and sentences spoken one by one as in a reply. The wake word cancels it.

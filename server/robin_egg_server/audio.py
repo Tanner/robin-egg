@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator
 
 import numpy as np
@@ -77,6 +78,12 @@ class EnergyVad:
             elif elapsed >= self.cfg.max_utterance_s:
                 self.done, self.reason = True, "hit the length limit"
         return started_now
+
+
+def load_sound(path: str | Path) -> np.ndarray:
+    """Any file soundfile reads (wav, aiff, flac) as mono float samples at REPLY_RATE."""
+    data, rate = sf.read(str(path), dtype="float32", always_2d=True)
+    return resample(data.mean(axis=1), rate, REPLY_RATE)
 
 
 def resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:

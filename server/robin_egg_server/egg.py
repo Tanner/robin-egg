@@ -23,10 +23,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Protocol
 
-import soundfile as sf
-
-from .audio import MIC_RATE, EnergyVad, ReplyAudio, VadConfig
-from .brain import Brain, QuietTurn, sentences
+from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_sound
+from .brain import Brain, QuietTurn, sentences, strip_markdown
+from .speaker_stream import SpeakerMessage
 from .voices import SpeechToText, TextToSpeech
 from .web import AudioServer
 
@@ -36,6 +35,8 @@ ZERO_PSK = base64.b64encode(bytes(32)).decode()  # formatBCE: encryption on, no 
 PROACTIVE_CHIME = Path(__file__).parent / "sounds" / "proactive.flac"  # made by tools/egg-sounds
 NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
+# After a reply that asked for a follow-up, how long past its end to wait for the egg to reopen its mic.
+FOLLOW_UP_GRACE_S = 3.0
 
 
 class EventSink(Protocol):
@@ -48,8 +49,9 @@ class Options:
     follow_up: str = "always"  # always | questions | off
     follow_up_window_s: float = 5.0
     max_utterance_s: float = 30.0  # longest request before the mic closes mid-sentence
-    speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours
+    speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
     save_audio: Path | None = None
+    proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
 
 
 @dataclass
@@ -63,6 +65,7 @@ class Turn:
     started: float = field(default_factory=time.monotonic)
     listening: bool = True
     playing: bool = False  # the egg was told to start playing the streamed reply
+    play_started: float | None = None  # when the egg began playing it, to tell when it will be done
     task: asyncio.Task | None = None
 
 
@@ -76,7 +79,14 @@ class Robin:
         self.client: Any = None  # an APIClient while the egg is connected
         self.turn: Turn | None = None
         self._follow_up_pending = False
-        self._proactive_chime = sf.read(PROACTIVE_CHIME, dtype="float32")
+        self._playback_until = 0.0  # when the egg should finish playing the last reply
+        self._state = asyncio.Event()  # set whenever the egg may have become idle
+        self._speaker_lock = asyncio.Lock()  # one announcement at a time
+        self._proactive_queue: asyncio.Queue[SpeakerMessage] = asyncio.Queue()
+        self._proactive_worker: asyncio.Task | None = None
+        self._proactive_task: asyncio.Task | None = None  # the message being spoken now
+        self._proactive_stopped_by = ""  # why the message being spoken was cut short
+        self.proactive_sound = load_sound(self.opts.proactive_sound or PROACTIVE_CHIME)
         web.on_announce = self.announce
 
     # ---- events to the egg ----
@@ -91,6 +101,11 @@ class Robin:
     # ---- handlers for aioesphomeapi.subscribe_voice_assistant ----
 
     async def handle_start(self, conversation_id: str, flags: int, audio_settings: Any, wake_word_phrase: str | None) -> int | None:
+        if self._proactive_task is not None and not self._proactive_task.done():
+            LOG.info("The wake word interrupted a message Robin sent on its own; stopping it")
+            self._proactive_stopped_by = "the wake word interrupted it"
+            self._proactive_task.cancel()
+        self._state.set()
         if self.turn is not None:
             if self.turn.task is not None and not self.turn.task.done():
                 self.turn.task.cancel()
@@ -121,6 +136,7 @@ class Robin:
 
     async def handle_stop(self, abort: bool) -> None:
         t = self.turn
+        self._state.set()
         if t is None:
             return
         if abort:
@@ -185,6 +201,7 @@ class Robin:
             await self._apologise(t, err)
         finally:
             await t.reply.close()
+            self._state.set()
 
     async def _finish_reply(self, t: Turn, reply_text: str, cont: bool) -> None:
         E = self.E
@@ -193,6 +210,7 @@ class Robin:
         self.send(E.VOICE_ASSISTANT_TTS_START, {"text": reply_text[:480]})
         await t.reply.close()
         self.send(E.VOICE_ASSISTANT_TTS_END, {"url": t.url})
+        self._playback_until = (t.play_started or time.monotonic()) + t.reply.seconds
         self.send(E.VOICE_ASSISTANT_RUN_END)
 
     async def _apologise(self, t: Turn, err: Exception) -> None:
@@ -231,6 +249,7 @@ class Robin:
                     # A second tts_start_streaming would make the egg fetch the stream again from the start.
                     if turn is not None and self.opts.stream and not turn.playing:
                         turn.playing = True
+                        turn.play_started = time.monotonic()
                         self.send(self.E.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
 
         worker = asyncio.create_task(voice())
@@ -263,23 +282,123 @@ class Robin:
 
     # ---- proactive speech ----
 
+    def _in_speaking_hours(self) -> bool:
+        start, end = self.opts.speaking_hours
+        return start <= time.localtime().tm_hour < end
+
+    def _hours(self) -> str:
+        start, end = self.opts.speaking_hours
+        return f"{start}:00 to {end}:00"
+
+    async def _announcement(self, text: str, chime: bool = False) -> ReplyAudio:
+        """The whole announcement as one finished file, spoken sentence by sentence.
+
+        A chime first, so Robin speaking unprompted does not startle anyone.
+        """
+        reply = ReplyAudio()
+        if chime:
+            await reply.push(self.proactive_sound, REPLY_RATE, gap_s=0.2)
+        await self._speak(_once(text), reply)
+        await reply.close()
+        return reply
+
     async def announce(self, text: str) -> tuple[int, str]:
         if self.client is None:
             return 503, "the egg is not connected"
-        start, end = self.opts.speaking_hours
-        if not start <= time.localtime().tm_hour < end:
-            return 409, f"outside speaking hours ({start}:00 to {end}:00); not spoken"
+        if not self._in_speaking_hours():
+            return 409, f"outside speaking hours ({self._hours()}); not spoken"
 
-        reply = ReplyAudio()
-        # A chime first, so Robin speaking unprompted does not startle anyone.
-        chime, rate = self._proactive_chime
-        await reply.push(chime, rate, gap_s=0.2)
-        await self._speak(_once(text), reply)
-        await reply.close()
-        url = self.web.add(reply)
-        LOG.info('Announcing: "%s"', text)
-        result = await self.client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
+        async with self._speaker_lock:
+            reply = await self._announcement(text, chime=True)
+            url = self.web.add(reply)
+            LOG.info('Announcing: "%s"', text)
+            result = await self.client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
         return 200, f"spoken ({getattr(result, 'success', result)})"
+
+    def _busy_reason(self) -> str | None:
+        """Why Robin should not speak first right now, or None when the egg is idle."""
+        if self.client is None:
+            return "the egg is not connected"
+        t = self.turn
+        if t is not None and (t.listening or (t.task is not None and not t.task.done())):
+            return "the egg is in a conversation"
+        now = time.monotonic()
+        if now < self._playback_until:
+            return "the egg is still playing a reply"
+        if self._follow_up_pending and now < self._playback_until + FOLLOW_UP_GRACE_S:
+            return "the egg is about to listen for a follow-up"
+        if self._speaker_lock.locked():
+            return "the egg is playing an announcement"
+        return None
+
+    async def proactive(self, msg: SpeakerMessage) -> None:
+        """A message Robin sent on its own: a chime, then the message, once the egg is idle.
+
+        Outside speaking hours it is dropped, not saved for later. Messages that arrive
+        together are spoken in order, one chime each.
+        """
+        if not self._in_speaking_hours():
+            LOG.info("Dropped message %s: outside speaking hours (%s)", msg.describe(), self._hours())
+            return
+        if self._proactive_task is not None and not self._proactive_task.done():
+            busy: str | None = "another message is being spoken"
+        elif not self._proactive_queue.empty():
+            busy = "other messages are waiting"
+        else:
+            busy = self._busy_reason()
+        if busy:
+            LOG.info("Queued message %s until the egg is idle: %s", msg.describe(), busy)
+        else:
+            LOG.info("Speaking message %s now", msg.describe())
+        self._proactive_queue.put_nowait(msg)
+        if self._proactive_worker is None or self._proactive_worker.done():
+            self._proactive_worker = asyncio.create_task(self._speak_proactive_messages())
+
+    async def _until_idle(self) -> None:
+        while True:
+            self._state.clear()
+            if self._busy_reason() is None:
+                return
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._state.wait(), 0.25)  # playback ends on a clock, not an event
+
+    async def _speak_proactive_messages(self) -> None:
+        while True:
+            msg = await self._proactive_queue.get()
+            await self._until_idle()
+            if not self._in_speaking_hours():
+                LOG.info("Dropped message %s: speaking hours (%s) ended while it waited", msg.describe(), self._hours())
+                continue
+            self._proactive_stopped_by = ""
+            self._proactive_task = task = asyncio.create_task(self._say_proactive(msg))
+            await asyncio.wait({task})
+            if task.cancelled():
+                LOG.info("Stopped message %s partway: %s", msg.describe(), self._proactive_stopped_by or "the server is stopping")
+            elif task.exception() is not None:
+                LOG.error("Could not speak message %s", msg.describe(), exc_info=task.exception())
+
+    async def _say_proactive(self, msg: SpeakerMessage) -> None:
+        text = strip_markdown(msg.text)
+        if not text:
+            LOG.info("Dropped message %s: nothing to say once markdown is stripped", msg.describe())
+            return
+        async with self._speaker_lock:
+            reply = await self._announcement(text, chime=True)
+            client = self.client
+            if client is None:
+                LOG.info("Dropped message %s: the egg disconnected before it could be spoken", msg.describe())
+                return
+            url = self.web.add(reply)
+            LOG.info('Speaking message %s: "%s"', msg.describe(), text)
+            result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
+        LOG.info("Spoke message %s (%s)", msg.describe(), "finished" if getattr(result, "success", True) else "the egg reported a failure")
+
+    async def _stop_proactive(self) -> None:
+        for task in (self._proactive_task, self._proactive_worker):
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
     # ---- connection ----
 
@@ -325,6 +444,7 @@ class Robin:
 
                     client.subscribe_logs(on_log, log_level=LogLevel.LOG_LEVEL_INFO, dump_config=False)
                 self.client = client
+                self._state.set()
                 client.subscribe_voice_assistant(
                     handle_start=self.handle_start,
                     handle_stop=self.handle_stop,
@@ -341,10 +461,15 @@ class Robin:
                     LOG.warning("Lost the egg; reconnecting")
             finally:
                 self.client = None
+                self._state.set()
                 if self.turn is not None and self.turn.task is not None:
                     self.turn.task.cancel()
+                if self._proactive_task is not None and not self._proactive_task.done():
+                    self._proactive_stopped_by = "the egg disconnected"
+                    self._proactive_task.cancel()
                 with contextlib.suppress(Exception):
                     await client.disconnect()
+        await self._stop_proactive()
 
 
 async def _once(text: str) -> AsyncIterator[str]:
