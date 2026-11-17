@@ -15,6 +15,9 @@ from .web import AudioServer
 
 LOG = logging.getLogger("robin")
 
+# Robin's voice, chosen on the bench on 2026-11-16.
+DEFAULT_PIPER_VOICE = Path(__file__).resolve().parent.parent / "voices" / "en_US-ryan-medium.onnx"
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="robin_egg_server", description="Robin Egg Server (MVP): wake word to spoken reply, no Home Assistant")
@@ -28,7 +31,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--model", default="claude-opus-5-5", help="Claude model id")
     p.add_argument("--effort", default="low", choices=["low", "medium", "high"], help="Claude effort; low is fastest")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
-    p.add_argument("--piper-voice", help="Path to a Piper .onnx voice. Without it, macOS `say` is used")
+    p.add_argument("--tts", choices=["piper", "say"], default="piper", help="Text-to-speech engine: piper (Robin's voice) or macOS say")
+    p.add_argument("--piper-voice", default=str(DEFAULT_PIPER_VOICE), help="Path to a Piper .onnx voice (default: Robin's voice, Piper Ryan)")
     p.add_argument("--say-voice", help="macOS voice name for `say`, e.g. Samantha (`say -v '?'` lists them)")
     p.add_argument("--no-stream", action="store_true", help="Play the reply only once it is complete (fallback if streaming misbehaves)")
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
@@ -56,7 +60,12 @@ def build(args: argparse.Namespace):
 
     stt = WhisperSTT(args.whisper_model)
     stt.load()  # load now, so the first question is not slow
-    tts = PiperTTS(args.piper_voice) if args.piper_voice else SayTTS(args.say_voice)
+    if args.tts == "piper":
+        if not Path(args.piper_voice).exists():
+            raise SystemExit(f"Piper voice not found at {args.piper_voice}. Download it as described in server/README.md.")
+        tts = PiperTTS(args.piper_voice)
+    else:
+        tts = SayTTS(args.say_voice)
     if args.brain == "echo":
         from .brain import EchoBrain
 

@@ -4,3 +4,4 @@ soundfile
 faster-whisper>=1.1
 anthropic>=2.8
 pytest
+piper-tts

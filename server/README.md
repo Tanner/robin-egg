@@ -18,7 +18,7 @@ This is the MVP, to prove egg to Mac mini end to end. It does not yet know who i
 | --- | --- | --- |
 | Speech-to-text | faster-whisper, `base.en`, on the CPU | Local, pip install, fast enough on Apple Silicon. The model downloads on first run. |
 | Reply | Claude (`claude-opus-5-5`, low effort), streamed | One pip package and an API key. `--brain echo` repeats what it heard, for testing with no key. |
-| Text-to-speech | macOS `say` by default, or Piper | Both local. `say` needs no setup. Piper sounds better and needs one voice download. |
+| Text-to-speech | Piper with the `en_US-ryan-medium` voice, Robin's voice. macOS `say` with `--tts say` | Both local. Ryan was picked on the bench on 2026-11-16. |
 
 The server keeps one shared conversation in memory for the household. It starts fresh after 30 idle minutes or a restart.
 
@@ -28,19 +28,19 @@ Python 3.10 or newer.
 
 ```sh
 cd server
-python3 -m venv .venv
+python3.14 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m pytest -q          # offline tests against a fake egg, no keys or models needed
 export ANTHROPIC_API_KEY=sk-ant-...    # or run `ant auth login` once
 ```
 
-Optional, for the Piper voice:
+Download Robin's voice once. The server looks for it in `server/voices/`, which git ignores:
 
 ```sh
-.venv/bin/pip install piper-tts
-.venv/bin/python -m piper.download_voices en_US-lessac-medium
-# then add: --piper-voice en_US-lessac-medium.onnx
+mkdir -p voices && (cd voices && ../.venv/bin/python -m piper.download_voices en_US-ryan-medium)
 ```
+
+Use Python 3.14 for the venv for now. faster-whisper's onnxruntime dependency has no Python 3.15 build yet.
 
 ## Try it today, without the egg
 
@@ -82,7 +82,9 @@ That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
 | `--brain echo` | `claude` | Repeat what was heard. Tests the audio chain with no key. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
-| `--say-voice` | system voice | Any name from `say -v '?'`. |
+| `--tts piper\|say` | `piper` | Which text-to-speech engine to use. |
+| `--piper-voice` | `voices/en_US-ryan-medium.onnx` | Another Piper voice, to audition. |
+| `--say-voice` | system voice | Any name from `say -v '?'`, with `--tts say`. |
 | `--save-audio DIR` | off | Keep each mic capture as a WAV. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. |
 

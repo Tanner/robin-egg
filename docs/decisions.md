@@ -50,3 +50,11 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | Add the `voice` Method to robin-assistant after build step 3 | The server works end to end first |
 | robin-assistant port and `[users]` keys get set up when integration starts | Not needed before then |
 
+
+## Bench, decided 2026-11-16
+
+| Decision | Why |
+| --- | --- |
+| Robin's voice is Piper `en_US-ryan-medium`, run locally on the Mac mini | Tanner picked it from eleven candidates. Local, free and private, and the first audio was ready 0.3 s after speech ended on the bench |
+| Mac `say` voices are out | Not good enough for Robin |
+| Text-to-speech should be a pluggable choice of service, with Piper as one of them | Leaves room for hosted voices later |

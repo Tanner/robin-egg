@@ -12,3 +12,7 @@ secrets.yaml
 # wake-word recordings stay local (voices)
 wakeword/recordings/*
 !wakeword/recordings/.gitkeep
+
+# Piper voices and voice audition clips are downloads, not source
+server/voices/
+voice-auditions/
