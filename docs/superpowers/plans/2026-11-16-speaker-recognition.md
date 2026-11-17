@@ -18,6 +18,7 @@
 - `--default-speaker-name` is removed. Giving it stops the server at startup with a message saying unidentified voices are now sent as "Unknown Speaker".
 - Logs are plain sentences for a person, no emoji, e.g. `Identified the speaker as tanner (score 0.71, next best ryan at 0.32)`.
 - Run tests from `server/` with the shared venv: `/Users/tanner/Developer/robin-egg/server/.venv/bin/python -m pytest -q`. Every existing test keeps passing; only those that use `user=` on `RobinBrain` or `--default-speaker-name` change.
+- People come from robin-assistant's `GET /api/users`, filtered to those who see `--agent-name`. No `--people` flag.
 - Commit after each task on this branch.
 
 ## Review Focus
@@ -39,17 +40,18 @@
 **Interfaces:**
 - Produces:
   - `UNKNOWN_SPEAKER = "Unknown Speaker"`
-  - `@dataclass Person(key: str, name: str)`; `parse_people(spec: str) -> list[Person]` for `"tanner:Tanner,ryan"` (a missing name is the key with its first letter capitalised; raises `ValueError` on an empty key or duplicate)
+  - `@dataclass Person(key: str, name: str)`; `people_for_agent(body: dict, agent: str) -> list[Person]` turns a `GET /api/users` body into the people who see that agent (`agents` null or containing it), skipping malformed entries
   - `@dataclass Thresholds(accept=0.45, margin=0.10, reject_inherited=0.25, retrain=0.65, retrain_margin=0.25, min_judge_s=1.0, min_retrain_s=3.0, pool_cap=50)`
   - `@dataclass Voiceprint(enrolled: list[np.ndarray], pool: list[np.ndarray], enrolled_on: str)` with `centroid() -> np.ndarray` (unit length)
   - `class VoiceprintStore(path: Path, model_name: str)` with `load() -> None`, `prints: dict[str, Voiceprint]`, `replace(key: str, enrolled: list[np.ndarray]) -> None`, `learn(key: str, embedding: np.ndarray, cap: int) -> None`, `forget(key: str) -> None`. Each change saves at once.
-  - `scores(embedding: np.ndarray, store: VoiceprintStore) -> list[tuple[str, float]]` (cosine, best first)
+  - `scores(embedding: np.ndarray, store: VoiceprintStore, keys: set[str]) -> list[tuple[str, float]]` (cosine, best first, only voiceprints whose key is in `keys`)
   - `@dataclass Match(key: str | None, score: float, runner_up: str | None, runner_score: float, seconds: float, inherited: bool, embedding: np.ndarray | None)` with property `user -> str` (the key, or `UNKNOWN_SPEAKER`)
   - `decide(ranked: list[tuple[str, float]], seconds: float, t: Thresholds, previous: Match | None) -> Match`
   - `should_learn(m: Match, t: Thresholds) -> bool`
 
 - [ ] **Step 1: Write the failing tests** in `test_speakers.py`, using unit vectors built with numpy:
-  - `test_parse_people_fills_names_and_rejects_duplicates`: `parse_people("tanner:Tanner,ryan") == [Person("tanner", "Tanner"), Person("ryan", "Ryan")]`; `"tanner,tanner"` and `"tanner,:Bob"` raise `ValueError`.
+  - `test_people_for_agent_keeps_those_who_see_it`: body `{"users": [{"key": "tanner", "name": "Tanner", "agents": None}, {"key": "ryan", "name": "Ryan", "agents": ["robin"]}, {"key": "guest", "name": "Guest", "agents": ["other"]}, {"name": "no key"}]}` with agent `"robin"` → `[Person("tanner", "Tanner"), Person("ryan", "Ryan")]`.
+  - `test_scores_skip_people_not_in_the_list`: `scores(e, store, keys={"tanner"})` never returns `ryan` even if Ryan's voiceprint is the best match.
   - `test_clear_best_match_is_identified`: ranked `[("tanner", 0.7), ("ryan", 0.2)]`, 2 s → `key == "tanner"`, `user == "tanner"`.
   - `test_low_score_or_small_margin_is_unknown`: `[("tanner", 0.4), ...]` → `user == "Unknown Speaker"`; `[("tanner", 0.6), ("ryan", 0.55)]` → unknown.
   - `test_short_turn_without_previous_is_unknown`: `[("tanner", 0.9)]` at 0.6 s, no previous → unknown.
@@ -147,11 +149,14 @@ mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx http
 
 **Interfaces:**
 - Consumes: `UNKNOWN_SPEAKER` from Task 1.
-- Produces: `Brain.reply(heard: str, user: str) -> AsyncIterator[str]`. `RobinBrain(url, agent, timeout_s=90.0)` with no `user` parameter.
+- Produces: `Brain.reply(heard: str, user: str) -> AsyncIterator[str]`. `RobinBrain(url, agent, timeout_s=90.0)` with no `user` parameter. `RobinBrain.people() -> list[Person]` (async; `GET {url}/api/users` through `people_for_agent`; raises `RobinUnavailable` when unreachable or not 200).
+  - `class People(fetch: Callable[[], Awaitable[list[Person]]], max_age_s: float = 300.0)` in `speakers.py` with `async current(force: bool = False) -> list[Person] | None` (refetches when stale or forced; on failure logs `Could not refresh the people list from robin-assistant; keeping the last one` and returns the last good list, or `None` if there never was one) and `keys -> set[str]` (empty until fetched).
 
 - [ ] **Step 1: Update the tests first**
   - `test_posts_as_a_speaker_and_yields_each_reply_separately`: the brain is called with `user="Unknown Speaker"`, and `f["user"] == "Unknown Speaker"` replaces `assert "user" not in f`.
   - `test_each_turn_gets_its_own_send_id_and_an_optional_user` becomes `test_each_turn_gets_its_own_send_id_and_its_own_user`: `reply("first", user="tanner")` then `reply("second", user="Unknown Speaker")`, asserting each request's `user`.
+  - New `test_people_lists_users_who_see_the_agent`: `FakeRobinAssistant` serves `GET /api/users`; `await brain.people()` returns the filtered `Person` list. Add a `/api/users` handler to the fake.
+  - New `test_people_keeps_the_last_list_when_robin_assistant_is_down` (in `test_speakers.py`): a fetch that succeeds then raises → `current(force=True)` still returns the first list; a fetch that always raises → `None` and `keys == set()`.
   - New `test_default_speaker_name_is_refused(capsys)`: `parse_args([... "--default-speaker-name", "tanner"])` exits, and stderr contains `Unknown Speaker`.
   - Fake brains in `test_server.py` (`SlowBrain`, `BrokenBrain`, `FailsAfterReplying`) take `user` and `SlowBrain` records it in `self.users`. `test_conversation_with_streaming_and_follow_up` asserts `brain.users == ["Unknown Speaker", "Unknown Speaker"]`.
 
@@ -178,8 +183,8 @@ Expected: all pass
 **Interfaces:**
 - Consumes: Task 1's store and `decide`, Task 2's `SpeakerEmbedder`, Task 3's `Brain.reply(heard, user)`.
 - Produces:
-  - `class SpeakerId(embedder: SpeakerEmbedder, store: VoiceprintStore, thresholds: Thresholds = Thresholds())` with `identify(pcm16: bytes, seconds: float, previous: Match | None) -> Match` (logs one line per turn) and `learn(m: Match) -> None` (adds `m.embedding` to the pool when `should_learn`, logging `Learning from this turn for tanner`).
-  - `Robin(..., speakers: SpeakerId | None = None)`. `Robin.last_match: Match | None`, the previous turn's match, cleared when a turn starts with the wake word and on disconnect.
+  - `class SpeakerId(embedder: SpeakerEmbedder, store: VoiceprintStore, thresholds: Thresholds = Thresholds())` with `identify(pcm16: bytes, seconds: float, previous: Match | None, keys: set[str]) -> Match` (logs one line per turn) and `learn(m: Match) -> None` (adds `m.embedding` to the pool when `should_learn`, logging `Learning from this turn for tanner`).
+  - `Robin(..., speakers: SpeakerId | None = None, people: People | None = None)`. `Robin.last_match: Match | None`, the previous turn's match, cleared when a turn starts with the wake word and on disconnect.
 
 - [ ] **Step 1: Write the failing tests** in `test_server.py`, with a `FakeEmbedder` that returns queued vectors in order (like `FakeSTT`) and a store in `tmp_path` pre-filled with orthogonal `tanner` and `ryan` voiceprints:
   - `test_each_turn_sends_the_identified_speaker`: turns embed as Tanner then Ryan, 2 s each → `brain.users == ["tanner", "ryan"]`.
@@ -187,12 +192,13 @@ Expected: all pass
   - `test_a_failing_embedder_still_answers_as_unknown`: the embedder raises → the reply is spoken with no apology (`FAILED_TURN` not in TTS text) and `brain.users == ["Unknown Speaker"]`. (Review Focus 2.)
   - `test_a_confident_long_turn_is_learned`: one 4 s Tanner turn scoring above `retrain` → the store file's `tanner.pool` has one entry; a 2 s turn adds none.
   - `test_no_speaker_id_sends_unknown`: `speakers=None` → `["Unknown Speaker"]`.
+  - `test_someone_removed_from_users_is_not_sent`: Ryan's voiceprint matches but `people` lists only Tanner → `["Unknown Speaker"]`.
 
   Speech length for `seconds` is the VAD's: `t.vad.speech_frames * t.vad.cfg.frame_ms / 1000`.
 
 - [ ] **Step 2: Run them to see them fail.**
 
-- [ ] **Step 3: Implement.** In `_respond`, run `self.stt.transcribe` and `self.speakers.identify` together with `asyncio.gather` over `asyncio.to_thread`. If identifying raises, log `Could not identify the speaker; treating them as Unknown Speaker` with the exception and use an unknown `Match`. Pass `previous=self.last_match` only for follow-up turns (`t.follow_up`). Log the identification time next to the STT time. After a reply finishes, call `self.speakers.learn(match)` and set `self.last_match`.
+- [ ] **Step 3: Implement.** In `_respond`, run `self.stt.transcribe` and `self.speakers.identify` together with `asyncio.gather` over `asyncio.to_thread`. If identifying raises, log `Could not identify the speaker; treating them as Unknown Speaker` with the exception and use an unknown `Match`. Pass `previous=self.last_match` only for follow-up turns (`t.follow_up`), and `keys=self.people.keys` after `await self.people.current()`. Log the identification time next to the STT time. After a reply finishes, call `self.speakers.learn(match)` and set `self.last_match`.
 
 - [ ] **Step 4: Run the whole suite to see it pass.**
 
@@ -207,11 +213,11 @@ Expected: all pass
 - Test: `server/tests/test_commands.py`
 
 **Interfaces:**
-- Consumes: `Person`, `Match`, `VoiceprintStore`, `Thresholds`, `scores` from Task 1.
+- Consumes: `Person`, `Match`, `VoiceprintStore`, `Thresholds`, `scores` from Task 1; `People` from Task 3.
 - Produces:
   - `ENROL_SENTENCES: tuple[str, ...]` (below), `MIN_GOOD_SENTENCES = 8`
   - `@dataclass Step(say: str, listen: bool)`. `listen=True` means reopen the mic for the reply.
-  - `class VoiceCommands(people: list[Person], store: VoiceprintStore, thresholds: Thresholds)` with `active: bool`, `handle(heard: str, match: Match) -> Step | None` (`None` means not a command, send to Robin) and `reset() -> None` (drops any flow, saves nothing).
+  - `class VoiceCommands(people: People, store: VoiceprintStore, thresholds: Thresholds)` with `active: bool`, `async handle(heard: str, match: Match) -> Step | None` (calls `people.current(force=True)` on the trigger) (`None` means not a command, send to Robin) and `reset() -> None` (drops any flow, saves nothing).
   - Helpers: `is_command(heard: str, phrase: str) -> bool`, `same_sentence(heard: str, expected: str) -> bool`.
 
 The sentences:
@@ -232,13 +238,14 @@ What Robin says, word for word (from the spec, with names filled in):
 | Moment | Robin says |
 | --- | --- |
 | Trigger | "Sure. Who am I talking to?" |
-| Name not in `--people` | "I only know Tanner and Ryan. Who am I talking to?" (names joined from `--people`). A second miss ends with "Okay, let's try another time." |
+| Name not in the people list | "I only know Tanner and Ryan. Who am I talking to?" (names joined from the list). A second miss ends with "Okay, let's try another time." |
 | Voice confidently matches someone else (trigger turn, name turn, or the mean of the sentences before saving) | "That sounds like Ryan, not Tanner. Say 'learn my voice' to start again." |
 | Named person already enrolled | "I already know Tanner's voice. Replace it?" Anything but yes: "Okay, I'll keep it." |
 | Start of sentences | "I'll read you ten short sentences. Repeat each one after me, in your normal voice. " followed by the first sentence |
 | Sentence did not match | "Sorry, let's try that one again. " plus the sentence. A second miss skips to the next sentence |
 | Done, at least 8 good | "Thanks, Tanner, I'll know your voice now." |
 | Done, fewer than 8 | "I didn't get enough to learn your voice. Say 'learn my voice' to try again." |
+| No people list could ever be fetched | "I can't reach Robin to check who lives here. Try again in a bit." |
 | "stop" / "cancel" | "Okay, I've stopped. Nothing was saved." |
 | Forget, identified | "Forget your voice, Tanner?" Yes: "Done. I've forgotten your voice." Anything else: "Okay, I'll keep it." |
 | Forget, unknown | "I don't know whose voice this is, so there's nothing to forget." |
@@ -248,7 +255,7 @@ What Robin says, word for word (from the spec, with names filled in):
   - `test_same_sentence_allows_small_mishearings`: at least 60% of the expected words (normalised as above) appear in what was heard. "the coffee is still warm on the kitchen table" vs "the coffee's still warm on the kitchen table" → True; "what time is it" → False.
   - `test_full_enrolment_saves_ten_sentences`: trigger → name "Tanner" → ten matching replies → last step says "Thanks, Tanner, I'll know your voice now.", `listen=False`, and the store holds 10 enrolled embeddings for `tanner`.
   - `test_a_sentence_failing_twice_is_skipped` and `test_fewer_than_eight_saves_nothing`.
-  - `test_unknown_name_twice_ends`; `test_cancel_saves_nothing`.
+  - `test_unknown_name_twice_ends`; `test_cancel_saves_nothing`; `test_no_people_list_says_it_cannot_reach_robin`.
   - `test_voice_of_someone_else_is_refused`: Ryan enrolled; the name turn's match is Ryan while the name said is Tanner → the refusal line, flow ends, store unchanged.
   - `test_mean_of_sentences_matching_someone_else_is_refused_before_saving`.
   - `test_replacing_needs_a_yes`: Tanner enrolled with a pool; "no" keeps both; "yes" then ten sentences replaces enrolled and empties the pool.
@@ -278,22 +285,22 @@ What Robin says, word for word (from the spec, with names filled in):
 - Produces:
   - `Options.enrol_window_s: float = 10.0`
   - `Robin(..., speakers: SpeakerId | None = None, commands: VoiceCommands | None = None)`
-  - Flags: `--people` (e.g. `tanner:Tanner,ryan:Ryan`; optional, and speaker recognition is on only when it is given), `--voiceprints` (default `~/.robin-egg/voiceprints.json`), `--speaker-model` (default `DEFAULT_SPEAKER_MODEL`).
+  - Flags: `--speaker-recognition` (off by default; ignored with `--echo`), `--voiceprints` (default `~/.robin-egg/voiceprints.json`), `--speaker-model` (default `DEFAULT_SPEAKER_MODEL`).
 
 - [ ] **Step 1: Write the failing tests**, end to end on the fake egg with `FakeSTT`, `FakeEmbedder` and a `tmp_path` store:
   - `test_enrolment_over_the_egg`: utterances are the trigger, "Tanner", then the ten sentences. Every run but the last has `continue_conversation == "1"`. The brain is never called. The store holds `tanner`. The last TTS text is "Thanks, Tanner, I'll know your voice now."
   - `test_enrolment_uses_the_longer_follow_up_window`: while `commands.active`, the follow-up turn's `VadConfig.no_speech_timeout_s == opts.enrol_window_s`.
   - `test_wake_word_mid_enrolment_ends_it`: a run started with a wake word in the middle → `commands.active is False`, nothing saved, that turn's text goes to the brain. (Review Focus 3.) Needs `FakeEgg` to accept a per-utterance wake word: add an optional `wake_words: list[str | None]` parameter, where `None` means a follow-up.
   - `test_disconnect_mid_enrolment_drops_it`: `run_forever`'s `finally` calls `commands.reset()`; assert after the egg stops that `active is False` and the store is empty. (Review Focus 4.)
-  - `test_without_people_no_model_is_loaded` in `test_robin_brain.py`: `build` on args without `--people` gives a `Robin` whose `speakers` and `commands` are `None`, and never touches `--speaker-model` (point it at a missing file).
+  - `test_speaker_recognition_off_loads_no_model` in `test_robin_brain.py`: `build` on args without `--speaker-recognition`, and on `--echo --speaker-recognition`, gives a `Robin` whose `speakers` and `commands` are `None`, and never touches `--speaker-model` (point it at a missing file).
 
 - [ ] **Step 2: Run them to see them fail.**
 
-- [ ] **Step 3: Implement.** In `_respond`, after transcribing and identifying, call `self.commands.handle(heard, match)` when commands exist. A `Step` is spoken with `_speak(_once(step.say), ...)` and `_finish_reply(t, step.say, cont=step.listen)`, and no learning happens on command turns. In `handle_start`, a wake word calls `commands.reset()`, and a follow-up while `commands.active` uses `enrol_window_s`. In `build`, construct `SherpaEmbedder`, `VoiceprintStore.load()`, `SpeakerId` and `VoiceCommands` only when `--people` is given; otherwise log `Speaker recognition is off: no --people given, so every voice is Unknown Speaker`. A missing model file exits with the README's download line, like the Piper check. Log at startup who is enrolled, e.g. `Voiceprints loaded for tanner; not enrolled: ryan`.
+- [ ] **Step 3: Implement.** In `_respond`, after transcribing and identifying, call `self.commands.handle(heard, match)` when commands exist. A `Step` is spoken with `_speak(_once(step.say), ...)` and `_finish_reply(t, step.say, cont=step.listen)`, and no learning happens on command turns. In `handle_start`, a wake word calls `commands.reset()`, and a follow-up while `commands.active` uses `enrol_window_s`. In `build`, construct `SherpaEmbedder`, `VoiceprintStore.load()`, `SpeakerId` and `VoiceCommands` only with `--speaker-recognition` and not `--echo`; build `People(brain.people)` and fetch it once in `run` after `brain.check()`. Otherwise log `Speaker recognition is off, so every voice is sent as Unknown Speaker`. A missing model file exits with the README's download line, like the Piper check. Log at startup who is enrolled, e.g. `Voiceprints loaded for tanner; not enrolled: ryan` (names from the people list).
 
 - [ ] **Step 4: Run the whole suite to see it pass.**
 
-- [ ] **Step 5: Try it on the real egg.** Run the server against the egg with `--people`, enrol one person, ask two questions, and check that the log names them. Record the result in `docs/bench-test.md`.
+- [ ] **Step 5: Try it on the real egg.** Run the server against the egg with `--speaker-recognition`, enrol one person, ask two questions, and check that the log names them. Record the result in `docs/bench-test.md`.
 
 - [ ] **Step 6: Commit.**
 
