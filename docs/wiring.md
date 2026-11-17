@@ -67,7 +67,7 @@ All of these are dashed on the diagram. Sensors share the existing I2C bus where
 | --- | --- | --- | --- | --- | --- | --- |
 | U6 | VEML7700 light | 3V3 | I2C 0x10 | GPIO5 / GPIO6 via J4 | Apex window, z≈146, in a short tube so the ring does not light it | Lives in the removable crown, so use a 4-pin JST-SH (Qwiic) plug on a ~12 cm lead. Read it with the LEDs off |
 | U7 | SHT4x temperature and humidity | 3V3 | I2C 0x44 | GPIO5 / GPIO6 via J4 | Low in the foot, z≈17 | ~15 cm lead through the sealed divider grommet, next to the speaker pair. Keep I2C at 100 kHz over that run |
-| U8 | LD2410C mmWave presence | 5 V from the XIAO 5V pad | UART 256000 baud, 3.3 V logic, plus a presence OUT pin | ESP32 TX **GPIO1 (D0)** → sensor RX. Sensor TX → **GPIO2 (D1)**. Sensor OUT → **GPIO4 (D3)** | Front wall of the electronics bay, z≈85, facing the room, away from the XIAO antenna | **G4**. Draws about 80 mA |
+| U8 | LD2410C mmWave presence | 5 V from the XIAO 5V pad | UART 256000 baud, 3.3 V logic, plus a presence OUT pin | ESP32 TX **GPIO1 (D0)** → sensor RX. Sensor TX → **GPIO2 (D1)**. Sensor OUT → **GPIO4 (D3)** | Front wall of the electronics bay, z≈85, facing the room, away from the XIAO antenna | **G4**. Draws about 80 mA. **The board breaks out D0, D2, D3 and GND only, with no D1 pad (seen 2026-11-16), so these pins need revising** |
 | SW2 | External momentary mute button | none | Wired across SW1's two pads | none | Anywhere on the shell | **G7**. Only if pressing SW1 through the shell does not work. A slide switch cannot go here, because the DSP toggles mute on each press |
 | | Spare | | | GPIO3 (D2) | | Left free. It is an ESP32-S3 strapping pin, so it was not used for the presence OUT line |
 

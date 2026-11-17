@@ -66,17 +66,24 @@ If there is no audio, the formatBCE README says to check the codec appears at 0x
 - Whether the mics hear the wake word while the speaker is talking. This is the echo cancellation check that community reports disagree on.
 - Loudness. Is the DMA70-4 loud enough bare, held against a box or tube as a rough baffle?
 
+## Notes from the first bring-up
+
+- The web installer may finish before the device can take Wi-Fi, because the first boot is busy reflashing the XMOS chip and the LEDs stay dark while it does. Reconnect in the installer afterwards and use its Wi-Fi option.
+- The spare XIAO pads broken out are D0, D2, D3 and GND. There is no D1 pad.
+- A silkscreen label "BTN A" sits just above the SPK socket.
+- The Robin Egg Server worked end to end in echo mode with Piper Ryan, with first audio 0.3 s after speech ended.
+
 ## Results
 
 | Check | Result | Date |
 | --- | --- | --- |
-| Speaker socket pitch | | |
-| Polarity marking and pigtail match | | |
-| XIAO port powers whole board | | |
-| Shipped XMOS firmware | | |
-| Sound out | | |
-| Mics working | | |
-| DSP Status after ESPHome install | | |
+| Speaker socket pitch | JST-PH pigtail fits SPK (silkscreen "SPK", XIAO side, left edge by BUT) | 2026-11-16 |
+| Polarity marking and pigtail match | No +/- marking at SPK. Red soldered to the speaker's + tab | 2026-11-16 |
+| XIAO port powers whole board | Yes. LED ring and amp run from the XIAO port alone | 2026-11-16 |
+| Shipped XMOS firmware | I2S. Nothing enumerates on the XMOS port | 2026-11-16 |
+| Sound out | Yes, through the formatBCE firmware. Quiet bare at 50% volume, loud at 85%. Hand-held leads gave no sound, soldered leads did | 2026-11-16 |
+| Mics working | Yes. "Okay Nabu" at ~1 m, capture peak -6 dBFS, Whisper transcribed it exactly | 2026-11-16 |
+| DSP Status after ESPHome install | OK. XMOS reflashed to 1.0.9 in 43 s on first boot | 2026-11-16 |
 | Current draw, idle and speaking | | |
 | Wake word distance | | |
 | Wake word during playback | | |
