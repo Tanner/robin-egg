@@ -533,3 +533,13 @@ def test_a_mumble_while_asking_for_the_name_counts_as_a_miss(tmp_path):
     egg, _ = asyncio.run(converse([speech(2.0) for _ in texts], FakeSTT(texts), SlowBrain([]), ToneTTS(), **kwargs))
     assert egg.runs[1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "I only know Tanner. Who am I talking to?"
     assert egg.runs[2].data(pb.VOICE_ASSISTANT_TTS_START)["text"].endswith(ENROL_SENTENCES[0])
+
+
+def test_voice_commands_say_speaker_recognition_is_off_when_it_is():
+    for command in ("learn my voice", "Robin, forget my voice."):
+        brain = SlowBrain([])
+        egg, _ = asyncio.run(converse([speech(2.0)], FakeSTT([command]), brain, ToneTTS()))
+        (run,) = egg.runs
+        assert run.data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Speaker recognition is turned off, so I can't learn or forget voices right now."
+        assert run.data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] == "0"
+        assert brain.heard == []

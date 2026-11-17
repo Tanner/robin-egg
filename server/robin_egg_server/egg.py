@@ -25,7 +25,7 @@ from typing import Any, AsyncIterator, Protocol
 
 from .audio import MIC_RATE, EnergyVad, ReplyAudio, VadConfig
 from .brain import Brain, QuietTurn, sentences
-from .commands import VoiceCommands
+from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .speakers import Match, People, SpeakerId
 from .voices import SpeechToText, TextToSpeech
 from .web import AudioServer
@@ -187,7 +187,14 @@ class Robin:
                 return
             self.send(E.VOICE_ASSISTANT_STT_END, {"text": heard})
             self.send(E.VOICE_ASSISTANT_INTENT_START)
-            step = await self.commands.handle(heard, match) if self.commands is not None else None
+            if self.commands is not None:
+                step = await self.commands.handle(heard, match)
+            elif is_voice_command(heard):
+                # Robin would only guess at what this means, so the egg answers it itself.
+                LOG.info("Heard a voice command, but speaker recognition is turned off")
+                step = Step(SPEAKER_ID_OFF, False)
+            else:
+                step = None
             if step is not None:
                 await self._speak(_once(step.say), t.reply, turn=t, t0=t0)
                 LOG.info('Robin: "%s"', step.say)

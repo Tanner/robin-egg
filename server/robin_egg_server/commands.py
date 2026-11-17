@@ -42,6 +42,7 @@ _NAME_LEAD_INS = ("my name is", "this is", "its", "im", "i am")
 KEEP_IT = "Okay, I'll keep it."
 SAVE_FAILED = "Sorry, I couldn't save that. Try again in a bit."
 STOPPED = "Okay, I've stopped. Nothing was saved."
+SPEAKER_ID_OFF = "Speaker recognition is turned off, so I can't learn or forget voices right now."
 
 
 @dataclass
@@ -61,6 +62,10 @@ def _normalise(text: str) -> list[str]:
 
 def is_command(heard: str, phrase: str) -> bool:
     return _normalise(heard) == _normalise(phrase)
+
+
+def is_voice_command(heard: str) -> bool:
+    return is_command(heard, LEARN_PHRASE) or is_command(heard, FORGET_PHRASE)
 
 
 def same_sentence(heard: str, expected: str) -> bool:
