@@ -196,6 +196,13 @@ def test_no_people_list_says_it_cannot_reach_robin(tmp_path):
     assert not commands.active
 
 
+def test_an_empty_people_list_means_nobody_to_learn(tmp_path):
+    commands, _ = make(tmp_path, people=())
+    step = say(commands, "learn my voice")
+    assert (step.say, step.listen) == ("Robin doesn't list anyone who can talk to me yet, so there's nobody to learn.", False)
+    assert not commands.active
+
+
 def test_voice_of_someone_else_is_refused(tmp_path):
     commands, store = make(tmp_path, enrolled=[("ryan", RYAN_VOICE)])
     before = store.prints["ryan"].enrolled

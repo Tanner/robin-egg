@@ -144,6 +144,9 @@ class VoiceCommands:
         if people is None:
             LOG.warning("Enrolment not started: no people list has ever been fetched from robin-assistant")
             return Step("I can't reach Robin to check who lives here. Try again in a bit.", False)
+        if not people:
+            LOG.info("Enrolment not started: robin-assistant lists nobody who can talk to this agent")
+            return Step("Robin doesn't list anyone who can talk to me yet, so there's nobody to learn.", False)
         LOG.info("Enrolment started; asking who is talking")
         self._flow = _Flow("name", trigger_match=match)
         return Step("Sure. Who am I talking to?", True)
