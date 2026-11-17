@@ -14,7 +14,7 @@ Last checked against Seeed's wiki and the formatBCE repo on 2026-11-14. Nothing 
 
 The egg is wall powered. There is no battery.
 
-Not bought yet, all for the enclosure stage: panel-mount USB-C socket, mic mute slide switch, M2.5 standoffs, screws and heat-set inserts, acoustic fabric, foam gasket for the mics, damping fill, heat-shrink.
+Not bought yet, all for the enclosure stage. The full list with sizes is in the [CAD hardware table](../cad/README.md#hardware): M3 heat-set inserts, M3, M2.5 and M2 screws, rubber feet, foam tape or silicone for the chamber seal, polyester damping fill, acoustic fabric, heat-shrink. The board standoffs are printed into the chassis, and the USB-C cable plugs straight into the XIAO port, so no standoffs or panel-mount socket are needed. A mic mute slide switch is only needed if the open mute question goes that way.
 
 Optional sensors for later: LD2410-type mmWave presence, SHT4x temperature and humidity, VEML7700 light.
 

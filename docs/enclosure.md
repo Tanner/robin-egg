@@ -113,7 +113,7 @@ Matches `cad/robin_egg.py` v1. Egg 150 mm tall before the bottom is sliced, 137 
 
 ## To buy for the enclosure
 
-- M2.5 standoffs, screws and heat-set inserts. Acoustic fabric, polyester damping fill, foam gasket, rubber feet.
+- See the [CAD hardware table](../cad/README.md#hardware) for sizes and counts: M3 heat-set inserts, M3, M2.5 and M2 screws, rubber feet, foam tape or silicone, polyester damping fill, acoustic fabric. The board standoffs are printed into the chassis, so none need buying.
 
 ## Open
 
