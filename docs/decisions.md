@@ -58,3 +58,12 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | Robin's voice is Piper `en_US-ryan-medium`, run locally on the Mac mini | Tanner picked it from eleven candidates. Local, free and private, and the first audio was ready 0.3 s after speech ended on the bench |
 | Mac `say` voices are out | Not good enough for Robin |
 | Text-to-speech should be a pluggable choice of service, with Piper as one of them | Leaves room for hosted voices later |
+
+## Talking to Robin, decided 2026-11-16
+
+| Decision | Why |
+| --- | --- |
+| The Robin Egg Server is a client of robin-assistant's web chat API. robin-assistant gets generic additions only (`device=speaker`, `wait=1`) and knows nothing about eggs | Keeps robin-assistant general. The same additions serve Shortcuts |
+| No `voice` Method for now | It is only needed for Robin to choose to speak unprompted, with a text fallback. Revisit once the egg is in daily use |
+| The egg talks in the plain web chat, shared with the phone. No project for the egg | Something asked out loud can be followed up on the phone |
+| The Robin Egg Server does speech-to-text and text-to-speech. Only text crosses to robin-assistant | Lets speech start sentence by sentence, keeps Robin's local Piper voice, and keeps Robin a text agent |

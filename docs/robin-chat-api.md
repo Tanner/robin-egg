@@ -97,7 +97,7 @@ Rules:
 
 ### Which chat
 
-The egg posts into the plain web chat, the same chat the phone uses. No project and no chat id is sent; with no target the route uses the plain chat.
+The egg posts to the plain web chat, the same one the phone uses. It names no `chat`, `project` or `thread`, and with no target the route uses the plain chat. Decided 2026-11-16: the egg does not get a project. Egg and phone conversations share one context, so something asked out loud can be followed up on the phone.
 
 Sharing the chat with the phone has costs, accepted for v1:
 
@@ -105,6 +105,7 @@ Sharing the chat with the phone has costs, accepted for v1:
 - A steered message carries text only, so an egg message steered into a phone turn is answered under that turn's device (`phone`), and the reply is shaped for a screen.
 - Each message's `device` replaces the last one's. The device row is pushed again whenever it changes, so the model always sees the current one.
 - `wait=1` returns only rows that answer the egg's own message, so a phone reply in a separate turn is never spoken.
+- `wait=1` ends when the chat goes idle, so a phone conversation that starts right after an egg question can hold the egg's wait open longer. The egg's own timeout covers the worst case.
 
 ### Preventing regressions
 
@@ -134,7 +135,7 @@ Sharing the chat with the phone has costs, accepted for v1:
 
 Done in this repo once the robin-assistant side lands.
 
-- A `RobinBrain` in `server/robin_egg_server/brain.py`, beside `ClaudeBrain` and `EchoBrain`, behind the same `Brain` protocol. It posts `text`, `device=speaker`, `wait=1`, and a fresh `send_id`, with no chat target, reads the event stream, and yields each `reply`.
+- A `RobinBrain` in `server/robin_egg_server/brain.py`, beside `ClaudeBrain` and `EchoBrain`, behind the same `Brain` protocol. It posts `text`, `device=speaker`, `wait=1`, and a fresh `send_id` to the plain web chat, reads the event stream, and yields each `reply`.
 - Yield a newline after each reply. `sentences()` only splits on punctuation or newlines (`brain.py:88`), so two replies would otherwise run together.
 - Strip markdown from each reply before speaking, as a backstop to the prompt.
 - Outcomes:
@@ -142,7 +143,7 @@ Done in this repo once the robin-assistant side lands.
   - `error`: speak the apology row if there is one and skip the error sound. Play the error sound only if there was no reply.
   - `stopped`, a connection error, or no `end` within `--robin-timeout`: the error sound.
 - After a timeout or a barge-in, Robin's turn keeps running and its late answer lands in the chat unheard. The next thing said may be steered into that turn. Accept this for v1 and log it. An approval card from a speaker turn has the same effect until the timeout.
-- New options: `--brain robin`, `--robin-url` (default `http://127.0.0.1:8273`), `--robin-agent`, `--robin-timeout`. `claude` stays the default until the robin brain has worked on the bench.
+- New options: `--brain robin`, `--robin-url` (default `http://127.0.0.1:8273`), `--robin-agent`, `--robin-user`, `--robin-timeout`. `claude` stays the default until the robin brain has worked on the bench.
 - The server's own conversation history and idle reset only apply to `ClaudeBrain`.
 
 ### Preventing regressions

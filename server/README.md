@@ -80,7 +80,11 @@ That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
-| `--brain echo` | `claude` | Repeat what was heard. Tests the audio chain with no key. |
+| `--brain robin\|claude\|echo` | `claude` | `robin` asks Robin through robin-assistant, in the plain web chat the phone uses. `claude` calls Claude directly. `echo` repeats what was heard, to test the audio chain with no key. |
+| `--robin-url` | `http://127.0.0.1:8273` | robin-assistant's address. |
+| `--robin-agent` | `robin` | The robin-assistant agent to ask. |
+| `--robin-user` | none | A `[users]` key to send as the speaker. Left out until the egg can tell who is speaking. |
+| `--robin-timeout` | 90 s | How long to wait for Robin to finish answering before the error sound. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
 | `--tts piper\|say` | `piper` | Which text-to-speech engine to use. |
 | `--piper-voice` | `voices/en_US-ryan-medium.onnx` | Another Piper voice, to audition. |
@@ -103,7 +107,8 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/egg.py` | The ESPHome connection with reconnects, and the voice turn |
 | `robin_egg_server/audio.py` | End-of-speech detection and the streamed FLAC reply |
 | `robin_egg_server/voices.py` | Whisper, `say` and Piper |
-| `robin_egg_server/brain.py` | Claude, the echo brain, and sentence splitting |
+| `robin_egg_server/brain.py` | Robin through robin-assistant, Claude, the echo brain, markdown stripping and sentence splitting |
 | `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
+| `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |

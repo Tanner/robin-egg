@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .audio import MIC_RATE, EnergyVad, ReplyAudio, VadConfig
-from .brain import Brain, sentences
+from .brain import Brain, QuietTurn, sentences
 from .voices import SpeechToText, TextToSpeech
 from .web import AudioServer
 
@@ -173,6 +173,9 @@ class Robin:
             LOG.info("Reply %.1f s long, finished %.2f s after end of speech", t.reply.seconds, time.monotonic() - t0)
         except asyncio.CancelledError:
             raise
+        except QuietTurn:
+            LOG.info("Robin chose to say nothing; closing quietly")
+            self._end_without_reply()
         except Exception as err:  # noqa: BLE001 - tell the egg, so it plays its error sound
             LOG.exception("The turn failed")
             self._follow_up_pending = False

@@ -27,7 +27,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--psk", help="Base64 API encryption key, only if one was set on the egg")
     p.add_argument("--http-port", type=int, default=8765, help="Port the egg fetches replies from, and /announce listens on")
     p.add_argument("--advertise-ip", help="This Mac's LAN IP, if auto-detection picks the wrong one")
-    p.add_argument("--brain", choices=["claude", "echo"], default="claude", help="claude (needs ANTHROPIC_API_KEY) or echo (repeats what it heard)")
+    p.add_argument("--brain", choices=["claude", "robin", "echo"], default="claude", help="claude (needs ANTHROPIC_API_KEY), robin (robin-assistant) or echo (repeats what it heard)")
+    p.add_argument("--robin-url", default="http://127.0.0.1:8273", help="robin-assistant's address, with --brain robin")
+    p.add_argument("--robin-agent", default="robin", help="robin-assistant agent name, with --brain robin")
+    p.add_argument("--robin-user", help="A [users] key to send as the speaker. Left out until the egg can tell who is speaking")
+    p.add_argument("--robin-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--model", default="claude-opus-5-5", help="Claude model id")
     p.add_argument("--effort", default="low", choices=["low", "medium", "high"], help="Claude effort; low is fastest")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
@@ -70,6 +74,10 @@ def build(args: argparse.Namespace):
         from .brain import EchoBrain
 
         brain = EchoBrain()
+    elif args.brain == "robin":
+        from .brain import RobinBrain
+
+        brain = RobinBrain(args.robin_url, args.robin_agent, user=args.robin_user, timeout_s=args.robin_timeout)
     else:
         from .brain import ClaudeBrain
 
@@ -98,6 +106,8 @@ async def run(args: argparse.Namespace) -> None:
         await robin.run_forever(args.host, args.port, args.psk, show_logs=args.logs)
     finally:
         await web.stop()
+        if hasattr(robin.brain, "close"):
+            await robin.brain.close()
 
 
 async def demo(args: argparse.Namespace, robin: Robin, web: AudioServer) -> None:
