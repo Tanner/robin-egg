@@ -19,7 +19,7 @@ substitutions:
   # XMOS DSP firmware together.
   respeaker_ref: 2026.11.0
 
-  # American robin call. See sounds/CREDITS.md.
+  # The listening cue, made by tools/egg-sounds/make_sounds.py.
   wake_word_triggered_sound_file: sounds/wake_word_triggered.flac
 
 packages:

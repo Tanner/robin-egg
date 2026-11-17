@@ -24,7 +24,7 @@ from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.audio import MIC_RATE, ReplyAudio
 from robin_egg_server.brain import sentences
-from robin_egg_server.egg import FAILED_TURN, Options, Robin
+from robin_egg_server.egg import FAILED_TURN, PROACTIVE_CHIME, Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.web import AudioServer
 
@@ -246,6 +246,13 @@ def test_announce_over_http():
     assert quiet[0] == 409
     (text, audio), = egg.announcements
     assert text == "Time to leave for the airport." and decode(audio)[1] == 48000
+
+    samples, _ = decode(audio)
+    chime, chime_rate = sf.read(PROACTIVE_CHIME, dtype="float32")
+    lead = int(ReplyAudio.LEAD_S * 48000)
+    assert chime_rate == 48000
+    np.testing.assert_allclose(samples[lead : lead + len(chime)], chime, atol=1 / 32768)
+    assert len(samples) > lead + len(chime) + int(0.05 * len(text) * 48000), "the speech follows the chime"
 
 
 def test_sentences_groups_short_ones():

@@ -72,7 +72,7 @@ To make Robin speak first, the way a proactive message will:
 curl -d "Time to leave for the airport." http://localhost:8765/announce
 ```
 
-That only speaks between 8 AM and 8 PM. Change it with `--speaking-hours`.
+The egg plays the proactive chime first, then speaks. That only happens between 8 AM and 8 PM. Change it with `--speaking-hours`.
 
 ## Useful options
 
@@ -111,6 +111,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/voices.py` | Whisper, `say` and Piper |
 | `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
 | `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
+| `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |

@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Protocol
 
+import soundfile as sf
+
 from .audio import MIC_RATE, EnergyVad, ReplyAudio, VadConfig
 from .brain import Brain, QuietTurn, sentences
 from .voices import SpeechToText, TextToSpeech
@@ -31,6 +33,7 @@ from .web import AudioServer
 LOG = logging.getLogger("robin.egg")
 
 ZERO_PSK = base64.b64encode(bytes(32)).decode()  # formatBCE: encryption on, no key set yet
+PROACTIVE_CHIME = Path(__file__).parent / "sounds" / "proactive.flac"  # made by tools/egg-sounds
 NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 
@@ -73,6 +76,7 @@ class Robin:
         self.client: Any = None  # an APIClient while the egg is connected
         self.turn: Turn | None = None
         self._follow_up_pending = False
+        self._proactive_chime = sf.read(PROACTIVE_CHIME, dtype="float32")
         web.on_announce = self.announce
 
     # ---- events to the egg ----
@@ -267,6 +271,9 @@ class Robin:
             return 409, f"outside speaking hours ({start}:00 to {end}:00); not spoken"
 
         reply = ReplyAudio()
+        # A chime first, so Robin speaking unprompted does not startle anyone.
+        chime, rate = self._proactive_chime
+        await reply.push(chime, rate, gap_s=0.2)
         await self._speak(_once(text), reply)
         await reply.close()
         url = self.web.add(reply)
