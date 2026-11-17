@@ -64,6 +64,15 @@ afplay demo-replies/reply-1.flac
 
 The log shows what was heard, what Robin said, and the timings: speech-to-text, the first audio ready, and the whole reply.
 
+Each line made during a turn starts with that turn's tag, so one turn can be followed when lines interleave. Turns are numbered from `[t1]` each time the server starts, and a follow-up names the turn it follows. A message Robin sends on its own is tagged `[m<id>]` with its message id, and each `/announce` is tagged `[a<n>]`. Lines about the connection have no tag.
+
+```text
+21:08:12 INFO  robin.egg [t1] Wake word: Okay Nabu
+21:08:15 INFO  robin.egg [t1] Heard: "What's a good name for a robin?" (STT 0.35 s, speaker 0.00 s)
+21:08:16 INFO  robin.web [t1] HTTP GET /audio/cd6dbec3eccb.flac from 127.0.0.1
+21:08:16 INFO  robin.egg [t2] Follow-up to t1: listening for 5 s
+```
+
 ## On Monday, with the egg
 
 Flash and find the egg first, as in `tools/bench-voice-test/README.md`. Then:

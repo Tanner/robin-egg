@@ -15,6 +15,7 @@ from collections import OrderedDict
 from typing import Awaitable, Callable
 
 from .audio import ReplyAudio
+from .logs import current_tag, tagged
 
 LOG = logging.getLogger("robin.web")
 
@@ -23,15 +24,18 @@ class AudioServer:
     def __init__(self, keep: int = 20) -> None:
         self.base_url = ""
         self.port = 0
-        self._audio: OrderedDict[str, ReplyAudio] = OrderedDict()
+        self._audio: OrderedDict[str, tuple[ReplyAudio, str]] = OrderedDict()  # with the log tag of the turn it belongs to
         self._keep = keep
         self._server: asyncio.base_events.Server | None = None
         self.on_announce: Callable[[str], Awaitable[tuple[int, str]]] | None = None
 
-    def add(self, audio: ReplyAudio) -> str:
-        """Registers a reply and returns the URL the egg should fetch."""
+    def add(self, audio: ReplyAudio, tag: str | None = None) -> str:
+        """Registers a reply and returns the URL the egg should fetch.
+
+        The egg's fetches of it are logged with `tag`, by default the tag of the caller.
+        """
         key = uuid.uuid4().hex[:12]
-        self._audio[key] = audio
+        self._audio[key] = (audio, current_tag() if tag is None else tag)
         while len(self._audio) > self._keep:
             self._audio.popitem(last=False)
         return f"{self.base_url}/audio/{key}.flac"
@@ -59,9 +63,11 @@ class AudioServer:
             if len(request) < 2:
                 return
             method, path = request[0], request[1].split("?")[0]
-            LOG.info("HTTP %s %s from %s", method, path, peer[0] if peer else "?")
-            if method in ("GET", "HEAD") and path.startswith("/audio/") and path.endswith(".flac"):
-                audio = self._audio.get(path[len("/audio/") : -len(".flac")])
+            is_audio = method in ("GET", "HEAD") and path.startswith("/audio/") and path.endswith(".flac")
+            audio, tag = self._audio.get(path[len("/audio/") : -len(".flac")], (None, "")) if is_audio else (None, "")
+            with tagged(tag):
+                LOG.info("HTTP %s %s from %s", method, path, peer[0] if peer else "?")
+            if is_audio:
                 if audio is None:
                     await self._reply(w, 404, "not found\n")
                     return

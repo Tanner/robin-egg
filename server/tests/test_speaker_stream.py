@@ -20,10 +20,11 @@ from robin_egg_server.__main__ import parse_args
 from robin_egg_server.audio import REPLY_RATE, ReplyAudio, load_sound
 from robin_egg_server.egg import PROACTIVE_CHIME, Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
+from robin_egg_server.logs import TagFilter
 from robin_egg_server.speaker_stream import SpeakerMessage, SpeakerStream
 from robin_egg_server.web import AudioServer
 from test_robin_brain import PING, FakeRobinAssistant, comment, event, pause, refuse, until
-from test_server import FakeSTT, ToneTTS, decode, speech
+from test_server import FakeSTT, ToneTTS, decode, speech, tag_of
 
 
 def message(id: int, text: str, label: str | None = None) -> tuple:
@@ -213,6 +214,7 @@ def test_a_message_while_the_egg_is_idle_is_chimed_and_spoken(caplog):
         go.set()
         await eventually(lambda: egg.announcements)
 
+    caplog.handler.addFilter(TagFilter())
     with caplog.at_level(logging.INFO, logger="robin"):
         egg, robin, tts = asyncio.run(egg_with_speaker([script], [], [], SlowStartBrain(""), Options(speaking_hours=(0, 24)), scenario))
     (text, audio), = egg.announcements
@@ -226,6 +228,8 @@ def test_a_message_while_the_egg_is_idle_is_chimed_and_spoken(caplog):
     assert np.allclose(samples[lead : lead + len(chime)], chime, atol=2e-3)  # the chime comes first
     assert "Speaking message 124 (Dentist reminder) now" in caplog.text
     assert "Spoke message 124 (Dentist reminder)" in caplog.text
+    for line in ("Robin sent message 124", "Speaking message 124", "Spoke message 124"):
+        assert tag_of(caplog, line) == {"m124"}
 
 
 def test_a_message_mid_reply_waits_for_the_reply_to_end(caplog):

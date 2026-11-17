@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable
 
 from .brain import redirect_target, sse_events
+from .logs import tagged
 
 LOG = logging.getLogger("robin.speaker")
 
@@ -33,6 +34,11 @@ class SpeakerMessage:
 
     def describe(self) -> str:
         return f"{self.id} ({self.label})" if self.label else f"{self.id} (no label)"
+
+    @property
+    def tag(self) -> str:
+        """Ties the log lines about this message together, e.g. [m124]."""
+        return f"m{self.id}"
 
 
 class SpeakerStream:
@@ -114,8 +120,9 @@ class SpeakerStream:
                     continue
                 label = data.get("label")
                 msg = SpeakerMessage(data.get("id"), text, label if isinstance(label, str) and label else None)
-                LOG.info("Robin sent message %s on its own", msg.describe())
-                await self.on_message(msg)
+                with tagged(msg.tag):
+                    LOG.info("Robin sent message %s on its own", msg.describe())
+                    await self.on_message(msg)
             LOG.info("robin-assistant closed the speaker stream after %.0f s", time.monotonic() - self._up_since)
             return None
 

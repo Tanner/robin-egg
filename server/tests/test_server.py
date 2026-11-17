@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 import shutil
 import subprocess
 import time
@@ -28,6 +29,7 @@ from robin_egg_server.brain import sentences
 from robin_egg_server.commands import ENROL_SENTENCES, KEEP_IT, SPEAKER_ID_OFF, VoiceCommands
 from robin_egg_server.egg import FAILED_TURN, PROACTIVE_CHIME, Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
+from robin_egg_server.logs import TagFilter
 from robin_egg_server.speakers import Match, People, Person, SpeakerId, VoiceprintStore
 from robin_egg_server.web import AudioServer
 
@@ -368,6 +370,31 @@ def test_a_failing_embedder_still_answers_as_unknown(tmp_path, caplog):
     assert brain.users == ["Unknown Speaker"]
     assert "Could not identify the speaker; treating them as Unknown Speaker" in caplog.text
 
+
+
+def tag_of(caplog, text: str, logger: str | None = None) -> set[str]:
+    """The tags on the log lines that contain `text`, e.g. {"t1"}; "" for an untagged line."""
+    return {r.tag.strip(" []") for r in caplog.records if text in r.getMessage() and (logger is None or r.name == logger)}
+
+
+def test_each_turn_tags_its_log_lines(tmp_path, caplog):
+    caplog.handler.addFilter(TagFilter())
+    brain = SlowBrain([["Sunny. "], ["Rain. "]], pause=0)
+    with caplog.at_level(logging.INFO, logger="robin"):
+        asyncio.run(converse([speech(2.0), speech(0.6)], FakeSTT(["what's the weather", "and tomorrow"]), brain, ToneTTS(),
+                             **identify_with(FakeEmbedder([TANNER, BORDERLINE]), tmp_path)))
+    assert tag_of(caplog, "Wake word: Okay Nabu") == {"t1"}
+    assert tag_of(caplog, 'Heard: "what\'s the weather"') == {"t1"}
+    assert tag_of(caplog, 'Robin: "Sunny."') == {"t1"}
+    # The egg fetching a turn's reply audio belongs to that turn too.
+    assert tag_of(caplog, "HTTP GET /audio/") == {"t1", "t2"}
+    assert tag_of(caplog, "Follow-up to t1") == {"t2"}
+    assert tag_of(caplog, 'Heard: "and tomorrow"') == {"t2"}
+    # Speaker recognition logs from a worker thread, and still carries the turn's tag.
+    assert tag_of(caplog, "", logger="robin.speakers") == {"t1", "t2"}
+    assert tag_of(caplog, "Follow-up to t2") == tag_of(caplog, "Nobody spoke") == {"t3"}
+    # Lines about the connection belong to no turn.
+    assert tag_of(caplog, "Ready. Say the wake word") == {""}
 
 def test_a_confident_long_turn_is_learned(tmp_path):
     def pool_sizes() -> int:

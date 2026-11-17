@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .brain import server_url
 from .egg import Options, Robin
+from .logs import setup as setup_logging
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .web import AudioServer
 
@@ -220,9 +221,7 @@ async def demo(args: argparse.Namespace, robin: Robin, web: AudioServer) -> None
 
 def main() -> None:
     args = parse_args()
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(name)s %(message)s", datefmt="%H:%M:%S")
-    if not args.verbose:
-        logging.getLogger("aioesphomeapi").setLevel(logging.WARNING)
+    setup_logging(args.verbose)
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run(args))
     sys.exit(0)

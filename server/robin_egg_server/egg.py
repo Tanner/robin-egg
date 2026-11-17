@@ -26,6 +26,7 @@ from typing import Any, AsyncIterator, Protocol
 from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_sound
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
+from .logs import tagged
 from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
 from .voices import SpeechToText, TextToSpeech
@@ -64,6 +65,7 @@ class Turn:
     url: str
     wake_word: str | None
     follow_up: bool
+    tag: str = ""  # starts every log line about this turn, e.g. [t12]
     audio: bytearray = field(default_factory=bytearray)
     started: float = field(default_factory=time.monotonic)
     listening: bool = True
@@ -92,6 +94,8 @@ class Robin:
         self.opts = opts or Options()
         self.speakers, self.people, self.commands = speakers, people, commands
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
+        self._turn_count = 0  # numbers the turns in the log
+        self._announce_count = 0  # numbers the /announce calls in the log
         self.client: Any = None  # an APIClient while the egg is connected
         self.turn: Turn | None = None
         self._follow_up_pending = False
@@ -122,11 +126,16 @@ class Robin:
             self._proactive_stopped_by = "the wake word interrupted it"
             self._proactive_task.cancel()
         self._state.set()
-        if self.turn is not None:
-            if self.turn.task is not None and not self.turn.task.done():
-                self.turn.task.cancel()
-            elif self.turn.task is None:
-                await self.turn.reply.close()  # it never got to answer
+        previous_turn = self.turn
+        if previous_turn is not None:
+            with tagged(previous_turn.tag):
+                if previous_turn.task is not None and not previous_turn.task.done():
+                    LOG.info("The egg started a new run before this turn finished; stopping this turn")
+                    previous_turn.task.cancel()
+                elif previous_turn.task is None:
+                    if previous_turn.listening:
+                        LOG.info("The egg started a new run while this turn was still listening; dropping this turn")
+                    await previous_turn.reply.close()  # it never got to answer
         # The firmware reports the last wake word on every run, follow-ups included, so the
         # phrase alone cannot say whether someone just woke the egg. A follow-up starts as
         # soon as the reply finishes playing; a wake word heard later is a new conversation.
@@ -140,12 +149,18 @@ class Robin:
         if follow_up:
             enrolling = self.commands is not None and self.commands.active
             cfg.no_speech_timeout_s = self.opts.enrol_window_s if enrolling else self.opts.follow_up_window_s
+        self._turn_count += 1
+        tag = f"t{self._turn_count}"
         reply = ReplyAudio()
-        url = self.web.add(reply)
-        self.turn = Turn(EnergyVad(cfg), reply, url, wake_word_phrase, follow_up)
-        LOG.info("%s", "Follow-up: listening" if follow_up else f"Wake word: {wake_word_phrase or '(started another way)'}")
-        self.send(self.E.VOICE_ASSISTANT_RUN_START, {"url": url} if self.opts.stream else None)
-        self.send(self.E.VOICE_ASSISTANT_STT_START)
+        url = self.web.add(reply, tag)
+        self.turn = Turn(EnergyVad(cfg), reply, url, wake_word_phrase, follow_up, tag=tag)
+        with tagged(self.turn.tag):
+            if follow_up:
+                LOG.info("Follow-up to %s: listening for %.0f s", previous_turn.tag if previous_turn else "the last turn", cfg.no_speech_timeout_s)
+            else:
+                LOG.info("Wake word: %s", wake_word_phrase or "(started another way)")
+            self.send(self.E.VOICE_ASSISTANT_RUN_START, {"url": url} if self.opts.stream else None)
+            self.send(self.E.VOICE_ASSISTANT_STT_START)
         return 0  # 0 = send the mic audio over the API connection, not UDP
 
     async def handle_audio(self, data: bytes, data2: bytes = b"") -> None:
@@ -156,21 +171,23 @@ class Robin:
         if t.vad.feed(data):
             self.send(self.E.VOICE_ASSISTANT_STT_VAD_START)
         if t.vad.done:
-            self._end_listening(t)
+            with tagged(t.tag):
+                self._end_listening(t)  # the reply task it starts keeps the tag
 
     async def handle_stop(self, abort: bool) -> None:
         t = self.turn
         self._state.set()
         if t is None:
             return
-        if abort:
-            LOG.info("The egg cancelled the turn")
-            t.listening = False
-            if t.task is not None:
-                t.task.cancel()
-        elif t.listening:
-            t.vad.reason = "the egg ended the audio stream"
-            self._end_listening(t)
+        with tagged(t.tag):
+            if abort:
+                LOG.info("The egg cancelled the turn")
+                t.listening = False
+                if t.task is not None:
+                    t.task.cancel()
+            elif t.listening:
+                t.vad.reason = "the egg ended the audio stream"
+                self._end_listening(t)
 
     async def handle_announcement_finished(self, result: Any) -> None:
         LOG.debug("Announcement finished: %s", result)
@@ -380,11 +397,14 @@ class Robin:
         if not self._in_speaking_hours():
             return 409, f"outside speaking hours ({self._hours()}); not spoken"
 
-        async with self._speaker_lock:
-            reply = await self._announcement(text, chime=True)
-            url = self.web.add(reply)
-            LOG.info('Announcing: "%s"', text)
-            result = await self.client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
+        self._announce_count += 1
+        with tagged(f"a{self._announce_count}"):
+            async with self._speaker_lock:
+                reply = await self._announcement(text, chime=True)
+                url = self.web.add(reply)
+                LOG.info('Announcing: "%s"', text)
+                result = await self.client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
+            LOG.info("Announcement finished (%s)", "spoken" if getattr(result, "success", True) else "the egg reported a failure")
         return 200, f"spoken ({getattr(result, 'success', result)})"
 
     def _busy_reason(self) -> str | None:
@@ -409,19 +429,20 @@ class Robin:
         Outside speaking hours it is dropped, not saved for later. Messages that arrive
         together are spoken in order, one chime each.
         """
-        if not self._in_speaking_hours():
-            LOG.info("Dropped message %s: outside speaking hours (%s)", msg.describe(), self._hours())
-            return
-        if self._proactive_task is not None and not self._proactive_task.done():
-            busy: str | None = "another message is being spoken"
-        elif not self._proactive_queue.empty():
-            busy = "other messages are waiting"
-        else:
-            busy = self._busy_reason()
-        if busy:
-            LOG.info("Queued message %s until the egg is idle: %s", msg.describe(), busy)
-        else:
-            LOG.info("Speaking message %s now", msg.describe())
+        with tagged(msg.tag):
+            if not self._in_speaking_hours():
+                LOG.info("Dropped message %s: outside speaking hours (%s)", msg.describe(), self._hours())
+                return
+            if self._proactive_task is not None and not self._proactive_task.done():
+                busy: str | None = "another message is being spoken"
+            elif not self._proactive_queue.empty():
+                busy = "other messages are waiting"
+            else:
+                busy = self._busy_reason()
+            if busy:
+                LOG.info("Queued message %s until the egg is idle: %s", msg.describe(), busy)
+            else:
+                LOG.info("Speaking message %s now", msg.describe())
         self._proactive_queue.put_nowait(msg)
         if self._proactive_worker is None or self._proactive_worker.done():
             self._proactive_worker = asyncio.create_task(self._speak_proactive_messages())
@@ -437,17 +458,18 @@ class Robin:
     async def _speak_proactive_messages(self) -> None:
         while True:
             msg = await self._proactive_queue.get()
-            await self._until_idle()
-            if not self._in_speaking_hours():
-                LOG.info("Dropped message %s: speaking hours (%s) ended while it waited", msg.describe(), self._hours())
-                continue
-            self._proactive_stopped_by = ""
-            self._proactive_task = task = asyncio.create_task(self._say_proactive(msg))
-            await asyncio.wait({task})
-            if task.cancelled():
-                LOG.info("Stopped message %s partway: %s", msg.describe(), self._proactive_stopped_by or "the server is stopping")
-            elif task.exception() is not None:
-                LOG.error("Could not speak message %s", msg.describe(), exc_info=task.exception())
+            with tagged(msg.tag):  # the speaking task started here keeps the tag
+                await self._until_idle()
+                if not self._in_speaking_hours():
+                    LOG.info("Dropped message %s: speaking hours (%s) ended while it waited", msg.describe(), self._hours())
+                    continue
+                self._proactive_stopped_by = ""
+                self._proactive_task = task = asyncio.create_task(self._say_proactive(msg))
+                await asyncio.wait({task})
+                if task.cancelled():
+                    LOG.info("Stopped message %s partway: %s", msg.describe(), self._proactive_stopped_by or "the server is stopping")
+                elif task.exception() is not None:
+                    LOG.error("Could not speak message %s", msg.describe(), exc_info=task.exception())
 
     async def _say_proactive(self, msg: SpeakerMessage) -> None:
         text = strip_markdown(msg.text)
