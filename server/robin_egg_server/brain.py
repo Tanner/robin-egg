@@ -60,6 +60,25 @@ class ClaudeBrain:
         self.history: list[dict] = []
         self._last = 0.0
 
+    async def check(self) -> None:
+        """Fail at startup, not on the first question, when Claude cannot answer."""
+        import anthropic
+
+        LOG.info("Checking the Claude API key and model %s", self.model)
+        try:
+            await self.client.models.retrieve(self.model)
+        except TypeError as err:  # the SDK found no API key and no `ant auth login` profile
+            raise SystemExit(
+                "No Claude credentials. Set ANTHROPIC_API_KEY or run `ant auth login`, "
+                "or start with --brain echo to test without a key."
+            ) from err
+        except anthropic.AuthenticationError as err:
+            raise SystemExit("The Claude API rejected the API key. Check ANTHROPIC_API_KEY.") from err
+        except anthropic.NotFoundError as err:
+            raise SystemExit(f"The Claude API has no model {self.model!r}. Check --model.") from err
+        except anthropic.APIConnectionError as err:
+            LOG.warning("Could not reach the Claude API to check the key, starting anyway: %s", err)
+
     async def reply(self, heard: str) -> AsyncIterator[str]:
         now = time.time()
         if self.history and now - self._last > self.idle_reset_s:

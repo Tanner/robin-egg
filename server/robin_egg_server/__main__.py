@@ -96,6 +96,8 @@ def build(args: argparse.Namespace):
 
 async def run(args: argparse.Namespace) -> None:
     robin, web = build(args)
+    if hasattr(robin.brain, "check"):
+        await robin.brain.check()
     if args.demo:
         await demo(args, robin, web)
         return
