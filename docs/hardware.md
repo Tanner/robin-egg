@@ -9,12 +9,16 @@ Last checked against Seeed's wiki and the formatBCE repo on 2026-11-14. Nothing 
 | Seeed reSpeaker XVF3800 4-Mic Array with XIAO ESP32S3, bare board. Sold by Seeed Studio Official | $74.99 | Ordered on Amazon, arriving Monday Nov 16, 2026 |
 | Dayton Audio DMA70-4, 2.5" dual magnet aluminum cone full-range driver, 4 ohm. Sold by Long An Shop | $25.89 | Ordered on Amazon, arriving Monday Nov 16, 2026 |
 | JST-PH 2.0 mm 2-pin male connectors with 10 cm silicone wire, plus female sockets, 20 sets. Sold by Zhansheng Electronics | $6.99 | Ordered on Amazon, arriving Monday Nov 16, 2026 |
+| Self-tapping pan-head screw set, M2, M2.5 and M3, 1200 pcs, black. For the board (M2×6) and chassis (M2.5×8) screws | $8.49 | Ordered on Amazon 2026-11-17, arriving Wednesday Nov 18, 2026 |
+| Kadrick heat-set insert kit, M2 to M5, 520 pcs. For the 4 M3 inserts in the baffle. Check that an M3 size fits the CAD's 4.0 mm × 5.0 mm hole | $15.98 | Ordered on Amazon 2026-11-17, arriving Thursday Nov 19, 2026 |
+| ruthex heat-set insert tips, 7 pcs, with 900M adapter | $16.90 | Ordered on Amazon 2026-11-17, arriving Wednesday Nov 18, 2026 |
+| M3 socket-head cap screw kit, 12.9 alloy steel, 800 pcs. For the speaker (M3×8) and foot (M3×25) screws | $7.99 | Ordered on Amazon 2026-11-17, arriving Wednesday Nov 18, 2026 |
 | USB-C charger, 5 V, 2 A or more | | On hand |
 | USB-C data cable | | On hand |
 
 The egg is wall powered. There is no battery.
 
-Not bought yet, all for the enclosure stage. The full list with sizes is in the [CAD hardware table](../cad/README.md#hardware): M3 heat-set inserts, M3, M2.5 and M2 screws, rubber feet, foam tape or silicone for the chamber seal, polyester damping fill, acoustic fabric, heat-shrink. The board standoffs are printed into the chassis, and the USB-C cable plugs straight into the XIAO port, so no standoffs or panel-mount socket are needed. A mic mute slide switch is only needed if the open mute question goes that way.
+Not bought yet, all for the enclosure stage. The full list with sizes is in the [CAD hardware table](../cad/README.md#hardware). Still needed: foam tape or silicone for the chamber seal, hot glue for the wire holes, polyester damping fill, and heat-shrink. Rubber feet and acoustic fabric can wait until after the half-egg test rig. The board standoffs are printed into the chassis, and the USB-C cable plugs straight into the XIAO port, so no standoffs or panel-mount socket are needed. A mic mute slide switch is only needed if the open mute question goes that way.
 
 Optional sensors for later: LD2410-type mmWave presence, SHT4x temperature and humidity, VEML7700 light.
 
