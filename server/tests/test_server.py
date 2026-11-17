@@ -131,8 +131,10 @@ def test_conversation_with_streaming_and_follow_up():
     data, rate = decode(first.final)
     assert rate == 48000 and data.ndim == 1 and len(data) / rate > 2.0
 
-    # The silent follow-up closes quietly: no transcript, no reply, no error sound.
-    assert pb.VOICE_ASSISTANT_STT_END not in third.types() and pb.VOICE_ASSISTANT_ERROR not in third.types()
+    # The silent follow-up closes quietly: no transcript, no reply. The error code is the one
+    # the firmware treats as silent, and an error is the only end the egg handles in every state.
+    assert pb.VOICE_ASSISTANT_STT_END not in third.types()
+    assert third.data(pb.VOICE_ASSISTANT_ERROR)["code"] == "stt-no-text-recognized"
     assert third.types()[-1] == pb.VOICE_ASSISTANT_RUN_END
 
 
@@ -156,6 +158,14 @@ def test_follow_up_only_after_questions():
     egg, _ = asyncio.run(converse([speech()], FakeSTT(["hi"]), SlowBrain([["Hello."]], pause=0), ToneTTS(), Options(follow_up="questions")))
     assert len(egg.runs) == 1
     assert egg.runs[0].data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] == "0"
+
+
+def test_an_empty_transcript_ends_with_the_silent_error():
+    egg, _ = asyncio.run(converse([speech()], FakeSTT([""]), SlowBrain([["unused"]], pause=0), ToneTTS(), Options(follow_up="off")))
+    (run,) = egg.runs
+    assert pb.VOICE_ASSISTANT_STT_END not in run.types()
+    assert run.data(pb.VOICE_ASSISTANT_ERROR)["code"] == "stt-no-text-recognized"
+    assert run.types()[-1] == pb.VOICE_ASSISTANT_RUN_END
 
 
 def test_a_failure_tells_the_egg():

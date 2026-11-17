@@ -136,18 +136,27 @@ class Robin:
         self._save_capture(t)
         t.task = asyncio.create_task(self._respond(t))
 
+    def _end_without_reply(self) -> None:
+        # A bare RUN_END is ignored if it lands before the egg has finished stopping its mic,
+        # which leaves it stuck "thinking". An error ends the run from any state, and the
+        # firmware plays no error sound for this code.
+        self._follow_up_pending = False
+        self.send(self.E.VOICE_ASSISTANT_ERROR, {"code": "stt-no-text-recognized", "message": "No speech was recognised"})
+        self.send(self.E.VOICE_ASSISTANT_RUN_END)
+
     async def _respond(self, t: Turn) -> None:
         E = self.E
         try:
             if not t.vad.speech_started:
                 LOG.info("Nobody spoke; closing quietly")
-                self.send(E.VOICE_ASSISTANT_RUN_END)
+                self._end_without_reply()
                 return
             t0 = time.monotonic()
             heard = await asyncio.to_thread(self.stt.transcribe, bytes(t.audio))
             LOG.info('Heard: "%s" (STT %.2f s)', heard, time.monotonic() - t0)
             if not heard:
-                self.send(E.VOICE_ASSISTANT_RUN_END)
+                LOG.info("Nothing recognisable was said; closing quietly")
+                self._end_without_reply()
                 return
             self.send(E.VOICE_ASSISTANT_STT_END, {"text": heard})
             self.send(E.VOICE_ASSISTANT_INTENT_START)
