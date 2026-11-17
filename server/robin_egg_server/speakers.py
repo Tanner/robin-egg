@@ -274,6 +274,9 @@ class SpeakerId:
         self.thresholds = thresholds or Thresholds()
 
     def identify(self, pcm16: bytes, seconds: float, previous: Match | None, keys: set[str]) -> Match:
+        # Someone dropped from the people list since the last turn must not be carried forward.
+        if previous is not None and previous.key not in keys:
+            previous = None
         embedding = self.embedder.embed(pcm16)
         ranked = scores(embedding, self.store, keys)
         m = decide(ranked, seconds, self.thresholds, previous)

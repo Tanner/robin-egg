@@ -378,6 +378,18 @@ def test_someone_removed_from_users_is_not_sent(tmp_path):
     assert brain.users == ["Unknown Speaker"]
 
 
+def test_an_inherited_speaker_removed_from_users_is_not_sent(tmp_path):
+    lists = [["tanner", "ryan"], ["ryan"]]
+
+    async def fetch():
+        return [Person(k, k.title()) for k in lists.pop(0)]
+
+    brain = SlowBrain([["Sunny. "], ["Rain. "]], pause=0)
+    asyncio.run(converse([speech(2.0), speech(0.6)], FakeSTT(["what's the weather", "and tomorrow"]), brain, ToneTTS(),
+                         **identify_with(FakeEmbedder([TANNER, BORDERLINE]), tmp_path, people=People(fetch, max_age_s=0.0))))
+    assert brain.users == ["tanner", "Unknown Speaker"]
+
+
 def test_without_a_people_list_nobody_is_identified(tmp_path):
     brain = SlowBrain([["Hello. "]], pause=0)
     asyncio.run(converse([speech(2.0)], FakeSTT(["hi"]), brain, ToneTTS(), Options(follow_up="off"),
