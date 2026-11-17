@@ -15,7 +15,7 @@ from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.__main__ import parse_args
 from robin_egg_server.brain import QuietTurn, RobinBrain, RobinUnavailable, server_url, strip_markdown
-from robin_egg_server.egg import NO_REPLY, Options
+from robin_egg_server.egg import FAILED_TURN, NO_REPLY, Options
 from test_server import FakeSTT, ToneTTS, converse, speech
 
 
@@ -284,11 +284,12 @@ def test_a_quiet_robin_turn_ends_silently_on_the_egg():
     assert run.types()[-1] == pb.VOICE_ASSISTANT_RUN_END
 
 
-def test_robin_being_down_plays_the_error_sound():
+def test_robin_being_down_is_spoken_as_an_apology():
     egg, tts = asyncio.run(robin_converse([answer(outcome="stopped")], ["hello"], Options(follow_up="off")))
     (run,) = egg.runs
-    assert run.data(pb.VOICE_ASSISTANT_ERROR)["code"] == "robin-error"
-    assert tts.said == []
+    assert tts.said == [FAILED_TURN]
+    assert pb.VOICE_ASSISTANT_ERROR not in run.types()
+    assert run.types()[-1] == pb.VOICE_ASSISTANT_RUN_END
 
 
 @pytest.mark.parametrize("name", ["accepted", "typing"])
