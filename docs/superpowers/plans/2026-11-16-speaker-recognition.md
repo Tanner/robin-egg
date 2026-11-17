@@ -143,12 +143,13 @@ mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx http
 
 **Files:**
 - Modify: `server/robin_egg_server/brain.py` (`Brain.reply`, `EchoBrain.reply`, `RobinBrain`)
+- Modify: `server/robin_egg_server/speakers.py` (add `People`)
 - Modify: `server/robin_egg_server/__main__.py` (remove `--default-speaker-name`)
 - Modify: `server/README.md:87`, `docs/robin-chat-api.md:159`
 - Test: `server/tests/test_robin_brain.py`, `server/tests/test_server.py`
 
 **Interfaces:**
-- Consumes: `UNKNOWN_SPEAKER` from Task 1.
+- Consumes: `UNKNOWN_SPEAKER`, `Person` and `people_for_agent` from Task 1.
 - Produces: `Brain.reply(heard: str, user: str) -> AsyncIterator[str]`. `RobinBrain(url, agent, timeout_s=90.0)` with no `user` parameter. `RobinBrain.people() -> list[Person]` (async; `GET {url}/api/users` through `people_for_agent`; raises `RobinUnavailable` when unreachable or not 200).
   - `class People(fetch: Callable[[], Awaitable[list[Person]]], max_age_s: float = 300.0)` in `speakers.py` with `async current(force: bool = False) -> list[Person] | None` (refetches when stale or forced; on failure logs `Could not refresh the people list from robin-assistant; keeping the last one` and returns the last good list, or `None` if there never was one) and `keys -> set[str]` (empty until fetched).
 
