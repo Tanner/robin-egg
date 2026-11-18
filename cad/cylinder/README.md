@@ -26,7 +26,7 @@ Same as the egg ([hardware table](../egg/README.md#hardware)), except there is n
 - 4 × M3 heat-set inserts in the baffle bosses
 - 4 × M3 × 25 screws, base to body
 - 4 × M3 × 8 screws, speaker to baffle
-- 3 × M2.5 × 8 self-tapping screws, chassis to ledge
+- 3 × M2.5 × 6 self-tapping screws, chassis to ledge (× 8 works, with hot glue over the tips)
 - 3 × M2 × 6 self-tapping screws, board to standoffs
 - 3 rubber feet
 
@@ -34,19 +34,19 @@ Same as the egg ([hardware table](../egg/README.md#hardware)), except there is n
 
 Directions: the **front** is the side with the small key tab on the body's top lip. The **back** is the side with the USB-C notch, opposite it. **Right** (+x) is the right-hand side when you face the front.
 
-Also on hand: foam tape or silicone for the ledge, hot glue, and a loose handful of polyester fill.
+Also on hand: silicone for the ledge (not thick foam tape, see step 4), hot glue, and a loose handful of polyester fill.
 
 1. **Inserts.** Turn the body upside down. Press the 4 M3 heat-set inserts into the 4 holes around the big speaker hole, using a soldering iron.
 2. **Speaker.**
    - Solder the JST pigtail to the speaker, red to +.
-   - With the body still upside down, set the speaker over the big hole, cone facing you and magnet down into the body.
+   - With the body still upside down, set the speaker over the big hole, cone facing you and magnet down into the body. **The square flange sits on the outside face of the body, not inside the box.** The magnet needs all of the box's height: it ends 3.4 mm under the chassis this way, and hits the chassis if the flange is inside.
    - Line its 4 corner holes up with the 4 small holes and fix it with the 4 M3 × 8 screws.
 3. **Fill.** Turn the body upright. Loosely fill the chamber with polyester fill through the open top. Keep it loose.
 4. **Chassis.**
-   - Put foam tape or a bead of silicone on the ledge inside the body.
-   - Thread the speaker pigtail up through the chassis's wire hole.
+   - Put a thin bead of silicone on the ledge inside the body. Don't use thick foam tape. It lifts the chassis, and the board with it, and the top's mic posts only clear the board by 0.6 mm.
+   - Thread the speaker pigtail up through the chassis's wire hole. The hole is 8 mm so the JST plug fits through. A chassis printed before 2026-11-17 has a 4 mm hole: drill it out to 8 mm.
    - Drop the chassis onto the ledge, standoffs up. Turn it so the **single standoff points to the front and the pair to the back**. Only one of the three ways its screw holes line up is right, so check this.
-   - Fix it with the 3 M2.5 × 8 screws.
+   - Fix it with the 3 M2.5 screws. Use 6 mm ones if the kit has them. An 8 mm screw pokes about 1.5 mm into the box, so put a dab of hot glue over each tip.
    - Seal the wire hole with hot glue. The speaker box only works if it is airtight.
 5. **Base.**
    - Set the body on the base so the 4 posts meet the 4 inserts. The cone sits under the speaker.

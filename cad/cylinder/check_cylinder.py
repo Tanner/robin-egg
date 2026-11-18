@@ -23,7 +23,8 @@ def clashes(name, part, solids):
 for n, p in (("body", body), ("chassis", chassis), ("top", top)):
     clashes(n, p, bsol)
 
-driver = cyl(64, Z_BAFFLE, Z_BAFFLE + 36.5).union(cq.Workplane("XY").box(70, 70, 3, centered=(True, True, False)).translate((0, 0, Z_BAFFLE - 3)))
+# Dayton drawing: 3.0 mm flange, 38.6 mm behind it, 64 mm basket
+driver = cyl(64, Z_BAFFLE, Z_BAFFLE + 38.6).union(cq.Workplane("XY").box(70, 70, 3, centered=(True, True, False)).translate((0, 0, Z_BAFFLE - 3)))
 for n, p in (("base", base), ("body", body), ("chassis", chassis)):
     v = p.val().intersect(driver.val()).Volume()
     print("Speaker envelope against %s: %.2f mm3 overlap" % (n, v), flush=True)

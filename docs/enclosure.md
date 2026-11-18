@@ -56,7 +56,7 @@ Tanner's point (2026-11-15): a lone egg looks awkward and like it could roll. Ry
 | DMA70-4 frame | 70 mm square | Measured on the bench 2026-11-17. Matches the 70 × 70 envelope in `cad/egg/check.py` |
 | DMA70-4 screw holes | About 3.65 mm across, 59.35 mm centre to centre along a side (55.7 mm inner edges, 63 mm outer edges). The CAD's 59.46 mm is 0.1 mm off, well inside the screw clearance | Measured on the bench 2026-11-17 |
 | DMA70-4 basket diameter | Passes the 66 mm baffle hole | Checked on the bench 2026-11-17 |
-| DMA70-4 depth behind the mounting face | Estimated at 36 to 37 mm. The fit check models 35.6 mm, but the chamber leaves 39 mm under the chassis, so up to about 38 mm fits | Bench estimate 2026-11-17. Not yet measured exactly |
+| DMA70-4 depth | 3.0 mm flange plus 38.6 mm behind it, 41.6 mm overall. Basket 64 mm. The cylinder's fit check uses these. With the flange under the baffle, the magnet clears the chassis by 3.4 mm | Dayton drawing, `reference/datasheets/dayton-dma70-4-spec.pdf`. The earlier 36 to 37 mm bench estimate was short |
 
 ## Speaker chamber
 
