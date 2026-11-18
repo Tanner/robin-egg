@@ -11,6 +11,7 @@ import socket
 import sys
 from pathlib import Path
 
+from . import config
 from .brain import server_url
 from .digest import DEFAULT_MAX as DEFAULT_DIGEST_MAX, MAX_MAX as MAX_DIGEST_MAX, MIN_MAX as MIN_DIGEST_MAX
 from .egg import READY_CHIME, Options, Robin
@@ -129,7 +130,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--restart-idle-minutes", type=float, default=DEFAULT_IDLE_MINUTES, metavar="MINUTES", help=f"How long the egg must be idle before --restart-on-change restarts the server (default {DEFAULT_IDLE_MINUTES:g})")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
-    args = p.parse_args(argv)
+    config.add_arguments(p)
+    args = config.parse(p, argv)
     if args.default_speaker_name is not None:
         p.error('--default-speaker-name is gone: a voice the server cannot identify is now sent as "Unknown Speaker". Remove the flag.')
     if args.save_audio_hours < 0:
@@ -478,6 +480,7 @@ def main() -> None:
     setup_logging(args.verbose)
     if args.restart_on_change and not args.demo and not supervised():
         sys.exit(supervise())
+    config.log_report(args.config_report)
     restart = False
     with contextlib.suppress(KeyboardInterrupt):
         restart = asyncio.run(run(args))
