@@ -2,6 +2,8 @@
 
 GET  /audio/<id>.flac  the egg's media player fetches replies here, while they are still being written
 POST /announce         body is text; Robin speaks it on the egg (proactive speech)
+GET  /quiet            whether someone has asked Robin by voice not to speak first, and until when
+DELETE /quiet          ends that, so Robin may speak first again
 GET  /                 a one-line health check
 """
 
@@ -28,6 +30,7 @@ class AudioServer:
         self._keep = keep
         self._server: asyncio.base_events.Server | None = None
         self.on_announce: Callable[[str], Awaitable[tuple[int, str]]] | None = None
+        self.on_quiet: Callable[[str], Awaitable[tuple[int, str]]] | None = None  # called with GET or DELETE
 
     def add(self, audio: ReplyAudio, tag: str | None = None) -> str:
         """Registers a reply and returns the URL the egg should fetch.
@@ -85,6 +88,9 @@ class AudioServer:
                     await self._reply(w, 400, "send the words to speak as the request body\n")
                     return
                 status, msg = await self.on_announce(text)
+                await self._reply(w, status, msg + "\n")
+            elif method in ("GET", "DELETE") and path == "/quiet" and self.on_quiet is not None:
+                status, msg = await self.on_quiet(method)
                 await self._reply(w, status, msg + "\n")
             elif method == "GET" and path == "/":
                 await self._reply(w, 200, "Robin Egg Server\n")

@@ -27,6 +27,7 @@ from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
+from .quiet import QuietMode
 from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
 from .voices import SpeechToText, TextToSpeech
@@ -56,6 +57,7 @@ class Options:
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
+    quiet_state: Path | None = None  # where a "quiet for an hour" pause is kept across restarts; in memory only if None
 
 
 @dataclass
@@ -107,7 +109,9 @@ class Robin:
         self._proactive_task: asyncio.Task | None = None  # the message being spoken now
         self._proactive_stopped_by = ""  # why the message being spoken was cut short
         self.proactive_sound = load_sound(self.opts.proactive_sound or PROACTIVE_CHIME)
+        self.quiet = QuietMode(self.opts.quiet_state, morning_hour=self.opts.speaking_hours[0])
         web.on_announce = self.announce
+        web.on_quiet = self.quiet.http
 
     # ---- events to the egg ----
 
@@ -229,7 +233,11 @@ class Robin:
                 return
             self.send(E.VOICE_ASSISTANT_STT_END, {"text": heard})
             self.send(E.VOICE_ASSISTANT_INTENT_START)
-            if self.commands is not None:
+            # Mid-enrolment every turn is an answer to the enrolment, whatever it sounds like.
+            quiet_step = None if enrolling else self.quiet.handle(heard)
+            if quiet_step is not None:
+                step = quiet_step
+            elif self.commands is not None:
                 step = await self.commands.handle(heard, match)
             elif is_voice_command(heard):
                 # Robin would only guess at what this means, so the egg answers it itself.
@@ -379,6 +387,16 @@ class Robin:
         start, end = self.opts.speaking_hours
         return f"{start}:00 to {end}:00"
 
+    def _why_not_speak_first(self) -> str | None:
+        """Why Robin may not speak first right now, or None when it may.
+
+        The one place that decides it, for Robin's own messages and /announce alike. Whether
+        the egg is free to play something this second is a separate question: _busy_reason.
+        """
+        if not self._in_speaking_hours():
+            return f"outside speaking hours ({self._hours()})"
+        return self.quiet.reason()
+
     async def _announcement(self, text: str, chime: bool = False) -> ReplyAudio:
         """The whole announcement as one finished file, spoken sentence by sentence.
 
@@ -394,8 +412,10 @@ class Robin:
     async def announce(self, text: str) -> tuple[int, str]:
         if self.client is None:
             return 503, "the egg is not connected"
-        if not self._in_speaking_hours():
-            return 409, f"outside speaking hours ({self._hours()}); not spoken"
+        refusal = self._why_not_speak_first()
+        if refusal:
+            LOG.info('Not announcing "%s": %s', text, refusal)
+            return 409, f"{refusal}; not spoken"
 
         self._announce_count += 1
         with tagged(f"a{self._announce_count}"):
@@ -426,12 +446,13 @@ class Robin:
     async def proactive(self, msg: SpeakerMessage) -> None:
         """A message Robin sent on its own: a chime, then the message, once the egg is idle.
 
-        Outside speaking hours it is dropped, not saved for later. Messages that arrive
+        Outside speaking hours, or while someone has asked for quiet, it is dropped, not saved for later. Messages that arrive
         together are spoken in order, one chime each.
         """
         with tagged(msg.tag):
-            if not self._in_speaking_hours():
-                LOG.info("Dropped message %s: outside speaking hours (%s)", msg.describe(), self._hours())
+            refusal = self._why_not_speak_first()
+            if refusal:
+                LOG.info("Dropped message %s: %s", msg.describe(), refusal)
                 return
             if self._proactive_task is not None and not self._proactive_task.done():
                 busy: str | None = "another message is being spoken"
@@ -460,8 +481,9 @@ class Robin:
             msg = await self._proactive_queue.get()
             with tagged(msg.tag):  # the speaking task started here keeps the tag
                 await self._until_idle()
-                if not self._in_speaking_hours():
-                    LOG.info("Dropped message %s: speaking hours (%s) ended while it waited", msg.describe(), self._hours())
+                refusal = self._why_not_speak_first()
+                if refusal:
+                    LOG.info("Dropped message %s after it waited for the egg to be idle: %s", msg.describe(), refusal)
                     continue
                 self._proactive_stopped_by = ""
                 self._proactive_task = task = asyncio.create_task(self._say_proactive(msg))

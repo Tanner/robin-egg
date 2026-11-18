@@ -88,6 +88,7 @@ Say "Okay Nabu" (the stock wake word), then a question. macOS asks whether Pytho
 Robin also writes messages into the plain web chat on its own: a reminder coming due, a scheduled task, a held update, a routine. The server holds robin-assistant's speaker stream (`GET /api/chat/:agent/speaker`) open for its whole life and speaks each message after a sound.
 
 - Only between 8 AM and 8 PM. Change it with `--speaking-hours`. A message outside those hours is dropped, not saved for later.
+- Not while someone has asked for quiet by voice. See [Asking Robin to be quiet](#asking-robin-to-be-quiet).
 - It never talks over the egg. A message that arrives while the egg is listening, thinking or playing a reply waits until the egg is idle. Several waiting messages are spoken in order, each after its own sound.
 - The wake word stops a message partway, as it stops a reply.
 - Nothing is replayed. A message sent while the server is not connected is missed, but it is still in the chat. The stream closes when Robin reloads, and the server reconnects after 1 s, doubling to 30 s.
@@ -101,6 +102,28 @@ curl -d "Time to leave for the airport." http://localhost:8765/announce
 ```
 
 The egg plays the proactive chime first, then speaks, within the same speaking hours.
+
+## Asking Robin to be quiet
+
+Say the wake word, then ask for quiet. Robin stops speaking first until the time you gave: its own messages and `/announce` are dropped, as they are outside speaking hours, and the log says why. Robin still answers when you ask it something. Speaking hours still apply on top, so ending the pause at night does not make Robin speak before morning.
+
+| Say | What happens |
+| --- | --- |
+| "quiet for an hour", "be quiet for 30 minutes", "quiet for an hour and a half", "do not disturb for two hours" | Quiet for that long, from 1 minute to 24 hours. "For a while" is an hour. |
+| "quiet until 7", "quiet until 4:15", "quiet until 9 AM", "quiet until noon" | Quiet until that time. With no AM or PM it is the next time the clock shows it. |
+| "quiet until tomorrow", "quiet for the rest of the day", "do not disturb" | Quiet until speaking hours start on the next day (8 AM if they start at midnight). "Until morning" is the next time that hour comes. |
+| "you can talk again", "you can speak again", "stop being quiet", "turn off do not disturb" | Ends the pause. |
+
+Robin confirms in one sentence, such as "Okay, I'll stay quiet until 3:30 PM." If it heard a request for quiet but not for how long, it asks you to say it again and changes nothing. "Be quiet" on its own is not a command and goes to Robin like any other sentence. The commands work with speaker recognition on or off, and anyone may use them. They are not heard as commands in the middle of teaching Robin a voice.
+
+The pause survives a restart of the server. It is kept as one time in `~/.robin-egg/quiet.json` (`--quiet-state`), so a crash or an update in the middle of a nap does not let Robin speak early, and it ends by itself when the time passes. Messages dropped during the pause are not replayed afterwards; they are still in the chat.
+
+To see or end the pause from the Mac:
+
+```sh
+curl http://localhost:8765/quiet             # "quiet was asked for until 3:30 PM" or "quiet mode is off"
+curl -X DELETE http://localhost:8765/quiet   # Robin may speak first again
+```
 
 ## Telling voices apart
 
@@ -151,6 +174,7 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 | `--robin-announcements`, `--no-robin-announcements` | on | Speak the messages Robin sends on its own. Not used with `--echo`. |
 | `--proactive-sound FILE` | `sounds/proactive.flac` | The sound before Robin speaks first: wav, aiff or flac. |
 | `--speaking-hours` | `8-20` | When Robin may speak first, its own messages and `/announce`. `0-24` for always. |
+| `--quiet-state` | `~/.robin-egg/quiet.json` | Where a pause asked for by voice ("quiet for an hour") is kept, so a restart does not end it early. |
 | `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the turn failed. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
 | `--tts piper\|say` | `piper` | Which text-to-speech engine to use. |
@@ -170,6 +194,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
+- Quiet by voice. The phrases have only been matched against typed transcripts, not what Whisper writes for real speech from the egg's mic, such as how it spells times ("7 p.m.", "7:30", "seven thirty").
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 
 ## Files
@@ -183,9 +208,11 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
 | `robin_egg_server/speakers.py` | Speaker embeddings, the voiceprint store, and matching a voice to a person |
 | `robin_egg_server/commands.py` | The "learn my voice" and "forget my voice" conversations |
-| `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
+| `robin_egg_server/quiet.py` | Do-not-disturb by voice: the phrases, the spoken durations and the pause |
+| `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce` and `/quiet` |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
+| `tests/test_quiet.py` | Quiet by voice: the phrases, the pause and its file, and the pause through the fake egg |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |

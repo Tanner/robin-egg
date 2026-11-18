@@ -22,6 +22,7 @@ LOG = logging.getLogger("robin")
 # Robin's voice, chosen on the bench on 2026-11-16.
 DEFAULT_PIPER_VOICE = Path(__file__).resolve().parent.parent / "voices" / "en_US-ryan-medium.onnx"
 DEFAULT_VOICEPRINTS = Path("~/.robin-egg/voiceprints.json").expanduser()
+DEFAULT_QUIET_STATE = Path("~/.robin-egg/quiet.json").expanduser()
 # The same line as in server/README.md, run from server/.
 SPEAKER_MODEL_DOWNLOAD = (
     "mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx "
@@ -56,6 +57,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 0-24 for always")
+    p.add_argument("--quiet-state", default=str(DEFAULT_QUIET_STATE), help="Where a pause asked for by voice ('quiet for an hour') is kept, so a restart does not end it early (default ~/.robin-egg/quiet.json)")
     p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -118,6 +120,7 @@ def build(args: argparse.Namespace):
         speaking_hours=(start, end),
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
+        quiet_state=Path(args.quiet_state).expanduser(),
     )
     if opts.proactive_sound and not opts.proactive_sound.exists():
         raise SystemExit(f"Proactive sound not found at {opts.proactive_sound}")
@@ -167,6 +170,7 @@ async def run(args: argparse.Namespace) -> None:
         ip = args.advertise_ip or local_ip_toward(args.host)
         await web.start("0.0.0.0", args.http_port, ip)
         LOG.info("Proactive speech: curl -d 'Hello from Robin' %s/announce", web.base_url)
+        LOG.info("Quiet mode: curl %s/quiet shows it, and curl -X DELETE %s/quiet ends it", web.base_url, web.base_url)
         stop = asyncio.Event()
         listener = None
         if not args.echo and args.robin_announcements:
