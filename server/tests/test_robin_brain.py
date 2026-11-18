@@ -417,8 +417,8 @@ def test_robin_replies_are_spoken_on_the_egg_sentence_by_sentence():
     assert pb.VOICE_ASSISTANT_ERROR not in run.types()
 
 
-def test_a_quiet_robin_turn_ends_silently_on_the_egg():
-    egg, tts = asyncio.run(robin_converse([answer(outcome="quiet")], ["never mind"], Options(follow_up="always")))
+def test_a_quiet_robin_turn_ends_silently_on_the_egg_when_the_closing_sound_is_off():
+    egg, tts = asyncio.run(robin_converse([answer(outcome="quiet")], ["never mind"], Options(follow_up="always", closing_cue=False)))
     (run,) = egg.runs  # no follow-up after a silent turn
     assert tts.said == [] and NO_REPLY not in tts.said
     assert run.data(pb.VOICE_ASSISTANT_ERROR)["code"] == "stt-no-text-recognized"  # the firmware's silent end

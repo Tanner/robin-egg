@@ -154,10 +154,9 @@ def test_conversation_with_streaming_and_follow_up():
     data, rate = decode(first.final)
     assert rate == 48000 and data.ndim == 1 and len(data) / rate > 2.0
 
-    # The silent follow-up closes quietly: no transcript, no reply. The error code is the one
-    # the firmware treats as silent, and an error is the only end the egg handles in every state.
-    assert pb.VOICE_ASSISTANT_STT_END not in third.types()
-    assert third.data(pb.VOICE_ASSISTANT_ERROR)["code"] == "stt-no-text-recognized"
+    # The silent follow-up closes with the closing sound: no transcript, no words, no follow-up.
+    assert pb.VOICE_ASSISTANT_STT_END not in third.types() and pb.VOICE_ASSISTANT_TTS_START not in third.types()
+    assert third.data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] == "0"
     assert third.types()[-1] == pb.VOICE_ASSISTANT_RUN_END
 
 
@@ -183,8 +182,8 @@ def test_follow_up_only_after_questions():
     assert egg.runs[0].data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] == "0"
 
 
-def test_an_empty_transcript_ends_with_the_silent_error():
-    egg, _ = asyncio.run(converse([speech()], FakeSTT([""]), SlowBrain([["unused"]], pause=0), ToneTTS(), Options(follow_up="off")))
+def test_an_empty_transcript_ends_with_the_silent_error_when_the_closing_sound_is_off():
+    egg, _ = asyncio.run(converse([speech()], FakeSTT([""]), SlowBrain([["unused"]], pause=0), ToneTTS(), Options(follow_up="off", closing_cue=False)))
     (run,) = egg.runs
     assert pb.VOICE_ASSISTANT_STT_END not in run.types()
     assert run.data(pb.VOICE_ASSISTANT_ERROR)["code"] == "stt-no-text-recognized"
@@ -387,7 +386,7 @@ def test_each_turn_tags_its_log_lines(tmp_path, caplog):
     assert tag_of(caplog, 'Heard: "what\'s the weather"') == {"t1"}
     assert tag_of(caplog, 'Robin: "Sunny."') == {"t1"}
     # The egg fetching a turn's reply audio belongs to that turn too.
-    assert tag_of(caplog, "HTTP GET /audio/") == {"t1", "t2"}
+    assert tag_of(caplog, "HTTP GET /audio/") == {"t1", "t2", "t3"}  # t3 fetches its closing sound
     assert tag_of(caplog, "Follow-up to t1") == {"t2"}
     assert tag_of(caplog, 'Heard: "and tomorrow"') == {"t2"}
     # Speaker recognition logs from a worker thread, and still carries the turn's tag.

@@ -24,9 +24,13 @@ from .audio import MIC_RATE, resample
 from .mic_mute import MUTE_OBJECT_ID
 
 PROTO_TO_TYPE = {v: k for k, v in MESSAGE_TYPE_TO_PROTO.items()}
+RING_EFFECTS = ["Breathe", "Twinkle", "Comet CW", "Comet CCW"]
+RING_AT_BOOT = {"on": False, "brightness": 1.0, "effect": "None"}  # restore_mode RESTORE_DEFAULT_OFF
 CHUNK = 1024  # bytes of mic audio per message, 32 ms
 MUTE_KEY = 0x4D555445  # the fake's entity key for the mute switch; the server must not depend on it
 RING_KEY = 0x1ED  # the LED ring light's entity key
+MEDIA_PLAYER_KEY = 0x5EA4E401  # entity keys are hashes on the real egg, so nothing may assume a value
+GROUP_PLAYER_KEY = 0x5EA4E402
 
 
 def varint(n: int) -> bytes:
@@ -69,6 +73,7 @@ class Run:
     first_byte_at: float | None = None
     tts_end_at: float | None = None
     ring: list[tuple[float, float, float]] = field(default_factory=list)  # the LED ring's colour as each event arrived
+    volume_at_playback: float | None = None  # the media player's volume when the reply started playing
 
     def types(self) -> list[int]:
         return [t for t, _ in self.events]
@@ -81,9 +86,28 @@ class Run:
 
 
 class FakeEgg:
-    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu", announce_seconds: float = 0.0, wake_words: list[str | None] | None = None, mute_switch: bool = True, muted: bool = False) -> None:
+    def __init__(
+        self,
+        utterances: list[bytes],
+        realtime: bool = False,
+        wake_word: str = "Okay Nabu",
+        announce_seconds: float = 0.0,
+        wake_words: list[str | None] | None = None,
+        mute_switch: bool = True,
+        muted: bool = False,
+        volume: float = 0.5,
+        speaker_muted: bool = False,
+        media_player_object_id: str = "media_player",
+    ) -> None:
         """wake_words, when given, says how each run starts, one per utterance: a wake word
-        starts that run even if the server did not ask for a follow-up, and None means a follow-up."""
+        starts that run even if the server did not ask for a follow-up, and None means a follow-up.
+
+        muted is the microphone mute switch; speaker_muted is the media player's own mute.
+        The media player starts at the firmware's first-boot volume, 0.5, and is listed under
+        the firmware's object id unless media_player_object_id names another."""
+        self.volume, self.speaker_muted = volume, speaker_muted
+        self.media_player_object_id = media_player_object_id
+        self.volumes_set: list[float] = []  # every volume the server asked for, in order
         self.utterances = list(utterances)
         self.realtime = realtime
         self.wake_word = wake_word
@@ -96,8 +120,9 @@ class FakeEgg:
         self._announce_cut = asyncio.Event()
         # The "LED Ring" light. Its colour is the accent of the voice animations; the firmware's stock one is purple.
         self.ring_rgb: tuple[float, float, float] = (1.0, 0.0, 1.0)
-        self.ring_on = False
+        self.ring = dict(RING_AT_BOOT)  # the light's own state: on, brightness, effect
         self.ring_commands: list[tuple[float, float, float]] = []  # every colour the server set, in order
+        self.ring_changes: list[dict] = []  # every on, brightness or effect change the server made, as the fields it set
         self.done = asyncio.Event()
         self.mute_switch = mute_switch  # False for firmware with no "Microphone Mute" switch
         self.muted = muted
@@ -161,21 +186,20 @@ class FakeEgg:
         elif isinstance(msg, pb.ListEntitiesRequest):
             if self.mute_switch:
                 self.send(pb.ListEntitiesSwitchResponse(object_id=MUTE_OBJECT_ID, key=MUTE_KEY, name="Microphone Mute"))
-            self.send(pb.ListEntitiesLightResponse(object_id="led_ring", key=RING_KEY, name="LED Ring", supported_color_modes=[pb.COLOR_MODE_RGB], effects=["Breathe", "Twinkle", "Comet CW", "Comet CCW"]))
+            self.send(pb.ListEntitiesLightResponse(object_id="led_ring", key=RING_KEY, name="LED Ring", supported_color_modes=[pb.COLOR_MODE_RGB], effects=RING_EFFECTS))
+            # The firmware lists a Sendspin group player as well as the speaker's own.
+            self.send(pb.ListEntitiesMediaPlayerResponse(object_id="sendspin_group", key=GROUP_PLAYER_KEY, name="Sendspin Group"))
+            self.send(pb.ListEntitiesMediaPlayerResponse(object_id=self.media_player_object_id, key=MEDIA_PLAYER_KEY, name="Media Player"))
             self.send(pb.ListEntitiesDoneResponse())
         elif isinstance(msg, pb.SubscribeStatesRequest):
             self._states_subscribed = True
             if self.mute_switch:
                 self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=self.muted))
             self._send_ring_state()
+            self.send(pb.MediaPlayerStateResponse(key=GROUP_PLAYER_KEY, state=pb.MEDIA_PLAYER_STATE_IDLE, volume=1.0))
+            self._send_volume()
         elif isinstance(msg, pb.LightCommandRequest) and msg.key == RING_KEY:
-            # Like the firmware's light: a colour-only command changes the colour and leaves the light on or off as it was.
-            if msg.has_rgb:
-                self.ring_rgb = (msg.red, msg.green, msg.blue)
-                self.ring_commands.append(self.ring_rgb)
-            if msg.has_state:
-                self.ring_on = msg.state
-            self._send_ring_state()
+            self._on_ring_command(msg)
         elif isinstance(msg, pb.SubscribeVoiceAssistantRequest) and msg.subscribe:
             await asyncio.sleep(0.05)
             first = self.wake_words[0] if self.wake_words else None
@@ -187,10 +211,30 @@ class FakeEgg:
             await self._on_event(msg.event_type, {d.name: d.value for d in msg.data})
         elif isinstance(msg, pb.VoiceAssistantAnnounceRequest):
             asyncio.create_task(self._announce(msg))
+        elif isinstance(msg, pb.MediaPlayerCommandRequest) and msg.key == MEDIA_PLAYER_KEY:
+            if msg.has_command and msg.command in (pb.MEDIA_PLAYER_COMMAND_MUTE, pb.MEDIA_PLAYER_COMMAND_UNMUTE):
+                self.speaker_muted = msg.command == pb.MEDIA_PLAYER_COMMAND_MUTE
+            if msg.has_volume:
+                self.volume = msg.volume
+                self.volumes_set.append(msg.volume)
+            if self._states_subscribed:
+                self._send_volume()
+
+    def _send_volume(self) -> None:
+        self.send(pb.MediaPlayerStateResponse(key=MEDIA_PLAYER_KEY, state=pb.MEDIA_PLAYER_STATE_IDLE, volume=self.volume, muted=self.speaker_muted))
+
+    @property
+    def ring_on(self) -> bool:
+        return self.ring["on"]
 
     def _send_ring_state(self) -> None:
         r, g, b = self.ring_rgb
-        self.send(pb.LightStateResponse(key=RING_KEY, state=self.ring_on, brightness=0.8, color_mode=pb.COLOR_MODE_RGB, color_brightness=1.0, red=r, green=g, blue=b))
+        self.send(
+            pb.LightStateResponse(
+                key=RING_KEY, state=self.ring["on"], brightness=self.ring["brightness"], effect=self.ring["effect"],
+                color_mode=pb.COLOR_MODE_RGB, color_brightness=1.0, red=r, green=g, blue=b,
+            )
+        )
 
     async def _announce(self, msg) -> None:
         body = await asyncio.to_thread(self._get, msg.media_id)
@@ -218,6 +262,26 @@ class FakeEgg:
         self.muted = muted
         if self.mute_switch and self._states_subscribed and self._w is not None:
             self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=muted))
+
+    def _on_ring_command(self, msg) -> None:
+        """Like an ESPHome light: only the fields a command sets change, and the new state is reported back.
+
+        A colour-only command changes the colour and leaves the light on or off as it was.
+        """
+        if msg.has_rgb:
+            self.ring_rgb = (msg.red, msg.green, msg.blue)
+            self.ring_commands.append(self.ring_rgb)
+        change: dict = {}
+        if msg.has_state:
+            change["on"] = msg.state
+        if msg.has_brightness:
+            change["brightness"] = round(msg.brightness, 4)
+        if msg.has_effect:
+            change["effect"] = msg.effect
+        if change:
+            self.ring_changes.append(change)
+            self.ring.update(change)
+        self._send_ring_state()
 
     def wake(self) -> None:
         """Hear the wake word now, cutting off any announcement that is playing."""
@@ -250,10 +314,12 @@ class FakeEgg:
         if t == pb.VOICE_ASSISTANT_STT_VAD_END:
             self._mic_open = False
         elif t == pb.VOICE_ASSISTANT_INTENT_PROGRESS and data.get("tts_start_streaming") == "1":
+            run.volume_at_playback = self.volume
             self._fetch = asyncio.create_task(self._fetch_reply(run, run.data(pb.VOICE_ASSISTANT_RUN_START)["url"]))
         elif t == pb.VOICE_ASSISTANT_TTS_END:
             run.tts_end_at = time.monotonic()
             if self._fetch is None:  # not streamed: play the finished file now
+                run.volume_at_playback = self.volume
                 self._fetch = asyncio.create_task(self._fetch_reply(run, data["url"]))
         elif t == pb.VOICE_ASSISTANT_RUN_END:
             self._mic_open = False

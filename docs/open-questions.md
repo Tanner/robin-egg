@@ -8,7 +8,7 @@ Everything undecided or unverified. When one closes, move the answer to [decisio
 
 - **Training "Hey Robin".** In progress: Colab notebook at `wakeword/hey_robin_training.ipynb` (Piper samples, household confusables as negatives, real takes from Tanner and Ryan).
 - **How to load a custom model into the formatBCE firmware.** Answered: add the local `hey_robin.json` manifest to the `micro_wake_word.models` list. Put it first, because only the first model is on at first boot. See `wakeword/README.md`.
-- **False triggers.** The HomeView answers to "Hey Siri" in the same room, and the TV says "Robin" sometimes. Needs a week of real use to judge.
+- **False triggers.** The HomeView answers to "Hey Siri" in the same room, and the TV says "Robin" sometimes. Needs a week of real use to judge. The server's turn log counts wake-ups where nobody spoke, per day and per wake word; see "Measuring latency and false wake-ups" in `server/README.md`.
 - **Both voices.** Train and test with Tanner and Ryan.
 - **Sensitivity.** The firmware exposes a threshold setting. Pick a value after testing.
 - **Follow-up without the wake word.** Does the mic reopen after Robin's reply for a few seconds? formatBCE's one open issue is about this window opening too early on long replies.
@@ -21,7 +21,7 @@ Everything undecided or unverified. When one closes, move the answer to [decisio
 - **Protocol details.** Message types, audio codec and sample rate, how the server tells the egg to stop, barge-in, reconnect behaviour, a version field.
 - **Speech-to-text.** Local Whisper-family model on the Mac mini, or robin-assistant's existing OpenAI transcription. Local is faster and private.
 - **Text-to-speech.** Piper locally, or robin-assistant's OpenAI voice. What does Robin sound like?
-- **Latency budget.** robin-assistant does not stream tokens. How long is the gap between the end of a question and the first spoken word, and is a "thinking" sound enough to cover it?
+- **Latency budget.** robin-assistant does not stream tokens. How long is the gap between the end of a question and the first spoken word, and is a "thinking" sound enough to cover it? The server's turn log records the gap for every turn, and `python -m robin_egg_server.stats` gives the median and 90th percentile.
 
 ## robin-assistant integration
 
@@ -53,8 +53,7 @@ Tanner listed this without a fixed meaning. The working definition is any way to
 - **What counts as urgent.** Robin's judgement per task, guided by the tool description. Needs real use to see whether it over-marks, since an urgent message can wake the house.
 - **Presence gating.** Only chime when someone is in the room. If nobody is there, text. A stand-in exists until there is a sensor: with `--presence-minutes N` the server speaks Robin's own messages only if someone spoke to the egg in the last N minutes, and drops them otherwise (`server/robin_egg_server/presence.py`). It is off by default. Still open: what N should be, whether a dropped message should light the ring or go out as a text instead, and replacing the guess with the mmWave sensor or the firmware's voice-direction sensor behind the same `Presence` interface. An urgent message skips this check.
 - **Quiet hours** and a do-not-disturb state. Speaking hours are the quiet hours today, and an urgent message is spoken through them. Whether a do-not-disturb state should also hold back urgent messages is open.
-- **LED language.** What listening, thinking, speaking, muted and "message waiting" look like on the ring.
-- **Message waiting.** A silent light that means "ask me what's new" may beat a chime.
+- **LED language.** What listening, thinking, speaking and muted look like on the ring. Message waiting is decided: see [decisions.md](decisions.md). Its look on the real ring is still unseen.
 
 ## Presence detection
 

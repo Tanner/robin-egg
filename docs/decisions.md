@@ -93,6 +93,18 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | There are three cues in all: listening, proactive and urgent | Small enough to learn |
 | An urgent message skips the `--presence-minutes` check, but a muted microphone silences it | Presence is a guess from the last voice turn. Mute is someone's own choice to have quiet |
 
+## Message waiting, decided 2026-11-17
+
+| Decision | Why |
+| --- | --- |
+| A message Robin sends on its own outside speaking hours is held, not dropped. The ring breathes softly while any are held, and "what did I miss?" reads them out | A silent light that means "ask me" does not wake or startle anyone, and the message is not lost |
+| The egg answers "what did I miss?" itself, for anyone, with or without speaker recognition | The messages would have been spoken to the whole room, and Robin does not know which ones the egg held |
+| The newest 10 messages are kept, each for 24 hours | Enough for a night or a day out. Older ones are stale as speech and are still in the chat |
+| Held messages live in the server's memory only. A server restart loses them and clears the light. An egg reconnect keeps them and shows the light again | They are in the chat already, so a second store is not worth keeping in step |
+| Nothing is announced when speaking hours begin. The light is the only sign | A burst of old messages at 8 AM is the unprompted talking that gets a device unplugged |
+| The light is the firmware's own "LED Ring" light with its "Breathe" effect at 35% brightness, in the ring's existing colour, set over the ESPHome API | No firmware change. The firmware already hides that light during a conversation and brings it back when idle |
+| The ring's own state is saved to `~/.robin-egg/ring-before-waiting.json` while the waiting light is on, and put back from it | The light's brightness is also the level of every ring animation, so it must go back even if the server restarts in between |
+
 ## Mute sounds, decided 2026-11-17
 
 | Decision | Why |

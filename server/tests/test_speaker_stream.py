@@ -258,7 +258,7 @@ def test_a_message_mid_reply_waits_for_the_reply_to_end(caplog):
     assert "Queued message 8 (no label) until the egg is idle: other messages are waiting" in caplog.text
 
 
-def test_a_message_outside_speaking_hours_is_dropped(caplog):
+def test_a_message_outside_speaking_hours_is_dropped_when_message_waiting_is_off(caplog):
     script = [message(9, "Good night.", "Bedtime")]
 
     async def scenario(egg, robin, tts, handled):
@@ -266,7 +266,7 @@ def test_a_message_outside_speaking_hours_is_dropped(caplog):
         await asyncio.wait_for(egg.done.wait(), 10)
 
     with caplog.at_level(logging.INFO, logger="robin"):
-        egg, robin, tts = asyncio.run(egg_with_speaker([script], [], [], SlowStartBrain(""), Options(speaking_hours=(0, 0)), scenario))
+        egg, robin, tts = asyncio.run(egg_with_speaker([script], [], [], SlowStartBrain(""), Options(speaking_hours=(0, 0), message_waiting=False), scenario))
     assert egg.announcements == [] and tts.said == []
     assert robin._proactive_queue.empty()  # dropped, not saved for later
     assert "Dropped message 9 (Bedtime): outside speaking hours" in caplog.text

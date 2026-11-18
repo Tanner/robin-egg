@@ -114,11 +114,14 @@ class RoomVolume:
         LOG.info("Reply volume %.0f%%: %s; %s", gain * 100, " and ".join(reasons) or "nothing to match", measured)
         return gain
 
-    def for_announcement(self) -> float:
-        """The gain for something Robin says first, its chime included. Only the clock counts."""
+    def for_announcement(self, what: str = "Announcement volume") -> float:
+        """The gain for something Robin says first, its chime included. Only the clock counts.
+
+        Also used for a sound with no voice to match, such as the closing sound. `what` names it in the log.
+        """
         if not self.in_quiet_hours():
-            LOG.info("Announcement volume %.0f%%: outside quiet hours", 100)
+            LOG.info("%s %.0f%%: outside quiet hours", what, 100)
             return 1.0
         gain = max(FLOOR_GAIN, self.quiet_gain)
-        LOG.info("Announcement volume %.0f%%: quiet hours (%s)", gain * 100, self._hours())
+        LOG.info("%s %.0f%%: quiet hours (%s)", what, gain * 100, self._hours())
         return gain

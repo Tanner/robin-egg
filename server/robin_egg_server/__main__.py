@@ -20,6 +20,8 @@ from .logs import setup as setup_logging
 from .room import FLOOR_GAIN, parse_hours
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .vad import VAD_KINDS
+from .turn_log import DEFAULT_TURN_LOG
+from .volume import MIN_VOLUME
 from .web import AudioServer
 
 LOG = logging.getLogger("robin")
@@ -28,6 +30,7 @@ LOG = logging.getLogger("robin")
 DEFAULT_PIPER_VOICE = Path(__file__).resolve().parent.parent / "voices" / "en_US-ryan-medium.onnx"
 DEFAULT_VOICEPRINTS = Path("~/.robin-egg/voiceprints.json").expanduser()
 DEFAULT_QUIET_STATE = Path("~/.robin-egg/quiet.json").expanduser()
+RING_FILE = Path("~/.robin-egg/ring-before-waiting.json").expanduser()
 # The same line as in server/README.md, run from server/.
 SPEAKER_MODEL_DOWNLOAD = (
     "mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx "
@@ -61,6 +64,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--say-voice", help="macOS voice name for `say`, e.g. Samantha (`say -v '?'` lists them)")
     p.add_argument("--no-stream", action="store_true", help="Play the reply only once it is complete (fallback if streaming misbehaves)")
     p.add_argument("--thinking-cue", action=argparse.BooleanOptionalAction, default=True, help="Play a soft sound while Robin is slow to start answering (default on; --no-thinking-cue turns it off; not played with --no-stream)")
+    p.add_argument("--closing-cue", action=argparse.BooleanOptionalAction, default=True, help="Play a soft sound when the egg stops listening without a reply (default on; --no-closing-cue closes silently; not played with --no-stream)")
     p.add_argument("--thinking-delay", type=float, default=2.0, help="Seconds after the end of speech before the thinking sound starts")
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
@@ -73,6 +77,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-compression", type=float, default=2.4, help="Speech-to-text is unsure when Whisper's compression ratio is above this (default 2.4)")
     p.add_argument("--vad", choices=VAD_KINDS, default="energy", help="What finds the end of speech: energy (loudness against the room's noise floor) or model (the Silero speech model, which ignores noise that is not a voice)")
     p.add_argument("--speaker-recognition", action=argparse.BooleanOptionalAction, default=True, help="Tell household members apart by voice and let them enrol by saying 'learn my voice' (default on; --no-speaker-recognition turns it off; not used with --echo)")
+    p.add_argument("--offer-enrolment", action=argparse.BooleanOptionalAction, default=True, help="After a few questions from the same unrecognised voice, add a spoken hint that it can say 'learn my voice', while someone in the household has no voiceprint (default on; at most once a day)")
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--recognition-light", action=argparse.BooleanOptionalAction, default=True, help="Show a recognised speaker's colour on the LED ring while Robin thinks and replies (default on; needs speaker recognition)")
@@ -87,6 +92,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--offline-alert", type=float, default=10.0, metavar="MINUTES", help="Have Robin text the household once the egg has been unreachable this long, and again when it is back (default 10; 0 turns it off; not used with --echo)")
     p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here, for --save-audio-hours")
     p.add_argument("--save-audio-hours", type=float, default=24.0, metavar="HOURS", help="How long --save-audio keeps a capture before deleting it (default 24; 0 keeps them until you delete them)")
+    p.add_argument("--turn-log", metavar="FILE", default=str(DEFAULT_TURN_LOG), help="Where to record each turn's outcome and timings, for `python -m robin_egg_server.stats` (default ~/.robin-egg/turns.jsonl). No audio or words are recorded. Not used with --demo or --echo")
+    p.add_argument("--no-turn-log", action="store_true", help="Do not record turns")
+    p.add_argument("--turn-log-names", action="store_true", help="Also record who spoke each turn, not only whether they were recognised")
+    p.add_argument("--message-waiting", action=argparse.BooleanOptionalAction, default=True, help="Hold the messages Robin sends on its own outside --speaking-hours, breathe the egg's ring while any wait, and read them out to 'what did I miss?' (default on; off drops them)")
+    p.add_argument("--min-volume", type=float, default=MIN_VOLUME, help=f"The quietest the egg can be set by voice, from 0 to 1 (default {MIN_VOLUME}). 'Set the volume to one' sets this")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
@@ -112,6 +122,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error(f"--quiet-hours {err}")
     if not FLOOR_GAIN * 100 <= args.quiet_volume <= 100:
         p.error(f"--quiet-volume {args.quiet_volume} is outside {FLOOR_GAIN * 100:.0f} to 100; lower than that and speech is hard to follow")
+    if not 0.0 <= args.min_volume < 1.0:
+        p.error("--min-volume must be at least 0 and below 1")
     if not args.host and not args.demo:
         p.error("give the egg's address, or --demo AUDIO to test without hardware")
     if not args.echo:
@@ -209,15 +221,24 @@ def build(args: argparse.Namespace):
         match_voice=args.match_voice,
         thinking_cue=args.thinking_cue,
         thinking_delay_s=args.thinking_delay,
+        closing_cue=args.closing_cue,
         recognition_light=args.recognition_light,
+        # A test run's timings would skew the numbers from real use.
+        turn_log=None if args.no_turn_log or args.demo or args.echo else Path(args.turn_log).expanduser(),
+        turn_log_names=args.turn_log_names,
+        message_waiting=args.message_waiting,
+        ring_file=RING_FILE,
+        min_volume=args.min_volume,
     )
     if opts.thinking_cue and not opts.stream:
         LOG.info("The thinking sound is off, because it is carried in the streamed reply and --no-stream turns streaming off")
+    if opts.closing_cue and not opts.stream:
+        LOG.info("The closing sound is off, because it is carried in the streamed reply and --no-stream turns streaming off")
     if opts.proactive_sound and not opts.proactive_sound.exists():
         raise SystemExit(f"Proactive sound not found at {opts.proactive_sound}")
     if opts.urgent_sound and not opts.urgent_sound.exists():
         raise SystemExit(f"Urgent sound not found at {opts.urgent_sound}")
-    speakers = people = commands = ring = colours = None
+    speakers = people = commands = ring = colours = enrol_offer = None
     if recognise:
         from .commands import VoiceCommands
         from .speakers import People, SherpaEmbedder, SpeakerId
@@ -231,10 +252,18 @@ def build(args: argparse.Namespace):
         if args.recognition_light:
             ring = LedRing()
             colours = PersonColours.load(Path(args.led_colours).expanduser())
+        if args.offer_enrolment:
+            from .enrol_offer import EnrolOffer
+
+            enrol_offer = EnrolOffer(store, speakers.thresholds)
+        else:
+            LOG.info("Not offering enrolment to voices that are not recognised (--no-offer-enrolment)")
     else:
         LOG.info("Speaker recognition is off, so every voice is sent as Unknown Speaker")
+    if opts.turn_log is not None:
+        LOG.info("Recording each turn's outcome and timings, but no audio or words, in %s", opts.turn_log)
     web = AudioServer()
-    return Robin(stt, brain, tts, web, VoiceAssistantEventType, opts, speakers=speakers, people=people, commands=commands, ring=ring, colours=colours), web
+    return Robin(stt, brain, tts, web, VoiceAssistantEventType, opts, speakers=speakers, people=people, commands=commands, ring=ring, colours=colours, enrol_offer=enrol_offer), web
 
 
 def log_enrolment(people: list[Person] | None, store: VoiceprintStore) -> None:

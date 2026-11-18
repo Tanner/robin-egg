@@ -178,7 +178,7 @@ Added 2026-11-16. robin-assistant's design is `docs/superpowers/specs/2026-11-16
 
 On the egg server side, `speaker_stream.py` holds it open for the server's life, apart from `RobinBrain`. It reconnects after 1 s, doubling to 30 s, honours `Retry-After`, and resets the backoff once a connection has stayed up 30 s. A stream that sends nothing for 45 s, not even a ping, counts as dropped. 404 and 409 are logged as errors, since only a config change fixes them, and retried like the rest.
 
-`Robin.proactive` in `egg.py` drops a message outside speaking hours, or queues it until the egg is idle: not listening, not thinking, past the estimated end of the last reply's playback, and not about to reopen its mic for a follow-up. Then it plays the proactive sound and the message as one announcement, with markdown stripped and sentences spoken one by one as in a reply. The wake word cancels it.
+`Robin.proactive` in `egg.py` holds a message outside speaking hours for "what did I miss?" (see `server/README.md`), or queues it until the egg is idle: not listening, not thinking, past the estimated end of the last reply's playback, and not about to reopen its mic for a follow-up. Then it plays the proactive sound and the message as one announcement, with markdown stripped and sentences spoken one by one as in a reply. The wake word cancels it.
 
 ## Urgent messages: `priority` on the speaker stream
 
