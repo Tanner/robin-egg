@@ -97,6 +97,7 @@ class Robin:
         self._turn_count = 0  # numbers the turns in the log
         self._announce_count = 0  # numbers the /announce calls in the log
         self.client: Any = None  # an APIClient while the egg is connected
+        self.room: Any = None  # a RoomContext when Robin is told facts about the room
         self.turn: Turn | None = None
         self._follow_up_pending = False
         self._playback_until = 0.0  # when the egg should finish playing the last reply
@@ -227,6 +228,8 @@ class Robin:
                 LOG.info("Nothing recognisable was said; closing quietly")
                 self._end_without_reply()
                 return
+            if heard and self.room is not None:
+                self.room.spoken_to(match.user, t.follow_up)
             self.send(E.VOICE_ASSISTANT_STT_END, {"text": heard})
             self.send(E.VOICE_ASSISTANT_INTENT_START)
             if self.commands is not None:
@@ -432,6 +435,7 @@ class Robin:
         with tagged(msg.tag):
             if not self._in_speaking_hours():
                 LOG.info("Dropped message %s: outside speaking hours (%s)", msg.describe(), self._hours())
+                self._message_outcome(msg, "dropped, outside speaking hours")
                 return
             if self._proactive_task is not None and not self._proactive_task.done():
                 busy: str | None = "another message is being spoken"
@@ -462,30 +466,41 @@ class Robin:
                 await self._until_idle()
                 if not self._in_speaking_hours():
                     LOG.info("Dropped message %s: speaking hours (%s) ended while it waited", msg.describe(), self._hours())
+                    self._message_outcome(msg, "dropped, speaking hours ended while it waited")
                     continue
                 self._proactive_stopped_by = ""
                 self._proactive_task = task = asyncio.create_task(self._say_proactive(msg))
                 await asyncio.wait({task})
                 if task.cancelled():
                     LOG.info("Stopped message %s partway: %s", msg.describe(), self._proactive_stopped_by or "the server is stopping")
+                    self._message_outcome(msg, f"interrupted, {self._proactive_stopped_by or 'the server is stopping'}")
                 elif task.exception() is not None:
                     LOG.error("Could not speak message %s", msg.describe(), exc_info=task.exception())
+                    self._message_outcome(msg, "failed, the egg server could not speak it")
 
     async def _say_proactive(self, msg: SpeakerMessage) -> None:
         text = strip_markdown(msg.text)
         if not text:
             LOG.info("Dropped message %s: nothing to say once markdown is stripped", msg.describe())
+            self._message_outcome(msg, "dropped, it had nothing to say")
             return
         async with self._speaker_lock:
             reply = await self._announcement(text, chime=True)
             client = self.client
             if client is None:
                 LOG.info("Dropped message %s: the egg disconnected before it could be spoken", msg.describe())
+                self._message_outcome(msg, "dropped, the egg disconnected")
                 return
             url = self.web.add(reply)
             LOG.info('Speaking message %s: "%s"', msg.describe(), text)
             result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
-        LOG.info("Spoke message %s (%s)", msg.describe(), "finished" if getattr(result, "success", True) else "the egg reported a failure")
+        spoken = getattr(result, "success", True)
+        LOG.info("Spoke message %s (%s)", msg.describe(), "finished" if spoken else "the egg reported a failure")
+        self._message_outcome(msg, "spoken" if spoken else "failed, the egg reported a failure")
+
+    def _message_outcome(self, msg: SpeakerMessage, outcome: str) -> None:
+        if self.room is not None:
+            self.room.message_outcome(msg.describe(), outcome)
 
     async def _stop_proactive(self) -> None:
         for task in (self._proactive_task, self._proactive_worker):
@@ -523,6 +538,7 @@ class Robin:
                         await c.disconnect()
             if client is None:
                 LOG.info("Egg %s:%d not reachable; retrying in %.0f s", host, port, delay)
+                self._egg_connected(False)
                 with contextlib.suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(stop.wait(), delay)
                 delay = min(delay * 2, 30)
@@ -539,6 +555,7 @@ class Robin:
                     client.subscribe_logs(on_log, log_level=LogLevel.LOG_LEVEL_INFO, dump_config=False)
                 self.client = client
                 self._state.set()
+                self._egg_connected(True)
                 client.subscribe_voice_assistant(
                     handle_start=self.handle_start,
                     handle_stop=self.handle_stop,
@@ -556,6 +573,7 @@ class Robin:
             finally:
                 self.client = None
                 self._state.set()
+                self._egg_connected(False)
                 self.last_match = None  # the next conversation starts fresh, whoever is in the room by then
                 if self.turn is not None and self.turn.task is not None:
                     self.turn.task.cancel()
@@ -566,6 +584,10 @@ class Robin:
                 with contextlib.suppress(Exception):
                     await client.disconnect()
         await self._stop_proactive()
+
+    def _egg_connected(self, connected: bool) -> None:
+        if self.room is not None:
+            self.room.egg_connected(connected)
 
 
 async def _once(text: str) -> AsyncIterator[str]:

@@ -59,7 +59,7 @@ Tanner listed this without a fixed meaning. The working definition is any way to
 
 - **Sensor.** LD2410-type mmWave is the candidate. Does it see through the printed shell, and does it disturb the mics or Wi-Fi?
 - **Wiring.** Which free XIAO pins. Not mapped yet.
-- **Where readings go.** robin-assistant's `/api/context` endpoint stores ambient facts with a TTL and fits this well.
+- **Where readings go.** robin-assistant's `/api/context` endpoint. The Robin Egg Server already posts there: `server/robin_egg_server/room_context.py` sends `egg_connection`, `egg_last_speaker` and `egg_last_message`, so a presence or sensor reading is one more key through the same client. Still open: each agent holds at most 20 facts and every changed value adds a block to the next chat turn, so a reading that moves often (temperature, presence flicker) needs rounding or a minimum interval before it is posted. Untried against the real robin-assistant.
 - **What presence is for.** Gating chimes, greeting, knowing who is home. Agree the uses before adding the part.
 - **Is the HomeView or HomeKit already a presence source** we can read instead?
 - **Temperature and light.** SHT4x and VEML7700. The speaker amp and ESP32 warm the shell, so a temperature sensor inside may read high.
