@@ -145,6 +145,8 @@ To enrol, say the wake word, then "learn my voice". Robin asks who is talking. A
 
 To remove your voice, say the wake word, then "forget my voice", and answer yes.
 
+To check who Robin thinks you are, say the wake word, then "who am I?" or "who is this?". The server answers this itself, without asking Robin, from the same match it sends with every question: "You're Tanner. I'm sure of it.", "I'm fairly sure you're Tanner.", or "I don't recognise your voice", with a pointer to "learn my voice" for anyone who has not enrolled. A clip under a second is too short to judge, and it says so; "do you recognise my voice?" is long enough and works too. The log line `Asked who is speaking` has the scores. These turns never change a voiceprint.
+
 Voiceprints are kept in `~/.robin-egg/voiceprints.json`. They hold no audio.
 
 ## Measuring accuracy
@@ -229,7 +231,7 @@ The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the
 | `--tts-time-limit` | 4 s | How long the hosted voice gets for one sentence before Piper speaks the rest of the reply. |
 | `--save-audio DIR` | off | Keep each mic capture as a WAV. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. |
-| `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice". Not used with `--echo`. |
+| `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice" and checking with "who am I?". Not used with `--echo`. |
 | `--voiceprints` | `~/.robin-egg/voiceprints.json` | Where the enrolled voiceprints are kept. |
 | `--speaker-model` | `models/wespeaker_en_voxceleb_resnet34_LM.onnx` | Another speaker embedding model. Changing it means everyone enrols again. |
 
@@ -242,6 +244,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
 - Urgent messages. The urgent cue has not been heard on the egg's speaker, or by the cat. Nothing sends `"priority": "urgent"` yet except `/announce?priority=urgent`, so the speaker stream path has only met the fake robin-assistant.
+- "Who am I?". Spoken on its own after the wake word it may be under the one second of speech needed to judge a voice, so the usual answer could be "too short". How Whisper writes the question on the egg's mic is also unknown; the phrasings it matches are in `whoami.py`.
 - The speech-model detector, `--vad model`. It has heard macOS `say` voices and test tones, not the egg's mic, the room, or the egg's own reply leaking into a follow-up. Its 0.5 threshold is Silero's default. Compare it with the energy detector on real captures before making it the default.
 - The hosted voice. `--tts openai` has only been run against a fake speech endpoint in the tests, never against OpenAI itself, so the real latency per sentence, whether 4 s is the right limit, and how a change from the OpenAI voice to Piper mid-reply sounds on the egg's speaker are all unknown.
 - Matching the room. Whether 60% is the right amount for the evening has only been judged from numbers, not heard through the egg's speaker at its volume setting. For `--match-voice`, nobody has measured how much of the difference between a quiet voice and a normal one survives the XVF3800's automatic gain. Read the "the voice measured" log lines for a few quiet and normal turns before turning it on.
@@ -263,6 +266,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
 | `robin_egg_server/speakers.py` | Speaker embeddings, the voiceprint store, and matching a voice to a person |
 | `robin_egg_server/commands.py` | The "learn my voice" and "forget my voice" conversations |
+| `robin_egg_server/whoami.py` | The answer to "who am I?", from the turn's speaker match |
 | `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/sounds/urgent.flac` | The cue before an urgent message, made the same way |
