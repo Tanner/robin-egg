@@ -243,12 +243,12 @@ def test_a_message_mid_reply_waits_for_the_reply_to_end(caplog):
         await eventually(lambda: len(egg.announcements) == 2)
 
     with caplog.at_level(logging.INFO, logger="robin"):
-        egg, robin, tts = asyncio.run(egg_with_speaker([script], [speech()], ["when is the dentist"], brain, Options(follow_up="off", speaking_hours=(0, 24)), scenario))
+        egg, robin, tts = asyncio.run(egg_with_speaker([script], [speech()], ["when is the dentist"], brain, Options(follow_up="off", speaking_hours=(0, 24), digest=False), scenario))
     (run,) = egg.runs
     assert run.data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Your dentist is at ten tomorrow."
     assert tts.said == ["Your dentist is at ten tomorrow.", "The bins go out tonight.", "And the recycling too."]
     assert tts.at[1] >= robin._playback_until  # not until the egg has finished playing the reply
-    assert [t for t, _ in egg.announcements] == ["The bins go out tonight.", "And the recycling too."]  # in order, one each
+    assert [t for t, _ in egg.announcements] == ["The bins go out tonight.", "And the recycling too."]  # in order, one each with digests off
     for _, audio in egg.announcements:  # one chime each
         samples, _ = decode(audio)
         lead = int(ReplyAudio.LEAD_S * REPLY_RATE)

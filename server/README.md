@@ -91,11 +91,11 @@ Robin also writes messages into the plain web chat on its own: a reminder coming
 - Not while someone has asked for quiet by voice. See [Asking Robin to be quiet](#asking-robin-to-be-quiet).
 - Not while the egg's microphone is muted. Pressing the mute button also means "do not speak first": a message that arrives, or is still waiting, while the mic is muted is dropped, not saved for later, and `/announce` answers 409. Answers to a question are not affected. `--no-quiet-when-muted` turns this off.
 - With `--presence-minutes N`, only if someone spoke to the egg in the last N minutes. The egg has no presence sensor yet, so a voice turn in which speech was recognised stands in for one. Otherwise the message is dropped, not saved for later, and the log says so. This is off by default. After a restart nobody counts as present until someone speaks. A message that arrives during a turn waits for the turn to end before the check. `/announce` is not held to this, since whoever calls it wants it heard.
-- It never talks over the egg. A message that arrives while the egg is listening, thinking or playing a reply waits until the egg is idle. Several waiting messages are spoken in order, each after its own sound. A message that has waited more than 10 minutes, as when the egg was off the network, is dropped; it is still in the chat.
+- It never talks over the egg. A message that arrives while the egg is listening, thinking or playing a reply waits until the egg is idle. Several messages that are waiting together are spoken as one announcement after one sound: see [Several messages at once](#several-messages-at-once). A message that has waited more than 10 minutes, as when the egg was off the network, is dropped; it is still in the chat.
 - The wake word stops a message partway, as it stops a reply.
 - A message that ends in a question can be answered without the wake word. The egg reopens its mic when the message has played and waits `--follow-up-window` seconds, so "yes please" or "remind me in ten minutes" goes to Robin as an ordinary turn in the same chat. If nobody speaks, the mic closes with no sound and no error light. `--answer-messages always` listens after every message, and `off` never does. The next waiting message is held until the answer is done.
 - Nothing is replayed from robin-assistant. A message sent while the server is not connected is missed, but it is still in the chat. The stream closes when Robin reloads, and the server reconnects after 1 s, doubling to 30 s.
-- The log shows each message's id and task label, and whether it was spoken, queued, held or dropped.
+- The log shows each message's id and task label, and whether it was spoken, queued, held or dropped. Messages spoken together are logged together, tagged with all their ids, such as `[m7+m8]`.
 - The sound is `robin_egg_server/sounds/proactive.flac` unless `--proactive-sound FILE` names another. `--no-robin-announcements` turns all of this off.
 
 A message may be marked urgent, meaning time-critical, with `"priority": "urgent"` on the speaker stream. A message with no `priority`, or one the server does not know, is a normal message. An urgent message differs in three ways:
@@ -119,6 +119,19 @@ A message may instead be marked low, a nudge, with `"priority": "low"`. It is no
 | `--no-message-waiting` | Spoken as a normal message, since there is nowhere to hold it. The log says so. |
 
 The wake word during the chime stops it, and the message stays held. The mic never reopens after a chime, whatever `--answer-messages` says, and "say that again" has nothing to repeat. If the egg fails to play the chime, the message is still held. The log marks it, for example `Played the chime for message 50 (Laundry, low); it is held for "what did I miss?"`. robin-assistant does not send `"low"` yet; the proposed change is in [docs/robin-chat-api.md](../docs/robin-chat-api.md).
+
+### Several messages at once
+
+When two or more normal messages are waiting at the moment the egg becomes idle, as after a long conversation or when the egg comes back on the network, Robin speaks them as one announcement: the proactive sound once, a lead-in that counts them ("Two things."), then each message in the order it arrived, with a 0.7 s pause between them. A message that is waiting alone is spoken exactly as before, with no lead-in. `--no-digest` goes back to one sound per message.
+
+- A digest holds at most three messages. The rest are spoken in a following digest, with its own sound and lead-in, or plainly if only one is left. `--digest-max` changes the three, from 2 to 10.
+- Urgent messages are never part of a digest. Each is spoken first, on its own, after the urgent cue, and the normal messages follow.
+- A low message that gets the chime alone is never part of a digest either. It ends the digest in front of it, plays its chime in its turn, and the messages behind it follow. With `--no-message-waiting`, where a low message is spoken, it joins a digest like a normal one.
+- A message that ends in a question is always the last one in its digest, because the mic can only reopen once the whole announcement has played. The messages behind it wait for the answer, then follow. With `--answer-messages always` the mic reopens once, after the whole digest, and with `off` a question does not end the digest.
+- Each message is still held to the 10-minute wait on its own. One that waited too long is dropped and the others are spoken.
+- When the wake word stops a digest partway, the server works out how far the egg had played. A message already heard in full counts as spoken. The one that was playing is interrupted and not spoken again, like a single message cut short. The ones not reached stay waiting, ahead of anything that arrived later, and are spoken when the conversation is over. The same goes for a digest cut short by the egg dropping off the network. The server takes the egg to be half a second behind the moment it was sent the announcement, so a message counts as heard only when it has surely finished.
+- "Say that again" repeats the whole digest, lead-in included, as one reply. After a digest was cut short it repeats only the messages that were reached.
+- Each message gets its own line in the turn log: `spoken` with the reason `in one announcement`, `interrupted`, or `dropped`. Robin is told about the digest as one `egg_last_message` fact, such as `messages 7 (Bins) and 8 (no label) spoken in one announcement`.
 
 To make the egg speak something yourself:
 
@@ -171,7 +184,7 @@ The server posts a few facts about the egg to robin-assistant's ambient context 
 | --- | --- | --- |
 | `egg_connection` | `connected` or `disconnected` | 6 hours, posted again after about 5 while it still holds |
 | `egg_last_speaker` | Who last spoke to the egg: their robin-assistant name, or `Unknown Speaker`. The fact's own time says when. | 2 hours |
-| `egg_last_message` | What became of the last message Robin sent on its own, by id and task label: `message 124 (Dentist reminder) spoken`, `held, outside speaking hours`, `interrupted, the wake word interrupted it` and so on. | 1 hour |
+| `egg_last_message` | What became of the last message Robin sent on its own, by id and task label: `message 124 (Dentist reminder) spoken`, `held, outside speaking hours`, `interrupted, the wake word interrupted it` and so on. Messages spoken as one announcement are one fact naming each of them. | 1 hour |
 
 - Facts about the egg only. Nothing anyone said and none of Robin's words are posted.
 - A fact is posted only when it changes, because every change adds a block to the next turn of each chat on the robin-assistant side. A follow-up by the same person is the same conversation and is not posted again. A new conversation is, so the time moves on.
@@ -185,7 +198,7 @@ The server posts a few facts about the egg to robin-assistant's ambient context 
 
 Say the wake word, then "say that again", or just say it in the follow-up window. The egg repeats the last thing Robin said without asking robin-assistant, so it is quick and works while robin-assistant is down. "Repeat that", "what did you say", "what was that", "come again", "pardon" and "one more time" do the same, with or without "Robin", "please", "sorry" or "for me" around them. The phrase has to be the whole request: "repeat that song" still goes to Robin.
 
-- What counts as the last thing said: Robin's last reply, a message Robin sent on its own, or an `/announce`. A message is repeated without its chime. The egg's own lines do not count: the enrolment questions, "nothing to repeat" and the apology after a failed turn. A reply the wake word cut off partway does not count either, so the one before it is repeated.
+- What counts as the last thing said: Robin's last reply, a message Robin sent on its own, or an `/announce`. A message is repeated without its chime, and several messages spoken as one announcement are repeated together. The egg's own lines do not count: the enrolment questions, "nothing to repeat" and the apology after a failed turn. A reply the wake word cut off partway does not count either, so the one before it is repeated.
 - It stays repeatable for 10 minutes after it was said. Change that with `--repeat-window`; `0` turns the command off and the words go to Robin like any others. Repeating it starts the 10 minutes again.
 - With nothing to repeat, the egg says "I haven't said anything lately, so there's nothing to repeat." and does not ask Robin.
 - Only the text is kept, in memory, one thing at a time, for the whole household. No audio is kept, nothing is written to disk, and a restart forgets it.
@@ -465,6 +478,8 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
 | `--repeat-window` | 10 min | How long after Robin says something "say that again" still repeats it. `0` turns the command off. |
 | `--answer-messages questions\|always\|off` | `questions` | When to reopen the mic after a message Robin sends on its own, so it can be answered without the wake word. It waits `--follow-up-window` seconds. Never after `/announce`. |
+| `--digest`, `--no-digest` | on | Speak Robin's own messages that are waiting together as one announcement, after one sound and a lead-in such as "Two things." Off speaks each after its own sound. |
+| `--digest-max N` | 3 | The most messages in one digest, from 2 to 10. The rest are spoken in a following one. |
 | `--max-utterance` | 30 s | The longest request. Listening stops here even if you have not paused. |
 | `--vad energy\|model` | `energy` | What finds the end of speech: loudness against the room's noise floor, or the Silero speech model. See [Finding the end of speech](#finding-the-end-of-speech). |
 | `--echo` | off | Repeat what was heard instead of asking Robin. Tests the audio chain with no robin-assistant. |
@@ -543,6 +558,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Putting the ring back. The firmware ignores a brightness sent to a light that is off, so a ring that was off is turned on at its old level and then off, in two commands sent together. That may show as a brief flash. The level given back is the light's own brightness, which may differ from the level the animations used before the light was first turned on (the firmware starts at 80%).
 - "What did I miss?" has only been matched against canned transcripts, not real speech-to-text of the egg's mic.
 - Volume by voice. The fake egg's media player follows the firmware source, not the board. Untried: that the entity is listed as `media_player`, that a volume set in the middle of a run takes effect before the reply plays, that the egg reports the new volume back within a second, and that 30% is audible in the enclosure. On the bench the bare driver was quiet at 50%, so the floor may need raising with `--min-volume`. The firmware also lights the LED ring for 2 seconds on a volume change, which may cut into the "replying" light.
+- Several messages at once. The lead-in and the 0.7 s pause have only been heard as test tones, not in Robin's voice through the egg's speaker, so whether two messages sound clearly apart, and whether three in a row is too much to take in, is unjudged. When the wake word stops a digest, the server decides which messages were heard from its own clock, taking the egg to be 0.5 s behind (`PLAYED_MARGIN_S` in `digest.py`). How long the real egg takes to fetch and start an announcement is unmeasured, so a message could be counted as heard a moment early, or be spoken a second time. The mic reopening after a digest that ends in a question is untried in the same ways as after a single message.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 - Presence. `--presence-minutes` has only been run against the fake egg. Whether "spoke in the last N minutes" is a fair guess at someone being in the room, and what N should be, needs living with the real egg.
 
@@ -574,6 +590,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/turn_log.py` | The turn log: one line per turn and per message Robin sends, with no audio or words |
 | `robin_egg_server/stats.py` | The `stats` command that summarises the turn log |
 | `robin_egg_server/waiting.py` | Message waiting: the held messages, the ring's waiting light, and "what did I miss?" |
+| `robin_egg_server/digest.py` | Several waiting messages as one announcement: the lead-in, what ends a digest, and which messages were heard when one is cut short |
 | `robin_egg_server/morning_mention.py` | The morning mention: when to end a reply by saying that messages are waiting |
 | `robin_egg_server/volume.py` | The egg's speaker volume: finding the media player, following and setting its volume, and the volume commands |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
@@ -608,4 +625,5 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_morning_mention.py` | The morning mention, its rules alone and through the fake egg |
 | `tests/test_presence.py` | `--presence-minutes`: Robin's own messages spoken or dropped by when someone last spoke |
 | `tests/test_turn_log.py` | The turn log and `stats`, through the fake egg and on their own |
+| `tests/test_digest.py` | Several waiting messages as one announcement: the cue, order and pause, the cap, urgent messages, answering, the longest wait, the wake word partway, the turn log and the room fact |
 | `tests/test_waiting.py` | Message waiting: held messages, the ring light on the fake egg, and "what did I miss?" |

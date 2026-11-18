@@ -189,7 +189,7 @@ def test_a_spoken_message_is_recorded_without_its_words(tmp_path):
 
 
 def test_a_message_that_waited_says_why_and_how_long(tmp_path):
-    opts = logged(tmp_path, follow_up="off", speaking_hours=(0, 24))
+    opts = logged(tmp_path, follow_up="off", speaking_hours=(0, 24), digest=False)
     brain = SlowStartBrain("Your dentist is at ten tomorrow.")
     go = asyncio.Event()
     script = [until(go), message(7, "The bins go out tonight.", "Bins"), message(8, "And the recycling too.")]
