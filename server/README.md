@@ -87,15 +87,15 @@ Say "Okay Nabu" (the stock wake word), then a question. macOS asks whether Pytho
 
 Robin also writes messages into the plain web chat on its own: a reminder coming due, a scheduled task, a held update, a routine. The server holds robin-assistant's speaker stream (`GET /api/chat/:agent/speaker`) open for its whole life and speaks each message after a sound.
 
-- Only between 8 AM and 8 PM. Change it with `--speaking-hours`. A message outside those hours is dropped, not saved for later.
+- Only between 8 AM and 8 PM. Change it with `--speaking-hours`. A message outside those hours is not spoken. It is held, and the ring shows a waiting light: see [Message waiting](#message-waiting).
 - Not while someone has asked for quiet by voice. See [Asking Robin to be quiet](#asking-robin-to-be-quiet).
 - Not while the egg's microphone is muted. Pressing the mute button also means "do not speak first": a message that arrives, or is still waiting, while the mic is muted is dropped, not saved for later, and `/announce` answers 409. Answers to a question are not affected. `--no-quiet-when-muted` turns this off.
 - With `--presence-minutes N`, only if someone spoke to the egg in the last N minutes. The egg has no presence sensor yet, so a voice turn in which speech was recognised stands in for one. Otherwise the message is dropped, not saved for later, and the log says so. This is off by default. After a restart nobody counts as present until someone speaks. A message that arrives during a turn waits for the turn to end before the check. `/announce` is not held to this, since whoever calls it wants it heard.
 - It never talks over the egg. A message that arrives while the egg is listening, thinking or playing a reply waits until the egg is idle. Several waiting messages are spoken in order, each after its own sound. A message that has waited more than 10 minutes, as when the egg was off the network, is dropped; it is still in the chat.
 - The wake word stops a message partway, as it stops a reply.
 - A message that ends in a question can be answered without the wake word. The egg reopens its mic when the message has played and waits `--follow-up-window` seconds, so "yes please" or "remind me in ten minutes" goes to Robin as an ordinary turn in the same chat. If nobody speaks, the mic closes with no sound and no error light. `--answer-messages always` listens after every message, and `off` never does. The next waiting message is held until the answer is done.
-- Nothing is replayed. A message sent while the server is not connected is missed, but it is still in the chat. The stream closes when Robin reloads, and the server reconnects after 1 s, doubling to 30 s.
-- The log shows each message's id and task label, and whether it was spoken, queued or dropped.
+- Nothing is replayed from robin-assistant. A message sent while the server is not connected is missed, but it is still in the chat. The stream closes when Robin reloads, and the server reconnects after 1 s, doubling to 30 s.
+- The log shows each message's id and task label, and whether it was spoken, queued, held or dropped.
 - The sound is `robin_egg_server/sounds/proactive.flac` unless `--proactive-sound FILE` names another. `--no-robin-announcements` turns all of this off.
 
 A message may be marked urgent, meaning time-critical, with `"priority": "urgent"` on the speaker stream. A message with no `priority`, or one the server does not know, is a normal message. An urgent message differs in three ways:
@@ -123,7 +123,7 @@ curl -d "The taxi is outside." "http://localhost:8765/announce?priority=urgent"
 Like Robin's own messages, it does not talk over the egg: it waits up to 60 s for the egg to be idle. The answer says what happened: 200 when spoken, 409 outside speaking hours, while muted or when the egg stayed busy, 502 when the egg did not play it, and 503 when the egg is not connected.
 ## Asking Robin to be quiet
 
-Say the wake word, then ask for quiet. Robin stops speaking first until the time you gave: its own messages and `/announce` are dropped, as they are outside speaking hours, and the log says why. Robin still answers when you ask it something. Urgent messages are dropped too: asking for quiet is your own choice, as muting the mic is. Speaking hours still apply on top, so ending the pause at night does not make Robin speak before morning.
+Say the wake word, then ask for quiet. Robin stops speaking first until the time you gave: its own messages and `/announce` are dropped, not held for "what did I miss?", and the log says why. Robin still answers when you ask it something. Urgent messages are dropped too: asking for quiet is your own choice, as muting the mic is. Speaking hours still apply on top, so ending the pause at night does not make Robin speak before morning.
 
 | Say | What happens |
 | --- | --- |
@@ -151,7 +151,7 @@ The server posts a few facts about the egg to robin-assistant's ambient context 
 | --- | --- | --- |
 | `egg_connection` | `connected` or `disconnected` | 6 hours, posted again after about 5 while it still holds |
 | `egg_last_speaker` | Who last spoke to the egg: their robin-assistant name, or `Unknown Speaker`. The fact's own time says when. | 2 hours |
-| `egg_last_message` | What became of the last message Robin sent on its own, by id and task label: `message 124 (Dentist reminder) spoken`, `dropped, outside speaking hours`, `interrupted, the wake word interrupted it` and so on. | 1 hour |
+| `egg_last_message` | What became of the last message Robin sent on its own, by id and task label: `message 124 (Dentist reminder) spoken`, `held, outside speaking hours`, `interrupted, the wake word interrupted it` and so on. | 1 hour |
 
 - Facts about the egg only. Nothing anyone said and none of Robin's words are posted.
 - A fact is posted only when it changes, because every change adds a block to the next turn of each chat on the robin-assistant side. A follow-up by the same person is the same conversation and is not posted again. A new conversation is, so the time moves on.
@@ -239,6 +239,23 @@ If the egg has been unreachable for 10 minutes, the server asks Robin to tell th
 - If robin-assistant is down or answers with a server error, the server tries again every minute until the request is taken. If robin-assistant refuses it (the agent is disabled, or `[trigger] enabled` is off), the log says so as an error and nobody is told about that outage.
 - The request names no chat. An agent with one Telegram chat texts that chat, and an agent with several texts everyone it serves. An agent with no Telegram chat writes into the web chat, where the message that the egg is back is also spoken by the egg, within speaking hours.
 - `--offline-alert MINUTES` changes the limit, and `--offline-alert 0` turns it off. It is not used with `--echo` or `--demo`.
+## Message waiting
+
+A message Robin sends on its own outside speaking hours is held instead of spoken, and the egg's LED ring breathes softly while any are held. Say the wake word, then "what did I miss?", and Robin reads them out, oldest first, each with the time it arrived. The ring then goes back to how it was.
+
+- Other ways to ask: "did I miss anything?", "any messages?", "do I have any messages?", "what's waiting?", "read my messages". The whole sentence has to be one of these, so "what did I miss on the news?" still goes to Robin.
+- The egg answers this itself, whether or not speaker recognition is on, and to anyone who asks. These are messages Robin would have spoken to the whole room.
+- With nothing held, Robin says "Nothing is waiting. You haven't missed any messages."
+- The newest 10 messages are kept, each for 24 hours. Older ones are let go, with a log line. They are still in the chat.
+- Nothing is announced when speaking hours begin. The light is the only sign.
+- Held messages live in memory only. A server restart loses them, and the server turns the waiting light off when it next connects to the egg. An egg reboot or reconnect keeps them, and the server turns the light back on.
+- After reading, the mic reopens for a follow-up when `--follow-up` is `always`, so a message can be answered.
+- Only speaking hours hold a message. One dropped because someone asked for quiet by voice, the mic is muted, nobody seems to be in the room, or it waited too long for the egg is still dropped. So is one cut off by the wake word, or sent to `/announce` outside speaking hours.
+- An urgent message is spoken at any hour, so it is never held.
+- "Say that again" repeats the read-out.
+- `--no-message-waiting` turns this off. Messages outside speaking hours are then dropped and the question goes to Robin.
+
+The light is the firmware's "LED Ring" light, turned on with its "Breathe" effect at 35% brightness, in whatever colour the ring already has. The firmware shows that light only while the egg is idle: its wake-word, listening, thinking and replying animations take over during a conversation and hand the ring back afterwards. Two side effects come from the firmware. The light's brightness is also the level of every ring animation, so those are dimmer while a message waits. A muted mic shows the firmware's muted pattern instead of the breathing. The server writes the ring's own state (on or off, brightness, effect) to `~/.robin-egg/ring-before-waiting.json` while the waiting light is on, and puts the ring back from it.
 
 ## Telling voices apart
 
@@ -407,6 +424,7 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 | `--quiet-hours` | `21-7` | When Robin speaks more quietly, replies and announcements alike. The window may wrap past midnight. `off` for never. |
 | `--quiet-volume` | 60 | How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100. |
 | `--match-voice`, `--no-match-voice` | off | Also speak more quietly to someone who spoke quietly. Off until it is tried on the real egg. |
+| `--message-waiting`, `--no-message-waiting` | on | Hold Robin's own messages from outside `--speaking-hours`, breathe the ring while any wait, and read them out to "what did I miss?". Off drops them. |
 | `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the turn failed. |
 | `--unsure-retries` | 1 | Times in a row to say "Sorry, I didn't catch that." and listen again when speech-to-text is unsure. `0` never asks. |
 | `--min-logprob` | −1.0 | Speech-to-text is unsure below this average log-probability. Closer to 0 is stricter. |
@@ -457,6 +475,10 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - The recognition light. The fake egg only records the colour commands. Not yet seen on the ring: that a colour-only command to the "LED Ring" light repaints the thinking and replying animations partway through, that it leaves an unlit idle ring unlit, and how the default colours look. The colour is given back on the server's estimate of when the reply ends, so it may change a moment before or after the animation stops. The firmware saves the light's colour to flash, so an egg that loses power mid-reply starts in the person's colour until the server reconnects.
 - Offering enrolment. Whether two turns from one unrecognised person score as the same voice (0.5 or more against each other) has only been tried with made-up vectors, not real speech through the egg's mic. Too low a score means the hint never comes; too high a score for two different people means it comes early.
 - The turn log. Its timings stop when the audio is ready on the server, not when the egg starts playing it, so the real gap is longer by the egg's fetch and buffering. Whether a false wake-up from the TV shows as `nobody spoke`, `nothing recognised` or an answered turn depends on what the egg's mic and Whisper make of it, so read all three when judging a wake word.
+- The waiting light. The fake egg only records light commands. Nobody has seen the ring breathe, whether 35% is soft enough in a dark room, or whether the firmware's fixed two-second breathing cycle reads as calm.
+- The ring during a conversation while a message waits. From the firmware source, the voice animations take over and the breathing comes back when the egg is idle, at the dimmer level. Unseen.
+- Putting the ring back. The firmware ignores a brightness sent to a light that is off, so a ring that was off is turned on at its old level and then off, in two commands sent together. That may show as a brief flash. The level given back is the light's own brightness, which may differ from the level the animations used before the light was first turned on (the firmware starts at 80%).
+- "What did I miss?" has only been matched against canned transcripts, not real speech-to-text of the egg's mic.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 - Presence. `--presence-minutes` has only been run against the fake egg. Whether "spoke in the last N minutes" is a fair guess at someone being in the room, and what N should be, needs living with the real egg.
 
@@ -487,6 +509,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/enrol_offer.py` | When to offer enrolment to a voice that keeps going unrecognised |
 | `robin_egg_server/turn_log.py` | The turn log: one line per turn and per message Robin sends, with no audio or words |
 | `robin_egg_server/stats.py` | The `stats` command that summarises the turn log |
+| `robin_egg_server/waiting.py` | Message waiting: the held messages, the ring's waiting light, and "what did I miss?" |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/sounds/urgent.flac` | The cue before an urgent message, made the same way |
 | `robin_egg_server/thinking.py` | The thinking sound: writes the loop into a reply until the first sentence is ready |
@@ -514,3 +537,4 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_answer_messages.py` | Answering a message Robin sent on its own without the wake word |
 | `tests/test_presence.py` | `--presence-minutes`: Robin's own messages spoken or dropped by when someone last spoke |
 | `tests/test_turn_log.py` | The turn log and `stats`, through the fake egg and on their own |
+| `tests/test_waiting.py` | Message waiting: held messages, the ring light on the fake egg, and "what did I miss?" |

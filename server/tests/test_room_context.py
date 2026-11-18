@@ -254,7 +254,7 @@ def test_robin_learns_what_became_of_its_own_messages():
     egg, fake = asyncio.run(egg_with_room([], [], [], SlowBrain([]), Options(speaking_hours=(0, 24)), scenario))
     assert facts(fake, EGG_LAST_MESSAGE) == [
         (EGG_LAST_MESSAGE, "message 124 (Dentist reminder) spoken"),
-        (EGG_LAST_MESSAGE, "message 125 (no label) dropped, outside speaking hours"),
+        (EGG_LAST_MESSAGE, "message 125 (no label) held, outside speaking hours"),
     ]
     assert {p["ttl"] for p in fake.context_posts if p["key"] == EGG_LAST_MESSAGE} == {LAST_MESSAGE_TTL_S}
     assert "Good night" not in str(fake.context_posts) and "Time to leave" not in str(fake.context_posts)

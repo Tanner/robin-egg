@@ -209,8 +209,8 @@ def test_a_message_that_waited_says_why_and_how_long(tmp_path):
     assert recycling["waited_s"] >= bins["waited_s"]
 
 
-def test_a_dropped_message_says_why(tmp_path):
-    opts = logged(tmp_path, speaking_hours=(0, 0))
+def _message_outside_speaking_hours(tmp_path, **opts_kw) -> dict:
+    opts = logged(tmp_path, speaking_hours=(0, 0), **opts_kw)
 
     async def scenario(egg, robin, tts, handled):
         await eventually(lambda: handled)
@@ -218,7 +218,17 @@ def test_a_dropped_message_says_why(tmp_path):
 
     asyncio.run(egg_with_speaker([[message(9, "Good night.", "Bedtime")]], [], [], SlowStartBrain(""), opts, scenario))
     (msg,) = [e for e in lines(opts.turn_log) if e["event"] == "message"]
+    return msg
+
+
+def test_a_dropped_message_says_why(tmp_path):
+    msg = _message_outside_speaking_hours(tmp_path, message_waiting=False)
     assert (msg["message"], msg["fate"], msg["why"]) == ("m9", "dropped", "outside speaking hours")
+
+
+def test_a_held_message_says_why(tmp_path):
+    msg = _message_outside_speaking_hours(tmp_path)
+    assert (msg["message"], msg["fate"], msg["why"]) == ("m9", "held", "outside speaking hours")
 
 
 def test_a_message_with_nothing_to_say_is_dropped_not_spoken(tmp_path):
