@@ -7,7 +7,7 @@ One turn:
 1. The egg hears the wake word and streams its mic audio to the server.
 2. The server finds the end of speech, then transcribes it locally with Whisper.
 3. Robin answers through robin-assistant, in the plain web chat the phone uses.
-4. Each of Robin's messages is spoken locally, sentence by sentence, and the egg starts playing the first sentence while the rest is still being spoken. If Robin has nothing to say after 2 s, the egg plays a soft thinking sound until it does.
+4. Each of Robin's messages is spoken locally, sentence by sentence, and the egg starts playing the first sentence while the rest is still being spoken. If Robin has nothing to say after 2 s, the egg plays a soft thinking sound until it does. When the egg stops listening without a reply, it plays a soft closing sound.
 5. The egg reopens its mic for a few seconds, so a follow-up needs no wake word.
 
 This is the MVP, to prove egg to Mac mini end to end. It does not yet know who is speaking, check presence, or set an API key on the egg. The robin-assistant side is in [docs/robin-chat-api.md](../docs/robin-chat-api.md).
@@ -193,6 +193,14 @@ When Robin has not produced a first sentence 2 s after the end of speech, the eg
 - The sound is carried in the streamed reply, in front of the first sentence. The server tells the egg to start playing the reply when the sound starts, not at the first sentence, and writes the sound 0.3 s ahead of the clock. When the sentence is ready, the sound fades out over 0.08 s and the sentence follows, so the voice starts up to about half a second after it is ready.
 - It plays only on turns that ask Robin. "Learn my voice", "forget my voice" and enrolment answers are answered by the server and never get it, and neither does a turn where nobody spoke or nothing was recognised.
 - It does not start once the first sentence has arrived and is only waiting to be spoken.
+
+## The closing sound
+
+When the egg stops listening and there is no reply, it plays `robin_egg_server/sounds/closing.flac`: two soft notes, B-flat falling a fifth to E-flat. That happens when a follow-up window runs out with nobody speaking, when someone says the wake word and then nothing, when nothing recognisable was said, and when Robin chooses to say nothing. A turn that Robin answers ends with its reply, not with this sound. `--no-closing-cue` turns it off, and the egg then closes silently.
+
+- The sound is sent as a reply with no words and no follow-up, so the egg plays it with its mic closed and then goes idle. If the thinking sound was already playing, the closing sound follows its fade in the same stream.
+- In quiet hours it plays at the quiet-hours volume.
+- Like the thinking sound, it travels in the streamed reply, so `--no-stream` turns it off.
 - If Robin takes longer than the delay and then chooses to say nothing, the sound has already started. It fades out and the turn ends quietly.
 - If the turn fails, the sound fades out and the apology follows.
 - It does not play with `--no-stream`, because then the egg is given nothing to play until the reply is complete.
@@ -387,6 +395,7 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
 | `--thinking-cue`, `--no-thinking-cue` | on | Play a soft sound while Robin is slow to start answering. Not played with `--no-stream`. |
 | `--thinking-delay` | 2 s | How long after the end of speech the thinking sound starts, if Robin has not produced a first sentence. |
+| `--closing-cue`, `--no-closing-cue` | on | Play a soft sound when the egg stops listening without a reply. Not played with `--no-stream`. |
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. Enrolling and forgetting a voice still reopen it, whatever this is set to. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
 | `--repeat-window` | 10 min | How long after Robin says something "say that again" still repeats it. `0` turns the command off. |
@@ -438,7 +447,8 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 The fake egg follows the firmware source, but these are untested on hardware:
 
 - Streamed replies. The server sends the reply URL at the start of the run and tells the egg to start playing after the first sentence, which is how Home Assistant streams. The FLAC header says "length unknown" until the end. If replies cut out, use `--no-stream`.
-- The thinking sound. It reaches the egg as a slow trickle of audio, 0.3 s ahead of the clock, where a reply arrives a sentence at a time. Whether the egg's player starts on so little, plays it without gaps, and moves into the first sentence cleanly is untested. The firmware may also show its replying light during the sound, not its thinking light, because the reply has started playing. If Robin chooses to say nothing after the sound has started, the egg gets the silent error while it is still playing the stream, and what its player does then is untested. The sound's level and pitch have been checked only on the Mac, not through the egg's speaker or near the cat. If it misbehaves, use `--no-thinking-cue`.
+- The thinking sound. It reaches the egg as a slow trickle of audio, 0.3 s ahead of the clock, where a reply arrives a sentence at a time. Whether the egg's player starts on so little, plays it without gaps, and moves into the first sentence cleanly is untested. The firmware may also show its replying light during the sound, not its thinking light, because the reply has started playing. If Robin chooses to say nothing after the sound has started, the closing sound follows it in the same stream; with `--no-closing-cue` the egg instead gets the silent error while it is still playing the stream, and what its player does then is untested. The sound's level and pitch have been checked only on the Mac, not through the egg's speaker or near the cat. If it misbehaves, use `--no-thinking-cue`.
+- The closing sound. In the firmware source, the start-streaming event moves the egg from thinking to playing a reply, and the end of the run then lets it go idle once the sound has played. That is the same path as a short spoken reply, but a reply with no words is untested on the egg. The firmware may also show its replying light for the second the sound plays. If the egg gets stuck or misbehaves after a wake-up where nobody spoke, use `--no-closing-cue`.
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
 - Answering a message Robin sent on its own. The server sends the announcement with `start_conversation`, and the firmware source says the egg then starts a run with no wake word once the announcement has played. Unchecked on the egg: that the mic does reopen, that it does not pick up the tail of the message through the speaker, that 5 s is long enough to react to a message nobody was expecting, and that silence ends with the light going back to idle. In the firmware source the wake word during a message only stops it and clears the reopening, so the mic should stay closed after a barge-in.
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
@@ -491,6 +501,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/sounds/urgent.flac` | The cue before an urgent message, made the same way |
 | `robin_egg_server/thinking.py` | The thinking sound: writes the loop into a reply until the first sentence is ready |
 | `robin_egg_server/sounds/thinking.flac` | The thinking sound's loop, made by `tools/egg-sounds/make_sounds.py` |
+| `robin_egg_server/sounds/closing.flac` | The closing sound, made the same way |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
 | `tests/test_egg_faults.py` | Drops, slow replies and a busy egg, around a turn and `/announce` |
@@ -506,6 +517,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_room_context.py` | The room facts, alone and through the fake egg, against the fake robin-assistant |
 | `tests/test_mic_mute.py` | Muting the fake egg's microphone: dropped messages, `/announce`, the option, a missing switch, reconnects |
 | `tests/test_thinking_cue.py` | The thinking sound against the fake egg: when it plays, how it ends, and when it must not play |
+| `tests/test_closing_cue.py` | The closing sound against the fake egg: the turns that end with it, after the thinking sound, in quiet hours, and turned off |
 | `tests/test_health.py` | `/status`, the offline alert and clearing old mic captures, against the fake egg and the fake robin-assistant |
 | `tests/test_leds.py` | The recognition light against the fake egg's ring |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |

@@ -1,5 +1,5 @@
-"""Make the egg's four cues: the listening sound, the sound before a proactive message,
-the sound before an urgent one, and the thinking sound.
+"""Make the egg's five cues: the listening sound, the sound before a proactive message,
+the sound before an urgent one, the thinking sound, and the closing sound.
 
 All are the robin's "cheer-up" phrase played on a soft struck bell, like a celesta,
 at about a third of a robin's pitch. Listening is the falling step. A proactive message
@@ -8,12 +8,14 @@ An urgent message is the proactive phrase played twice. It insists by repeating,
 being louder, higher or faster: the same notes, level and pace.
 Thinking is the listening notes an octave lower, rocking slowly upward and never settling.
 It is a loop, and quieter than the others because it repeats for as long as Robin takes.
+Closing is B-flat falling a fifth to E-flat, the key's most final move, for when the egg
+stops listening without a reply. It is as quiet as the thinking sound.
 
 Usage, from the repository root (needs ffmpeg for the FLAC files):
 
     python3 tools/egg-sounds/make_sounds.py
 
-Writes firmware/sounds/wake_word_triggered.flac, and proactive.flac, urgent.flac and thinking.flac in
+Writes firmware/sounds/wake_word_triggered.flac, and proactive.flac, urgent.flac, thinking.flac and closing.flac in
 server/robin_egg_server/sounds/.
 """
 
@@ -28,6 +30,7 @@ from pathlib import Path
 RATE = 48000
 PEAK_DBFS = -18.0  # soft enough to hear many times a day without it grating
 THINKING_PEAK_DBFS = -24.0  # the loop repeats, so it sits under the other cues
+CLOSING_PEAK_DBFS = -24.0  # it plays after every wake-up with nothing said, so it is as soft as the thinking sound
 THINKING_PERIOD_S = 2.0
 REPO = Path(__file__).resolve().parents[2]
 OUTPUTS = {
@@ -35,13 +38,14 @@ OUTPUTS = {
     "proactive": REPO / "server/robin_egg_server/sounds/proactive.flac",
     "urgent": REPO / "server/robin_egg_server/sounds/urgent.flac",
     "thinking": REPO / "server/robin_egg_server/sounds/thinking.flac",
+    "closing": REPO / "server/robin_egg_server/sounds/closing.flac",
 }
 
 # (frequency ratio, level, how long it rings relative to the fundamental)
 CELESTA = [(1.0, 1.0, 1.0), (2.0, 0.22, 0.45), (3.0, 0.06, 0.25), (4.07, 0.05, 0.18), (0.5, 0.05, 0.8)]
 
 C6, AS5, DS6 = 1046.5, 932.3, 1244.5
-AS4, C5 = AS5 / 2, C6 / 2
+AS4, C5, DS5 = AS5 / 2, C6 / 2, DS6 / 2
 CUES = {
     "listening": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.8, 1.0)],
     "proactive": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.4, 1.0), (0.33, DS6, 0.9, 1.0)],
@@ -49,6 +53,7 @@ CUES = {
                (0.80, C6, 0.35, 0.9), (0.95, AS5, 0.4, 1.0), (1.13, DS6, 0.9, 1.0)],
 }
 THINKING = [(0.00, AS4, 0.9, 1.0), (1.00, C5, 0.9, 0.85)]
+CLOSING = [(0.00, AS5, 0.35, 0.9), (0.15, DS5, 0.9, 1.0)]
 
 
 def struck_note(freq, ring, level):
@@ -100,7 +105,7 @@ def mix(notes):
     return room(out)
 
 
-def render(notes):
+def render(notes, peak_dbfs=PEAK_DBFS):
     out = mix(notes)
     peak = max(abs(s) for s in out)
     # Stop once the tail is 40 dB below the peak, so the egg starts listening promptly.
@@ -109,7 +114,7 @@ def render(notes):
     fade = int(0.05 * RATE)
     for i in range(fade):
         out[-1 - i] *= i / fade
-    scale = 10 ** (PEAK_DBFS / 20) / peak
+    scale = 10 ** (peak_dbfs / 20) / peak
     return [s * scale for s in out]
 
 
@@ -142,3 +147,4 @@ def write_flac(samples, path):
 for name, notes in CUES.items():
     write_flac(render(notes), OUTPUTS[name])
 write_flac(render_loop(THINKING, THINKING_PERIOD_S, THINKING_PEAK_DBFS), OUTPUTS["thinking"])
+write_flac(render(CLOSING, CLOSING_PEAK_DBFS), OUTPUTS["closing"])

@@ -56,6 +56,7 @@ LOG = logging.getLogger("robin.egg")
 ZERO_PSK = base64.b64encode(bytes(32)).decode()  # formatBCE: encryption on, no key set yet
 PROACTIVE_CHIME = Path(__file__).parent / "sounds" / "proactive.flac"  # made by tools/egg-sounds
 URGENT_CHIME = Path(__file__).parent / "sounds" / "urgent.flac"  # the cue before an urgent message
+CLOSING_CUE = Path(__file__).parent / "sounds" / "closing.flac"  # played when the egg stops listening without a reply
 NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 # After a reply that asked for a follow-up, how long past its end to wait for the egg to reopen its mic.
@@ -93,6 +94,7 @@ class Options:
     match_voice: bool = False  # also speak more quietly to someone who spoke quietly
     thinking_cue: bool = True  # a soft sound while Robin is slow to start answering; needs stream
     thinking_delay_s: float = 2.0  # how long after the end of speech before it starts
+    closing_cue: bool = True  # a soft sound when the egg stops listening without a reply; needs stream
     recognition_light: bool = True  # with a ring, show a recognised speaker's colour while Robin thinks and replies
     turn_log: Path | None = None  # one line per turn and per message Robin sends, for stats; off if None
     turn_log_names: bool = False  # also record who spoke each turn
@@ -171,6 +173,7 @@ class Robin:
         self.quiet = QuietMode(self.opts.quiet_state, morning_hour=self.opts.speaking_hours[0])
         self.urgent_sound = load_sound(self.opts.urgent_sound or URGENT_CHIME)
         self.thinking_sound = load_sound(THINKING_CUE)
+        self.closing_sound = load_sound(CLOSING_CUE)
         self.turn_log = TurnLog(self.opts.turn_log, names=self.opts.turn_log_names)
         web.on_announce = self.announce
         web.on_quiet = self.quiet.http
@@ -283,6 +286,35 @@ class Robin:
         self._save_capture(t)
         t.task = asyncio.create_task(self._respond(t))
 
+    async def _close_without_reply(self, t: Turn) -> None:
+        """Ends a turn that has no reply, with the closing sound so the person knows the egg stopped listening.
+
+        The sound goes out as a reply with no words and no follow-up, so the egg plays it and
+        goes idle with its mic closed. Without streaming there is no reply to carry it.
+        """
+        if not (self.opts.closing_cue and self.opts.stream):
+            self._end_without_reply()
+            return
+        E = self.E
+        self._follow_up_pending = False
+        self._reset_commands()  # the mic will not reopen, so a voice conversation cannot go on
+        if not t.vad.speech_started:
+            t.reply.gain = self.room.for_announcement("Closing sound volume")  # there is no voice to match
+        before = t.reply.seconds
+        await t.reply.push(self.closing_sound, REPLY_RATE, gap_s=0)
+        if t.playing:  # the thinking sound already started the stream; the closing sound follows its fade
+            t.play_end = max(t.play_end, time.monotonic()) + t.reply.seconds - before
+        else:
+            t.playing = True
+            t.play_end = time.monotonic() + t.reply.seconds
+            self.send(E.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
+        LOG.info("Sending the closing sound to the egg")
+        self.send(E.VOICE_ASSISTANT_INTENT_END, {"continue_conversation": "0"})
+        await t.reply.close()
+        self.send(E.VOICE_ASSISTANT_TTS_END, {"url": t.url})
+        self._playback_until = max(self._playback_until, t.play_end)
+        self.send(E.VOICE_ASSISTANT_RUN_END)
+
     def _end_without_reply(self) -> None:
         # A bare RUN_END is ignored if it lands before the egg has finished stopping its mic,
         # which leaves it stuck "thinking". An error ends the run from any state, and the
@@ -297,9 +329,9 @@ class Robin:
         ended = "cancelled"  # for /status
         try:
             if not t.vad.speech_started:
-                LOG.info("Nobody spoke; closing quietly")
+                LOG.info("Nobody spoke; closing without a reply")
                 t.log.outcome = NOBODY_SPOKE
-                self._end_without_reply()
+                await self._close_without_reply(t)
                 ended = "no_speech"
                 return
             t.reply.gain = self.room.for_reply(bytes(t.audio))
@@ -312,9 +344,9 @@ class Robin:
             enrolling = self.commands is not None and self.commands.active
             # A cough mid-enrolment is a missed answer to ask again, not a reason to drop the enrolment.
             if not heard and not enrolling:
-                LOG.info("Nothing recognisable was said; closing quietly")
+                LOG.info("Nothing recognisable was said; closing without a reply")
                 t.log.outcome = NOTHING_RECOGNISED
-                self._end_without_reply()
+                await self._close_without_reply(t)
                 ended = "nothing_recognised"
                 return
             if heard and self.room_context is not None:
@@ -378,10 +410,10 @@ class Robin:
         except asyncio.CancelledError:
             raise
         except QuietTurn:
-            LOG.info("Robin chose to say nothing; closing quietly")
+            LOG.info("Robin chose to say nothing; closing without a reply")
             await self._stop_thinking(t)
             t.log.outcome = QUIET
-            self._end_without_reply()
+            await self._close_without_reply(t)
             ended = "quiet"
         except Exception as err:  # noqa: BLE001 - the person in the room must hear that it failed
             LOG.exception("The turn failed")

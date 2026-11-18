@@ -141,25 +141,25 @@ def test_no_cue_for_a_local_voice_command():
 
 
 def test_no_cue_when_nothing_was_said():
-    run, robin = one_turn(LateBrain(0.5), Options(thinking_delay_s=0.0), heard="")
+    run, robin = one_turn(LateBrain(0.5), Options(thinking_delay_s=0.0, closing_cue=False), heard="")
     assert TURNS[-1].cue is None
     assert pb.VOICE_ASSISTANT_INTENT_PROGRESS not in run.types()
     assert run.data(pb.VOICE_ASSISTANT_ERROR)["code"] == "stt-no-text-recognized"
 
 
-def test_a_quick_quiet_turn_stays_silent():
-    run, robin = one_turn(LateQuietBrain(0.05), Options(thinking_delay_s=0.6))
+def test_a_quick_quiet_turn_stays_silent_when_the_closing_sound_is_off():
+    run, robin = one_turn(LateQuietBrain(0.05), Options(thinking_delay_s=0.6, closing_cue=False))
     assert pb.VOICE_ASSISTANT_INTENT_PROGRESS not in run.types()
     assert run.streamed == b"" and not TURNS[-1].cue.playing
     assert run.data(pb.VOICE_ASSISTANT_ERROR)["code"] == "stt-no-text-recognized"
 
 
-def test_a_slow_quiet_turn_fades_the_cue_out_and_ends_the_stream():
+def test_a_slow_quiet_turn_fades_the_cue_out_and_ends_the_stream_when_the_closing_sound_is_off():
     # Robin took long enough for the cue to start, then chose to say nothing.
     kept = {}
 
     async def scenario():
-        egg, robin = await converse([speech()], FakeSTT(["never mind"]), LateQuietBrain(0.8), ToneTTS(), Options(thinking_delay_s=0.1, follow_up="off"))
+        egg, robin = await converse([speech()], FakeSTT(["never mind"]), LateQuietBrain(0.8), ToneTTS(), Options(thinking_delay_s=0.1, follow_up="off", closing_cue=False))
         kept["audio"] = TURNS[-1].reply.final
         return egg, robin
 
