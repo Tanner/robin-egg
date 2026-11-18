@@ -1,7 +1,10 @@
 """A tiny HTTP server on the Mac mini, with no dependencies.
 
 GET  /audio/<id>.flac  the egg's media player fetches replies here, while they are still being written
-POST /announce         body is text; Robin speaks it on the egg (proactive speech)
+POST /announce         body is text; Robin speaks it on the egg (proactive speech).
+                       ?priority=urgent speaks it outside speaking hours, after the urgent cue
+GET  /quiet            whether someone has asked Robin by voice not to speak first, and until when
+DELETE /quiet          ends that, so Robin may speak first again
 GET  /                 a one-line health check
 """
 
@@ -13,11 +16,14 @@ import logging
 import uuid
 from collections import OrderedDict
 from typing import Awaitable, Callable
+from urllib.parse import parse_qs
 
 from .audio import ReplyAudio
 from .logs import current_tag, tagged
 
 LOG = logging.getLogger("robin.web")
+
+MAX_ANNOUNCE_BYTES = 16384
 
 
 class AudioServer:
@@ -27,7 +33,8 @@ class AudioServer:
         self._audio: OrderedDict[str, tuple[ReplyAudio, str]] = OrderedDict()  # with the log tag of the turn it belongs to
         self._keep = keep
         self._server: asyncio.base_events.Server | None = None
-        self.on_announce: Callable[[str], Awaitable[tuple[int, str]]] | None = None
+        self.on_announce: Callable[..., Awaitable[tuple[int, str]]] | None = None  # (text, urgent=False)
+        self.on_quiet: Callable[[str], Awaitable[tuple[int, str]]] | None = None  # called with GET or DELETE
 
     def add(self, audio: ReplyAudio, tag: str | None = None) -> str:
         """Registers a reply and returns the URL the egg should fetch.
@@ -62,7 +69,7 @@ class AudioServer:
                 headers[k.strip().lower()] = v.strip()
             if len(request) < 2:
                 return
-            method, path = request[0], request[1].split("?")[0]
+            method, (path, _, query) = request[0], request[1].partition("?")
             is_audio = method in ("GET", "HEAD") and path.startswith("/audio/") and path.endswith(".flac")
             audio, tag = self._audio.get(path[len("/audio/") : -len(".flac")], (None, "")) if is_audio else (None, "")
             with tagged(tag):
@@ -79,12 +86,25 @@ class AudioServer:
                     w.write(chunk)
                     await w.drain()
             elif method == "POST" and path == "/announce":
-                n = int(headers.get("content-length", "0"))
-                text = (await asyncio.wait_for(r.readexactly(n), 10)).decode("utf-8").strip() if n else ""
+                try:
+                    n = int(headers.get("content-length", "0"))
+                except ValueError:
+                    n = -1
+                if n < 0 or n > MAX_ANNOUNCE_BYTES:
+                    await self._reply(w, 400, f"Content-Length must be a number from 0 to {MAX_ANNOUNCE_BYTES}\n")
+                    return
+                text = (await asyncio.wait_for(r.readexactly(n), 10)).decode("utf-8", "replace").strip() if n else ""
                 if not text or self.on_announce is None:
                     await self._reply(w, 400, "send the words to speak as the request body\n")
                     return
-                status, msg = await self.on_announce(text)
+                priority = parse_qs(query).get("priority", ["normal"])[-1]
+                if priority not in ("normal", "urgent"):
+                    await self._reply(w, 400, "priority is normal or urgent\n")
+                    return
+                status, msg = await self.on_announce(text, urgent=priority == "urgent")
+                await self._reply(w, status, msg + "\n")
+            elif method in ("GET", "DELETE") and path == "/quiet" and self.on_quiet is not None:
+                status, msg = await self.on_quiet(method)
                 await self._reply(w, status, msg + "\n")
             elif method == "GET" and path == "/":
                 await self._reply(w, 200, "Robin Egg Server\n")
@@ -92,13 +112,17 @@ class AudioServer:
                 await self._reply(w, 404, "not found\n")
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):
             pass
+        except Exception:  # noqa: BLE001 - whoever asked gets an answer, and the server keeps serving
+            LOG.exception("An HTTP request from %s failed", peer[0] if peer else "?")
+            with contextlib.suppress(Exception):
+                await self._reply(w, 500, "the server failed to handle this request; see its log\n")
         finally:
             with contextlib.suppress(Exception):
                 w.close()
 
     @staticmethod
     async def _reply(w: asyncio.StreamWriter, status: int, body: str) -> None:
-        reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 409: "Conflict", 503: "Service Unavailable"}.get(status, "")
+        reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 409: "Conflict", 500: "Internal Server Error", 502: "Bad Gateway", 503: "Service Unavailable"}.get(status, "")
         data = body.encode()
         w.write(f"HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain\r\nContent-Length: {len(data)}\r\nConnection: close\r\n\r\n".encode() + data)
         await w.drain()

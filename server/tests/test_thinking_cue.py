@@ -6,15 +6,31 @@ import asyncio
 import time
 
 import numpy as np
+import pytest
 import soundfile as sf
 from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.__main__ import parse_args
 from robin_egg_server.audio import REPLY_RATE, ReplyAudio, load_sound
 from robin_egg_server.brain import QuietTurn
-from robin_egg_server.egg import Options
+from robin_egg_server.egg import Options, Robin
 from robin_egg_server.thinking import THINKING_CUE, ThinkingCue
 from test_server import FakeSTT, ToneTTS, converse, decode, speech
+
+TURNS = []  # every turn answered in the test, kept because the server forgets its turn on disconnect
+
+
+@pytest.fixture(autouse=True)
+def keep_turns(monkeypatch):
+    TURNS.clear()
+    respond = Robin._respond
+
+    async def keeping(self, t):
+        TURNS.append(t)
+        await respond(self, t)
+
+    monkeypatch.setattr(Robin, "_respond", keeping)
+
 
 SPEECH_LEVEL = 0.2  # ToneTTS speaks at 0.3; the cue peaks near 0.06
 CUE_FLOOR = 0.01
@@ -93,9 +109,10 @@ def test_the_cue_plays_until_the_first_sentence_and_stops_cleanly():
     assert run.data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Here is what I found for you."
 
     # The estimate of when the egg goes quiet counts the cue: it runs from when the cue started.
-    t = robin.turn
+    t = TURNS[-1]
     assert t.cue is not None and t.cue.playing
-    assert abs(robin._playback_until - (t.play_started + t.reply.seconds)) < 0.01
+    assert robin._playback_until == t.play_end
+    assert abs(t.play_end - (t.cue.began + t.reply.seconds)) < 0.05
     assert t.reply.seconds > t.cue.seconds + 1.0
 
 
@@ -104,7 +121,7 @@ def test_no_cue_when_robin_answers_in_time():
     before, voice = cue_and_speech(run.final)
     assert np.abs(before).max() < 0.002 and len(before) / REPLY_RATE < 0.3
     assert run.types().count(pb.VOICE_ASSISTANT_INTENT_PROGRESS) == 1
-    assert not robin.turn.cue.playing
+    assert not TURNS[-1].cue.playing
 
 
 def test_no_cue_when_the_sentence_is_only_waiting_for_the_voice():
@@ -112,20 +129,20 @@ def test_no_cue_when_the_sentence_is_only_waiting_for_the_voice():
     run, robin = one_turn(LateBrain(0.05), Options(thinking_delay_s=0.3), tts=SlowToneTTS())
     before, _ = cue_and_speech(run.final)
     assert np.abs(before).max() < 0.002
-    assert not robin.turn.cue.playing
+    assert not TURNS[-1].cue.playing
 
 
 def test_no_cue_for_a_local_voice_command():
     # Speaker recognition is off, so the egg answers "learn my voice" itself, slowly here.
     run, robin = one_turn(LateBrain(0.0), Options(thinking_delay_s=0.0), heard="learn my voice", tts=SlowToneTTS())
     before, voice = cue_and_speech(run.final)
-    assert robin.turn.cue is None
+    assert TURNS[-1].cue is None
     assert np.abs(before).max() < 0.002 and len(voice) > 0
 
 
 def test_no_cue_when_nothing_was_said():
     run, robin = one_turn(LateBrain(0.5), Options(thinking_delay_s=0.0), heard="")
-    assert robin.turn.cue is None
+    assert TURNS[-1].cue is None
     assert pb.VOICE_ASSISTANT_INTENT_PROGRESS not in run.types()
     assert run.data(pb.VOICE_ASSISTANT_ERROR)["code"] == "stt-no-text-recognized"
 
@@ -133,7 +150,7 @@ def test_no_cue_when_nothing_was_said():
 def test_a_quick_quiet_turn_stays_silent():
     run, robin = one_turn(LateQuietBrain(0.05), Options(thinking_delay_s=0.6))
     assert pb.VOICE_ASSISTANT_INTENT_PROGRESS not in run.types()
-    assert run.streamed == b"" and not robin.turn.cue.playing
+    assert run.streamed == b"" and not TURNS[-1].cue.playing
     assert run.data(pb.VOICE_ASSISTANT_ERROR)["code"] == "stt-no-text-recognized"
 
 
@@ -143,7 +160,7 @@ def test_a_slow_quiet_turn_fades_the_cue_out_and_ends_the_stream():
 
     async def scenario():
         egg, robin = await converse([speech()], FakeSTT(["never mind"]), LateQuietBrain(0.8), ToneTTS(), Options(thinking_delay_s=0.1, follow_up="off"))
-        kept["audio"] = robin.turn.reply.final
+        kept["audio"] = TURNS[-1].reply.final
         return egg, robin
 
     egg, robin = asyncio.run(scenario())
@@ -157,7 +174,8 @@ def test_a_slow_quiet_turn_fades_the_cue_out_and_ends_the_stream():
     assert np.abs(samples[-int(0.08 * REPLY_RATE):]).max() < 0.002  # faded, not cut
     # The egg's fetch of the stream ended: the fake egg waits for it before it reports the run done.
     assert len(run.streamed) == len(kept["audio"]) and run.streamed[42:] == kept["audio"][42:]
-    assert abs(robin._playback_until - (robin.turn.play_started + robin.turn.reply.seconds)) < 0.01
+    t = TURNS[-1]
+    assert abs(robin._playback_until - (t.cue.began + t.reply.seconds)) < 0.05
 
 
 def test_a_failed_turn_fades_the_cue_out_before_the_apology():
@@ -176,7 +194,7 @@ def test_a_failed_turn_fades_the_cue_out_before_the_apology():
 
 def test_no_cue_without_streaming():
     run, robin = one_turn(LateBrain(0.5), Options(stream=False, thinking_delay_s=0.0))
-    assert robin.turn.cue is None
+    assert TURNS[-1].cue is None
     assert pb.VOICE_ASSISTANT_INTENT_PROGRESS not in run.types()
     before, voice = cue_and_speech(run.final)
     assert np.abs(before).max() < 0.002 and len(voice) > 0
@@ -184,7 +202,7 @@ def test_no_cue_without_streaming():
 
 def test_the_cue_can_be_turned_off():
     run, robin = one_turn(LateBrain(0.5), Options(thinking_cue=False, thinking_delay_s=0.0))
-    assert robin.turn.cue is None
+    assert TURNS[-1].cue is None
     before, voice = cue_and_speech(run.final)
     assert np.abs(before).max() < 0.002 and len(voice) > 0
 

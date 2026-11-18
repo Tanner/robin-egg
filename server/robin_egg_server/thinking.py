@@ -36,6 +36,7 @@ class ThinkingCue:
         """start_at is on the time.monotonic() clock. on_start tells the egg to start playing the reply."""
         self.loop, self.reply, self.start_at, self.on_start = loop, reply, start_at, on_start
         self.playing = False
+        self.began: float | None = None  # when the egg was told to start playing, on the time.monotonic() clock
         self.seconds = 0.0  # how much of the cue was written
         self._stop = asyncio.Event()
         self._task = asyncio.create_task(self._run())
@@ -61,7 +62,7 @@ class ThinkingCue:
         if self.reply.closed:
             return
         self.playing = True
-        began = time.monotonic()
+        self.began = began = time.monotonic()
         LOG.info("Robin has not started answering yet; playing the thinking sound")
         self.on_start()
         n, pos = int(self.SLICE_S * REPLY_RATE), 0

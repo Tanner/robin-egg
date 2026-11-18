@@ -214,6 +214,8 @@ class VoiceprintStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         try:
+            tmp.touch(mode=0o600)  # voiceprints are biometric data: the owner's eyes only
+            tmp.chmod(0o600)
             tmp.write_text(json.dumps(data))
             os.replace(tmp, self.path)
         except BaseException:

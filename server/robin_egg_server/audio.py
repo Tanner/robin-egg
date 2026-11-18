@@ -71,8 +71,14 @@ class EnergyVad:
             else:
                 self.silence_run += 1
             elapsed = self.frames * f
-            if self.speech_started and self.speech_frames * f >= self.cfg.min_speech_s and self.silence_run * f >= self.cfg.end_silence_s:
+            paused = self.speech_started and self.silence_run * f >= self.cfg.end_silence_s
+            if paused and self.speech_frames * f >= self.cfg.min_speech_s:
                 self.done, self.reason = True, "end of speech"
+            elif paused and elapsed >= self.cfg.no_speech_timeout_s:
+                # A cough or a clunk starts "speech" but is too short to end it, so without this
+                # the mic would stay open to the length limit. It may have been a quick word, so
+                # the turn goes on to speech-to-text as usual.
+                self.done, self.reason = True, "only a short sound heard"
             elif not self.speech_started and elapsed >= self.cfg.no_speech_timeout_s:
                 self.done, self.reason = True, "no speech heard"
             elif elapsed >= self.cfg.max_utterance_s:
@@ -113,6 +119,7 @@ class ReplyAudio:
         self.live = bytearray()  # bytes as streamed, header left as first written
         self.final: bytes | None = None  # the complete file, header filled in
         self.seconds = self.LEAD_S
+        self.gain = 1.0  # scales everything pushed from now on; see room.py
         self._cond = asyncio.Condition()
 
     @property
@@ -126,7 +133,7 @@ class ReplyAudio:
         del buf
 
     async def push(self, samples: np.ndarray, rate: int, gap_s: float = 0.12) -> None:
-        out = np.clip(resample(samples, rate, REPLY_RATE), -1.0, 1.0)
+        out = np.clip(resample(samples, rate, REPLY_RATE), -1.0, 1.0) * np.float32(self.gain)
         out = np.concatenate([out, np.zeros(int(gap_s * REPLY_RATE), dtype=np.float32)])
         self._sf.write(out)
         self.seconds += len(out) / REPLY_RATE

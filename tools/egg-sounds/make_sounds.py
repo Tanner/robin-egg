@@ -1,16 +1,19 @@
-"""Make the egg's three cues: listening, the sound before a proactive message, and thinking.
+"""Make the egg's four cues: the listening sound, the sound before a proactive message,
+the sound before an urgent one, and the thinking sound.
 
 All are the robin's "cheer-up" phrase played on a soft struck bell, like a celesta,
 at about a third of a robin's pitch. Listening is the falling step. A proactive message
 is the same step, then a lift to a higher note, so the two are related but easy to tell apart.
-Thinking is the same two notes an octave lower, rocking slowly upward and never settling.
+An urgent message is the proactive phrase played twice. It insists by repeating, not by
+being louder, higher or faster: the same notes, level and pace.
+Thinking is the listening notes an octave lower, rocking slowly upward and never settling.
 It is a loop, and quieter than the others because it repeats for as long as Robin takes.
 
 Usage, from the repository root (needs ffmpeg for the FLAC files):
 
     python3 tools/egg-sounds/make_sounds.py
 
-Writes firmware/sounds/wake_word_triggered.flac, and proactive.flac and thinking.flac in
+Writes firmware/sounds/wake_word_triggered.flac, and proactive.flac, urgent.flac and thinking.flac in
 server/robin_egg_server/sounds/.
 """
 
@@ -30,6 +33,7 @@ REPO = Path(__file__).resolve().parents[2]
 OUTPUTS = {
     "listening": REPO / "firmware/sounds/wake_word_triggered.flac",
     "proactive": REPO / "server/robin_egg_server/sounds/proactive.flac",
+    "urgent": REPO / "server/robin_egg_server/sounds/urgent.flac",
     "thinking": REPO / "server/robin_egg_server/sounds/thinking.flac",
 }
 
@@ -41,6 +45,8 @@ AS4, C5 = AS5 / 2, C6 / 2
 CUES = {
     "listening": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.8, 1.0)],
     "proactive": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.4, 1.0), (0.33, DS6, 0.9, 1.0)],
+    "urgent": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.4, 1.0), (0.33, DS6, 0.6, 1.0),
+               (0.80, C6, 0.35, 0.9), (0.95, AS5, 0.4, 1.0), (1.13, DS6, 0.9, 1.0)],
 }
 THINKING = [(0.00, AS4, 0.9, 1.0), (1.00, C5, 0.9, 0.85)]
 
