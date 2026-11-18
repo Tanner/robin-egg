@@ -49,6 +49,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--piper-voice", default=str(DEFAULT_PIPER_VOICE), help="Path to a Piper .onnx voice (default: Robin's voice, Piper Ryan)")
     p.add_argument("--say-voice", help="macOS voice name for `say`, e.g. Samantha (`say -v '?'` lists them)")
     p.add_argument("--no-stream", action="store_true", help="Play the reply only once it is complete (fallback if streaming misbehaves)")
+    p.add_argument("--thinking-cue", action=argparse.BooleanOptionalAction, default=True, help="Play a soft sound while Robin is slow to start answering (default on; --no-thinking-cue turns it off; not played with --no-stream)")
+    p.add_argument("--thinking-delay", type=float, default=2.0, help="Seconds after the end of speech before the thinking sound starts")
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
     p.add_argument("--max-utterance", type=float, default=30.0, help="Longest request in seconds; listening stops here even if the speaker has not paused")
@@ -118,7 +120,11 @@ def build(args: argparse.Namespace):
         speaking_hours=(start, end),
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
+        thinking_cue=args.thinking_cue,
+        thinking_delay_s=args.thinking_delay,
     )
+    if opts.thinking_cue and not opts.stream:
+        LOG.info("The thinking sound is off, because it is carried in the streamed reply and --no-stream turns streaming off")
     if opts.proactive_sound and not opts.proactive_sound.exists():
         raise SystemExit(f"Proactive sound not found at {opts.proactive_sound}")
     speakers = people = commands = None

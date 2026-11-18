@@ -7,7 +7,7 @@ One turn:
 1. The egg hears the wake word and streams its mic audio to the server.
 2. The server finds the end of speech, then transcribes it locally with Whisper.
 3. Robin answers through robin-assistant, in the plain web chat the phone uses.
-4. Each of Robin's messages is spoken locally, sentence by sentence, and the egg starts playing the first sentence while the rest is still being spoken.
+4. Each of Robin's messages is spoken locally, sentence by sentence, and the egg starts playing the first sentence while the rest is still being spoken. If Robin has nothing to say after 2 s, the egg plays a soft thinking sound until it does.
 5. The egg reopens its mic for a few seconds, so a follow-up needs no wake word.
 
 This is the MVP, to prove egg to Mac mini end to end. It does not yet know who is speaking, check presence, or set an API key on the egg. The robin-assistant side is in [docs/robin-chat-api.md](../docs/robin-chat-api.md).
@@ -102,6 +102,17 @@ curl -d "Time to leave for the airport." http://localhost:8765/announce
 
 The egg plays the proactive chime first, then speaks, within the same speaking hours.
 
+## The thinking sound
+
+When Robin has not produced a first sentence 2 s after the end of speech, the egg plays `robin_egg_server/sounds/thinking.flac`, two soft low notes that repeat every 2 s, until the first sentence is ready. `--thinking-delay` changes the 2 s, and `--no-thinking-cue` turns the sound off.
+
+- The sound is carried in the streamed reply, in front of the first sentence. The server tells the egg to start playing the reply when the sound starts, not at the first sentence, and writes the sound 0.3 s ahead of the clock. When the sentence is ready, the sound fades out over 0.08 s and the sentence follows, so the voice starts up to about half a second after it is ready.
+- It plays only on turns that ask Robin. "Learn my voice", "forget my voice" and enrolment answers are answered by the server and never get it, and neither does a turn where nobody spoke or nothing was recognised.
+- It does not start once the first sentence has arrived and is only waiting to be spoken.
+- If Robin takes longer than the delay and then chooses to say nothing, the sound has already started. It fades out and the turn ends quietly.
+- If the turn fails, the sound fades out and the apology follows.
+- It does not play with `--no-stream`, because then the egg is given nothing to play until the reply is complete.
+
 ## Telling voices apart
 
 The server works out which household member is talking and sends their name to Robin with each question. Anyone it does not recognise is sent as "Unknown Speaker". It needs the speaker model downloaded as above, and the people robin-assistant lists for the agent. It is on by default; `--no-speaker-recognition` turns it off, and then every voice is "Unknown Speaker".
@@ -142,6 +153,8 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 | Option | Default | What it does |
 | --- | --- | --- |
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
+| `--thinking-cue`, `--no-thinking-cue` | on | Play a soft sound while Robin is slow to start answering. Not played with `--no-stream`. |
+| `--thinking-delay` | 2 s | How long after the end of speech the thinking sound starts, if Robin has not produced a first sentence. |
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. Enrolling and forgetting a voice still reopen it, whatever this is set to. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
 | `--max-utterance` | 30 s | The longest request. Listening stops here even if you have not paused. |
@@ -167,6 +180,7 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 The fake egg follows the firmware source, but these are untested on hardware:
 
 - Streamed replies. The server sends the reply URL at the start of the run and tells the egg to start playing after the first sentence, which is how Home Assistant streams. The FLAC header says "length unknown" until the end. If replies cut out, use `--no-stream`.
+- The thinking sound. It reaches the egg as a slow trickle of audio, 0.3 s ahead of the clock, where a reply arrives a sentence at a time. Whether the egg's player starts on so little, plays it without gaps, and moves into the first sentence cleanly is untested. The firmware may also show its replying light during the sound, not its thinking light, because the reply has started playing. If Robin chooses to say nothing after the sound has started, the egg gets the silent error while it is still playing the stream, and what its player does then is untested. The sound's level and pitch have been checked only on the Mac, not through the egg's speaker or near the cat. If it misbehaves, use `--no-thinking-cue`.
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
@@ -185,7 +199,10 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/commands.py` | The "learn my voice" and "forget my voice" conversations |
 | `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
+| `robin_egg_server/thinking.py` | The thinking sound: writes the loop into a reply until the first sentence is ready |
+| `robin_egg_server/sounds/thinking.flac` | The thinking sound's loop, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
+| `tests/test_thinking_cue.py` | The thinking sound against the fake egg: when it plays, how it ends, and when it must not play |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |

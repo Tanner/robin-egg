@@ -9,6 +9,9 @@ Event order for one turn, matching what Home Assistant sends when it streams TTS
 
 With continue_conversation=1 the egg reopens its mic after the reply, with no wake
 word, which is how follow-up questions work.
+
+When Robin is slow to start answering, the thinking sound (thinking.py) is written into
+the reply first, and INTENT_PROGRESS{tts_start_streaming=1} is sent when the sound starts.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
 from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
+from .thinking import THINKING_CUE, ThinkingCue
 from .voices import SpeechToText, TextToSpeech
 from .web import AudioServer
 
@@ -56,6 +60,8 @@ class Options:
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
+    thinking_cue: bool = True  # a soft sound while Robin is slow to start answering; needs stream
+    thinking_delay_s: float = 2.0  # how long after the end of speech before it starts
 
 
 @dataclass
@@ -72,6 +78,7 @@ class Turn:
     playing: bool = False  # the egg was told to start playing the streamed reply
     play_started: float | None = None  # when the egg began playing it, to tell when it will be done
     task: asyncio.Task | None = None
+    cue: ThinkingCue | None = None  # the thinking sound, on turns that ask Robin
 
 
 class Robin:
@@ -107,6 +114,7 @@ class Robin:
         self._proactive_task: asyncio.Task | None = None  # the message being spoken now
         self._proactive_stopped_by = ""  # why the message being spoken was cut short
         self.proactive_sound = load_sound(self.opts.proactive_sound or PROACTIVE_CHIME)
+        self.thinking_sound = load_sound(THINKING_CUE)
         web.on_announce = self.announce
 
     # ---- events to the egg ----
@@ -244,6 +252,7 @@ class Robin:
                 # No learning: these turns decide whose voice this is, so they must not quietly reshape a voiceprint.
                 self.last_match = match
                 return
+            t.cue = self._thinking_cue(t, t0)
             spoken = await self._speak(self.brain.reply(heard, user=match.user), t.reply, turn=t, t0=t0)
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
@@ -257,14 +266,39 @@ class Robin:
             raise
         except QuietTurn:
             LOG.info("Robin chose to say nothing; closing quietly")
+            await self._stop_thinking(t)
             self._end_without_reply()
         except Exception as err:  # noqa: BLE001 - the person in the room must hear that it failed
             LOG.exception("The turn failed")
             self._reset_commands()  # the apology ends the conversation
             await self._apologise(t, err)
         finally:
+            await self._stop_thinking(t)
             await t.reply.close()
             self._state.set()
+
+    def _thinking_cue(self, t: Turn, t0: float) -> ThinkingCue | None:
+        """Arms the thinking sound for a turn that asks Robin. t0 is when speech ended.
+
+        The sound travels in the streamed reply, so without streaming there is nowhere to put it.
+        """
+        if not (self.opts.thinking_cue and self.opts.stream):
+            return None
+
+        def start_playing() -> None:
+            t.playing = True
+            t.play_started = time.monotonic()
+            self.send(self.E.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
+
+        return ThinkingCue(self.thinking_sound, t.reply, t0 + self.opts.thinking_delay_s, start_playing)
+
+    async def _stop_thinking(self, t: Turn) -> None:
+        if t.cue is None:
+            return
+        await t.cue.stop()
+        if t.cue.playing and t.play_started is not None:
+            # A turn that ends with no reply still has the end of the sound to play.
+            self._playback_until = max(self._playback_until, t.play_started + t.reply.seconds)
 
     def _reset_commands(self) -> None:
         if self.commands is not None:
@@ -330,6 +364,8 @@ class Robin:
             first = True
             while (s := await queue.get()) is not None:
                 samples, rate = await asyncio.to_thread(self.tts.synthesize, s)
+                if turn is not None and turn.cue is not None:
+                    await turn.cue.stop()  # the thinking sound ends where the first sentence begins
                 await reply.push(samples, rate)
                 if first:
                     first = False
@@ -347,6 +383,8 @@ class Robin:
                 if worker.done():  # the TTS failed; stop reading the LLM
                     break
                 spoken.append(s)
+                if turn is not None and turn.cue is not None:
+                    turn.cue.hold()  # too late to start the thinking sound: this sentence is about to be spoken
                 await queue.put(s)
             if not spoken:
                 spoken.append(NO_REPLY)
