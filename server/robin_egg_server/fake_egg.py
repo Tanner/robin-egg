@@ -101,6 +101,11 @@ class FakeEgg:
         if self._server is not None:
             self._server.close()
 
+    def drop(self) -> None:
+        """Hangs up on the server, as a reboot or a Wi-Fi drop does."""
+        if self._w is not None:
+            self._w.close()
+
     # ---- wire ----
 
     def send(self, msg) -> None:

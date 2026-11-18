@@ -102,6 +102,39 @@ curl -d "Time to leave for the airport." http://localhost:8765/announce
 
 The egg plays the proactive chime first, then speaks, within the same speaking hours.
 
+## Checking on it
+
+`GET /status` on the same port answers with JSON, for a monitor or a quick look:
+
+```sh
+curl http://localhost:8765/status
+```
+
+```json
+{
+  "egg": {
+    "connected": true,
+    "since": "2026-11-17T09:14:02-08:00",
+    "name": "respeaker-xvf3800-a1b2c3",
+    "esphome_version": "2026.10.2",
+    "firmware": "formatbce.Respeaker XVF3800 Satellite",
+    "firmware_version": "2026.11.0"
+  },
+  "speaker_stream": {"enabled": true, "connected": true},
+  "last_turn": {"at": "2026-11-17T09:20:41-08:00", "ended": "answered"},
+  "proactive_waiting": 0,
+  "enrolled": ["tanner"]
+}
+```
+
+- `egg.since` is when the egg connected or, while `connected` is false, when it was lost (the server's start, if it has not connected yet). The name and versions are from its last connection, and `null` until it has connected once.
+- `speaker_stream` is robin-assistant's stream of the messages Robin sends on its own. `enabled` is false with `--no-robin-announcements` or `--echo`.
+- `last_turn.ended` is one of `answered`, `voice_command`, `quiet` (Robin chose to say nothing), `no_speech`, `nothing_recognised`, `failed` and `cancelled`. It is `null` until the first turn ends.
+- `proactive_waiting` counts Robin's own messages queued until the egg is idle.
+- `enrolled` lists whose voiceprints are loaded, by robin-assistant key.
+
+The port is open to the whole LAN, because the egg fetches replies from it, and nothing checks who is calling: `/announce` already lets anyone on the network make the egg speak. So `/status` is read-only and holds states, times and names only, never what anyone said or what Robin answered.
+
 ## Telling voices apart
 
 The server works out which household member is talking and sends their name to Robin with each question. Anyone it does not recognise is sent as "Unknown Speaker". It needs the speaker model downloaded as above, and the people robin-assistant lists for the agent. It is on by default; `--no-speaker-recognition` turns it off, and then every voice is "Unknown Speaker".
@@ -183,9 +216,11 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
 | `robin_egg_server/speakers.py` | Speaker embeddings, the voiceprint store, and matching a voice to a person |
 | `robin_egg_server/commands.py` | The "learn my voice" and "forget my voice" conversations |
-| `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
+| `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce` and `/status` |
+| `robin_egg_server/health.py` | What `/status` reports |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
+| `tests/test_health.py` | `/status` against the fake egg and the fake robin-assistant |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |

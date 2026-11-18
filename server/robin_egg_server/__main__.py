@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .brain import server_url
 from .egg import Options, Robin
+from .health import status
 from .logs import setup as setup_logging
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .web import AudioServer
@@ -35,7 +36,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--demo", nargs="+", metavar="AUDIO", help="No hardware: run against a fake egg that 'says' these audio files, one per turn")
     p.add_argument("--port", type=int, default=6053, help="ESPHome API port (default 6053)")
     p.add_argument("--psk", help="Base64 API encryption key, only if one was set on the egg")
-    p.add_argument("--http-port", type=int, default=8765, help="Port the egg fetches replies from, and /announce listens on")
+    p.add_argument("--http-port", type=int, default=8765, help="Port the egg fetches replies from, and /announce and /status listen on")
     p.add_argument("--advertise-ip", help="This Mac's LAN IP, if auto-detection picks the wrong one")
     p.add_argument("--echo", action="store_true", help="Repeat what was heard instead of asking Robin, to test the audio chain with no robin-assistant")
     p.add_argument("--server", help="robin-assistant's address: a host or IP, host:port, or a URL. The port defaults to 8273. Required unless --echo")
@@ -168,13 +169,15 @@ async def run(args: argparse.Namespace) -> None:
         await web.start("0.0.0.0", args.http_port, ip)
         LOG.info("Proactive speech: curl -d 'Hello from Robin' %s/announce", web.base_url)
         stop = asyncio.Event()
-        listener = None
+        listener = stream = None
         if not args.echo and args.robin_announcements:
             from .speaker_stream import SpeakerStream
 
-            listener = asyncio.create_task(SpeakerStream(args.server, args.agent_name, robin.proactive).run(stop))
+            stream = SpeakerStream(args.server, args.agent_name, robin.proactive)
+            listener = asyncio.create_task(stream.run(stop))
         elif not args.echo:
             LOG.info("Not listening for messages Robin sends on its own (--no-robin-announcements)")
+        web.on_status = lambda: status(robin, stream)
         try:
             await robin.run_forever(args.host, args.port, args.psk, show_logs=args.logs)
         finally:

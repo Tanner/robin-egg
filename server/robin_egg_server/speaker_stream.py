@@ -61,6 +61,7 @@ class SpeakerStream:
         self.stable_after_s = stable_after_s  # a connection up this long resets the backoff
         self.silence_timeout_s = silence_timeout_s  # pings come every 15 s; this long with nothing means it is dead
         self.connections = 0  # streams opened, for the log and the tests
+        self.connected = False  # the stream is open right now
         self._up_since: float | None = None
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -81,6 +82,8 @@ class SpeakerStream:
                     LOG.warning("The speaker stream sent nothing for %.0f s, not even a ping; reconnecting", self.silence_timeout_s)
                 except Exception:  # noqa: BLE001 - keep listening for the life of the server
                     LOG.exception("The speaker stream failed")
+                finally:
+                    self.connected = False
                 if self._up_since is not None and time.monotonic() - self._up_since >= self.stable_after_s:
                     delay = self.first_delay_s
                 wait = min(retry_after, self.max_delay_s) if retry_after is not None else delay
@@ -108,6 +111,7 @@ class SpeakerStream:
                     LOG.warning("robin-assistant answered %d for the speaker stream: %s", resp.status_code, reason)
                 return _retry_after(resp)
             self._up_since = time.monotonic()
+            self.connected = True
             self.connections += 1
             LOG.info("Listening for messages Robin sends on its own at %s", self.endpoint)
             async for name, data in sse_events(_lines_until_silent(resp.aiter_lines(), self.silence_timeout_s)):

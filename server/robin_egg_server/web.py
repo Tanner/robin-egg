@@ -2,6 +2,7 @@
 
 GET  /audio/<id>.flac  the egg's media player fetches replies here, while they are still being written
 POST /announce         body is text; Robin speaks it on the egg (proactive speech)
+GET  /status           JSON health for monitoring: connections, the last turn, who is enrolled
 GET  /                 a one-line health check
 """
 
@@ -9,10 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import uuid
 from collections import OrderedDict
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from .audio import ReplyAudio
 from .logs import current_tag, tagged
@@ -28,6 +30,8 @@ class AudioServer:
         self._keep = keep
         self._server: asyncio.base_events.Server | None = None
         self.on_announce: Callable[[str], Awaitable[tuple[int, str]]] | None = None
+        # Anyone on the LAN can read this, so it must never carry what was said or to whom.
+        self.on_status: Callable[[], dict[str, Any]] | None = None
 
     def add(self, audio: ReplyAudio, tag: str | None = None) -> str:
         """Registers a reply and returns the URL the egg should fetch.
@@ -86,6 +90,8 @@ class AudioServer:
                     return
                 status, msg = await self.on_announce(text)
                 await self._reply(w, status, msg + "\n")
+            elif method == "GET" and path == "/status" and self.on_status is not None:
+                await self._reply(w, 200, json.dumps(self.on_status(), indent=2) + "\n", "application/json")
             elif method == "GET" and path == "/":
                 await self._reply(w, 200, "Robin Egg Server\n")
             else:
@@ -97,8 +103,8 @@ class AudioServer:
                 w.close()
 
     @staticmethod
-    async def _reply(w: asyncio.StreamWriter, status: int, body: str) -> None:
+    async def _reply(w: asyncio.StreamWriter, status: int, body: str, content_type: str = "text/plain") -> None:
         reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 409: "Conflict", 503: "Service Unavailable"}.get(status, "")
         data = body.encode()
-        w.write(f"HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain\r\nContent-Length: {len(data)}\r\nConnection: close\r\n\r\n".encode() + data)
+        w.write(f"HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {len(data)}\r\nConnection: close\r\n\r\n".encode() + data)
         await w.drain()
