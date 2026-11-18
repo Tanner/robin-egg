@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Protocol
 
 from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_sound
+from . import whoami
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
@@ -258,6 +259,9 @@ class Robin:
                 # Robin would only guess at what this means, so the egg answers it itself.
                 LOG.info("Heard a voice command, but speaker recognition is turned off")
                 step = Step(SPEAKER_ID_OFF, False)
+            elif whoami.asked(heard):
+                LOG.info("Asked who is speaking, but speaker recognition is turned off")
+                step = Step(whoami.SPEAKER_ID_OFF, False)
             else:
                 step = None
             if step is not None:
