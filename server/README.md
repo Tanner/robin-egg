@@ -349,6 +349,36 @@ The OpenAI voice took longer than 4 s for one sentence, so Piper speaks the rest
 ```
 
 The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the server still starts, says so in the log, and Piper speaks every reply.
+## Measuring latency and false wake-ups
+
+The server writes one line per voice turn, and one per message Robin sends on its own, to `~/.robin-egg/turns.jsonl`. A turn's line has the time, the turn's tag, whether a wake word or a follow-up started it and which wake word, how many seconds of audio were heard and why listening ended, how the turn ended, and the timings the log prints: speech-to-text, speaker identification, first audio ready, whole reply ready, and the reply's length. It also says whether the speaker was recognised and with what score. A message's line has its id, whether it was urgent, whether it was spoken, dropped, interrupted or failed, why, and how long it waited for the egg if it was queued.
+
+The file never holds audio, what anyone said, what Robin said, or a task's label. It holds who spoke only with `--turn-log-names`.
+
+A turn ends as one of:
+
+| Outcome | Meaning |
+| --- | --- |
+| `answered` | Robin replied. |
+| `nobody spoke` | The mic closed with no speech. After a wake word this is a likely false wake-up; after a follow-up it is only the window closing. |
+| `nothing recognised` | There was sound, but speech-to-text found no words. |
+| `asked again` | Speech-to-text was unsure, so the egg asked for a repeat. |
+| `quiet` | Robin chose to say nothing. |
+| `local command` | The egg answered itself: enrolling or forgetting a voice, quiet by voice, "say that again", "who am I?". |
+| `failed` | The turn failed, whether or not the apology could be spoken. |
+| `cancelled` | The egg cancelled the turn, a new wake word replaced it, or the egg disconnected. |
+
+To summarise the last 7 days, from `server/`:
+
+```sh
+.venv/bin/python -m robin_egg_server.stats
+```
+
+It prints turns per day, the median and 90th-percentile time from the end of speech to the first spoken sentence being ready (the thinking sound may play before it), wake-ups where nobody spoke per day and per wake word, the failed turns with their times and tags, and Robin's own messages by what became of them. `--days N` changes the period, `--since` and `--until` take dates such as `2026-11-10`, and `--turn-log FILE` reads another file. Days before the log's first line are left out of the daily rates.
+
+When the file reaches 5 MB it is renamed `turns.jsonl.1`, replacing the previous one, and a new file starts. `stats` reads both. If a line cannot be written, the server warns once and carries on with the turn.
+
+Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numbers. `/announce` calls are not recorded. A turn still listening when the egg disconnects is recorded as cancelled only when the next turn starts.
 
 ## Useful options
 
@@ -399,6 +429,9 @@ The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the
 | `--speaker-model` | `models/wespeaker_en_voxceleb_resnet34_LM.onnx` | Another speaker embedding model. Changing it means everyone enrols again. |
 | `--recognition-light`, `--no-recognition-light` | on | Show a recognised speaker's colour on the LED ring while Robin thinks and replies. Needs speaker recognition. |
 | `--led-colours` | `~/.robin-egg/led-colours.json` | The ring colour for each person, by robin-assistant user key. |
+| `--turn-log FILE` | `~/.robin-egg/turns.jsonl` | Where each turn's outcome and timings are recorded for `stats`. Not used with `--demo` or `--echo`. |
+| `--no-turn-log` | off | Record nothing about turns. |
+| `--turn-log-names` | off | Also record who spoke each turn, not only whether they were recognised. |
 
 ## Not yet tried on the real egg
 
@@ -423,6 +456,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - The offline alert. The fake egg goes missing by closing its connection, which the server notices at once. How quickly the server notices a real egg that loses power or Wi-Fi depends on the ESPHome connection's keepalive, and an egg that reboots and reconnects within the limit should cause no text. The text itself has only been sent to the fake robin-assistant.
 - The recognition light. The fake egg only records the colour commands. Not yet seen on the ring: that a colour-only command to the "LED Ring" light repaints the thinking and replying animations partway through, that it leaves an unlit idle ring unlit, and how the default colours look. The colour is given back on the server's estimate of when the reply ends, so it may change a moment before or after the animation stops. The firmware saves the light's colour to flash, so an egg that loses power mid-reply starts in the person's colour until the server reconnects.
 - Offering enrolment. Whether two turns from one unrecognised person score as the same voice (0.5 or more against each other) has only been tried with made-up vectors, not real speech through the egg's mic. Too low a score means the hint never comes; too high a score for two different people means it comes early.
+- The turn log. Its timings stop when the audio is ready on the server, not when the egg starts playing it, so the real gap is longer by the egg's fetch and buffering. Whether a false wake-up from the TV shows as `nobody spoke`, `nothing recognised` or an answered turn depends on what the egg's mic and Whisper make of it, so read all three when judging a wake word.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 - Presence. `--presence-minutes` has only been run against the fake egg. Whether "spoke in the last N minutes" is a fair guess at someone being in the room, and what N should be, needs living with the real egg.
 
@@ -451,6 +485,8 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce`, `/quiet` and `/status` |
 | `robin_egg_server/health.py` | What `/status` reports, the text when the egg goes missing, and clearing old mic captures |
 | `robin_egg_server/enrol_offer.py` | When to offer enrolment to a voice that keeps going unrecognised |
+| `robin_egg_server/turn_log.py` | The turn log: one line per turn and per message Robin sends, with no audio or words |
+| `robin_egg_server/stats.py` | The `stats` command that summarises the turn log |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/sounds/urgent.flac` | The cue before an urgent message, made the same way |
 | `robin_egg_server/thinking.py` | The thinking sound: writes the loop into a reply until the first sentence is ready |
@@ -477,3 +513,4 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_urgent_messages.py` | Urgent messages: the cue, the speaking hours, the queue order and `/announce?priority=urgent` |
 | `tests/test_answer_messages.py` | Answering a message Robin sent on its own without the wake word |
 | `tests/test_presence.py` | `--presence-minutes`: Robin's own messages spoken or dropped by when someone last spoke |
+| `tests/test_turn_log.py` | The turn log and `stats`, through the fake egg and on their own |
