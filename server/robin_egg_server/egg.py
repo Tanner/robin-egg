@@ -58,6 +58,7 @@ class Options:
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
+    proactive_max_age_s: float = 600.0  # a message that waited longer than this for the egg is stale, and dropped
 
 
 @dataclass
@@ -104,7 +105,7 @@ class Robin:
         self._playback_until = 0.0  # when the egg should finish playing the last reply
         self._state = asyncio.Event()  # set whenever the egg may have become idle
         self._speaker_lock = asyncio.Lock()  # one announcement at a time
-        self._proactive_queue: asyncio.Queue[SpeakerMessage] = asyncio.Queue()
+        self._proactive_queue: asyncio.Queue[tuple[SpeakerMessage, float]] = asyncio.Queue()  # with when each arrived
         self._proactive_worker: asyncio.Task | None = None
         self._proactive_task: asyncio.Task | None = None  # the message being spoken now
         self._proactive_stopped_by = ""  # why the message being spoken was cut short
@@ -449,8 +450,8 @@ class Robin:
     async def proactive(self, msg: SpeakerMessage) -> None:
         """A message Robin sent on its own: a chime, then the message, once the egg is idle.
 
-        Outside speaking hours it is dropped, not saved for later. Messages that arrive
-        together are spoken in order, one chime each.
+        Outside speaking hours it is dropped, not saved for later, and so is one that waits
+        too long for the egg. Messages that arrive together are spoken in order, one chime each.
         """
         with tagged(msg.tag):
             if not self._in_speaking_hours():
@@ -466,7 +467,7 @@ class Robin:
                 LOG.info("Queued message %s until the egg is idle: %s", msg.describe(), busy)
             else:
                 LOG.info("Speaking message %s now", msg.describe())
-        self._proactive_queue.put_nowait(msg)
+        self._proactive_queue.put_nowait((msg, time.monotonic()))
         if self._proactive_worker is None or self._proactive_worker.done():
             self._proactive_worker = asyncio.create_task(self._speak_proactive_messages())
 
@@ -480,9 +481,14 @@ class Robin:
 
     async def _speak_proactive_messages(self) -> None:
         while True:
-            msg = await self._proactive_queue.get()
+            msg, arrived = await self._proactive_queue.get()
             with tagged(msg.tag):  # the speaking task started here keeps the tag
                 await self._until_idle()
+                waited = time.monotonic() - arrived
+                if waited > self.opts.proactive_max_age_s:
+                    # A reminder spoken hours late, when the egg comes back, is worse than one left in the chat.
+                    LOG.info("Dropped message %s: it waited %.0f s for the egg, longer than the %.0f s allowed", msg.describe(), waited, self.opts.proactive_max_age_s)
+                    continue
                 if not self._in_speaking_hours():
                     LOG.info("Dropped message %s: speaking hours (%s) ended while it waited", msg.describe(), self._hours())
                     continue

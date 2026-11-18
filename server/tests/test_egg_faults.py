@@ -227,3 +227,34 @@ def test_a_capture_that_cannot_be_saved_does_not_stop_the_answer(tmp_path):
     opts = Options(follow_up="off", save_audio=tmp_path / "a-file" / "captures")
     asyncio.run(converse([speech()], FakeSTT(["hi"]), brain, ToneTTS(), opts))
     assert brain.heard == ["hi"]
+
+
+# ---- Robin's own messages ----
+
+
+def test_a_message_that_waited_too_long_for_the_egg_is_dropped(caplog):
+    from robin_egg_server.speaker_stream import SpeakerMessage
+
+    played: list[str] = []
+
+    class Egg:
+        async def send_voice_assistant_announcement_await_response(self, url, timeout, text):
+            played.append(text)
+
+    async def scenario() -> None:
+        robin = idle_robin(proactive_max_age_s=0.3)
+        await robin.proactive(SpeakerMessage(7, "Leave for the dentist now.", "Dentist"))  # the egg is away
+        await asyncio.sleep(0.6)
+        robin.client = Egg()  # back, but the reminder is stale
+        robin._state.set()
+        await robin.proactive(SpeakerMessage(8, "The bins go out tonight.", "Bins"))
+        for _ in range(100):
+            if played:
+                break
+            await asyncio.sleep(0.05)
+        await robin._stop_proactive()
+
+    with caplog.at_level("INFO", logger="robin"):
+        asyncio.run(scenario())
+    assert played == ["The bins go out tonight."]
+    assert "Dropped message 7 (Dentist): it waited" in caplog.text

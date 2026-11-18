@@ -88,7 +88,7 @@ Say "Okay Nabu" (the stock wake word), then a question. macOS asks whether Pytho
 Robin also writes messages into the plain web chat on its own: a reminder coming due, a scheduled task, a held update, a routine. The server holds robin-assistant's speaker stream (`GET /api/chat/:agent/speaker`) open for its whole life and speaks each message after a sound.
 
 - Only between 8 AM and 8 PM. Change it with `--speaking-hours`. A message outside those hours is dropped, not saved for later.
-- It never talks over the egg. A message that arrives while the egg is listening, thinking or playing a reply waits until the egg is idle. Several waiting messages are spoken in order, each after its own sound.
+- It never talks over the egg. A message that arrives while the egg is listening, thinking or playing a reply waits until the egg is idle. Several waiting messages are spoken in order, each after its own sound. A message that has waited more than 10 minutes, as when the egg was off the network, is dropped; it is still in the chat.
 - The wake word stops a message partway, as it stops a reply.
 - Nothing is replayed. A message sent while the server is not connected is missed, but it is still in the chat. The stream closes when Robin reloads, and the server reconnects after 1 s, doubling to 30 s.
 - The log shows each message's id and task label, and whether it was spoken, queued or dropped.
