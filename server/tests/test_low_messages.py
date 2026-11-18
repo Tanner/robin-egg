@@ -207,6 +207,19 @@ def test_the_wake_word_during_the_cue_leaves_the_message_held(caplog):
     assert said(egg).endswith("The washing machine has finished.")  # still held, so it could be asked for at once
 
 
+def test_the_next_reply_after_a_chime_mentions_the_held_message():
+    async def scenario(egg, robin):
+        await robin.proactive(low(63, "The washing machine has finished.", "Laundry"))
+        await eventually(lambda: egg.announcements)
+        await eventually(lambda: robin._busy_reason() is None)
+        await ask(egg)
+
+    egg, robin, brain = asyncio.run(with_egg(scenario, Options(speaking_hours=ALWAYS, follow_up="off"), ["When is the dentist?"]))
+    assert brain.heard == ["When is the dentist?"]
+    assert said(egg).endswith("By the way, one message is waiting. Say 'what did I miss?' to hear it.")
+    assert held_ids(robin) == [63]
+
+
 # ---- the turn log and the room facts ----
 
 

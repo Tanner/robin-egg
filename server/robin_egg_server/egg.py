@@ -40,6 +40,7 @@ from .enrol_offer import ENROL_OFFER, EnrolOffer
 from .logs import tagged
 from .quiet import QuietMode
 from .mic_mute import MicMute
+from .morning_mention import MorningMention
 from .repeat import DEFAULT_WINDOW_S, NOTHING_TO_REPEAT, LastSaid
 from .presence import Presence, SpokenTo, absence
 from .room import RoomVolume
@@ -103,6 +104,7 @@ class Options:
     message_waiting: bool = True  # hold messages from outside speaking hours and show the waiting light
     ring_file: Path | None = None  # where the ring's own state is kept while the waiting light is on
     min_volume: float = MIN_VOLUME  # the quietest the egg can be set by voice, 0.0 to 1.0
+    morning_mention: bool = True  # once speaking hours begin, end one reply by saying that messages are waiting
 
 
 @dataclass
@@ -182,6 +184,7 @@ class Robin:
         self.closing_sound = load_sound(CLOSING_CUE)
         self.turn_log = TurnLog(self.opts.turn_log, names=self.opts.turn_log_names)
         self.waiting = MessageWaiting(self.opts.ring_file) if self.opts.message_waiting else None
+        self.morning_mention = MorningMention() if self.waiting is not None and self.opts.morning_mention else None
         web.on_announce = self.announce
         web.on_quiet = self.quiet.http
 
@@ -410,13 +413,15 @@ class Robin:
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
             cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))
-            if await self._enrol_offer_due(match):
-                await self._speak(_once(ENROL_OFFER), t.reply, turn=t)
-                LOG.info('Robin added: "%s"', ENROL_OFFER)
-                await self._finish_reply(t, f"{reply_text} {ENROL_OFFER}", cont)
+            # One hint a reply. The enrolment offer goes first, and the mention keeps for the next reply.
+            hint = ENROL_OFFER if await self._enrol_offer_due(match) else self._morning_mention_due()
+            if hint is not None:
+                await self._speak(_once(hint), t.reply, turn=t)
+                LOG.info('Robin added: "%s"', hint)
+                await self._finish_reply(t, f"{reply_text} {hint}", cont)
             else:
                 await self._finish_reply(t, reply_text, cont)
-            self.last_said.remember(reply_text)  # without the hint, which is offered once
+            self.last_said.remember(reply_text)  # without the hint, which is said once
             if self.speakers is not None:
                 self.speakers.learn(match)
             self.last_match = match
@@ -567,6 +572,22 @@ class Robin:
         except Exception as err:  # noqa: BLE001 - a hint is not worth an apology
             LOG.warning("Could not work out whether to offer enrolment, so it is not offered this turn (%s)", err)
             return False
+
+    def _morning_mention_due(self) -> str | None:
+        """The sentence saying that messages are waiting, when this reply should end with it.
+
+        Only in speaking hours, and not while quiet was asked for by voice: then Robin says
+        no more than it was asked. Never raises: the answer was already spoken.
+        """
+        if self.morning_mention is None or self.waiting is None:
+            return None
+        try:
+            if not self._in_speaking_hours() or self.quiet.reason() is not None:
+                return None
+            return self.morning_mention.due(self.waiting.waiting())
+        except Exception as err:  # noqa: BLE001 - a hint is not worth an apology
+            LOG.warning("Could not work out whether to mention the waiting messages, so they are not mentioned this turn (%s)", err)
+            return None
 
     async def _finish_reply(self, t: Turn, reply_text: str, cont: bool) -> None:
         E = self.E

@@ -96,6 +96,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-turn-log", action="store_true", help="Do not record turns")
     p.add_argument("--turn-log-names", action="store_true", help="Also record who spoke each turn, not only whether they were recognised")
     p.add_argument("--message-waiting", action=argparse.BooleanOptionalAction, default=True, help="Hold the messages Robin sends on its own outside --speaking-hours, breathe the egg's ring while any wait, and read them out to 'what did I miss?' (default on; off drops them)")
+    p.add_argument("--morning-mention", action=argparse.BooleanOptionalAction, default=True, help="Once speaking hours have begun, end the first reply from Robin by saying how many held messages are waiting and how to hear them, once per batch (default on; needs --message-waiting)")
     p.add_argument("--min-volume", type=float, default=MIN_VOLUME, help=f"The quietest the egg can be set by voice, from 0 to 1 (default {MIN_VOLUME}). 'Set the volume to one' sets this")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -228,6 +229,7 @@ def build(args: argparse.Namespace):
         turn_log_names=args.turn_log_names,
         message_waiting=args.message_waiting,
         ring_file=RING_FILE,
+        morning_mention=args.morning_mention,
         min_volume=args.min_volume,
     )
     if opts.thinking_cue and not opts.stream:
