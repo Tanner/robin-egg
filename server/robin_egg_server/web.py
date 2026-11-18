@@ -19,6 +19,8 @@ from .logs import current_tag, tagged
 
 LOG = logging.getLogger("robin.web")
 
+MAX_ANNOUNCE_BYTES = 16384
+
 
 class AudioServer:
     def __init__(self, keep: int = 20) -> None:
@@ -79,8 +81,14 @@ class AudioServer:
                     w.write(chunk)
                     await w.drain()
             elif method == "POST" and path == "/announce":
-                n = int(headers.get("content-length", "0"))
-                text = (await asyncio.wait_for(r.readexactly(n), 10)).decode("utf-8").strip() if n else ""
+                try:
+                    n = int(headers.get("content-length", "0"))
+                except ValueError:
+                    n = -1
+                if n < 0 or n > MAX_ANNOUNCE_BYTES:
+                    await self._reply(w, 400, f"Content-Length must be a number from 0 to {MAX_ANNOUNCE_BYTES}\n")
+                    return
+                text = (await asyncio.wait_for(r.readexactly(n), 10)).decode("utf-8", "replace").strip() if n else ""
                 if not text or self.on_announce is None:
                     await self._reply(w, 400, "send the words to speak as the request body\n")
                     return
@@ -92,13 +100,17 @@ class AudioServer:
                 await self._reply(w, 404, "not found\n")
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):
             pass
+        except Exception:  # noqa: BLE001 - whoever asked gets an answer, and the server keeps serving
+            LOG.exception("An HTTP request from %s failed", peer[0] if peer else "?")
+            with contextlib.suppress(Exception):
+                await self._reply(w, 500, "the server failed to handle this request; see its log\n")
         finally:
             with contextlib.suppress(Exception):
                 w.close()
 
     @staticmethod
     async def _reply(w: asyncio.StreamWriter, status: int, body: str) -> None:
-        reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 409: "Conflict", 503: "Service Unavailable"}.get(status, "")
+        reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 409: "Conflict", 500: "Internal Server Error", 502: "Bad Gateway", 503: "Service Unavailable"}.get(status, "")
         data = body.encode()
         w.write(f"HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain\r\nContent-Length: {len(data)}\r\nConnection: close\r\n\r\n".encode() + data)
         await w.drain()

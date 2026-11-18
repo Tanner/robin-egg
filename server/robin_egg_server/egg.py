@@ -40,6 +40,8 @@ NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 # After a reply that asked for a follow-up, how long past its end to wait for the egg to reopen its mic.
 FOLLOW_UP_GRACE_S = 3.0
+RECONNECT_DELAY_S = 2.0  # the first wait before trying the egg again; doubles up to 30 s
+ANNOUNCE_WAIT_S = 60.0  # how long /announce waits for the egg to be idle before giving up
 
 
 class EventSink(Protocol):
@@ -70,7 +72,7 @@ class Turn:
     started: float = field(default_factory=time.monotonic)
     listening: bool = True
     playing: bool = False  # the egg was told to start playing the streamed reply
-    play_started: float | None = None  # when the egg began playing it, to tell when it will be done
+    play_end: float = 0.0  # when the egg should run out of the audio made so far, once it is playing
     task: asyncio.Task | None = None
 
 
@@ -299,7 +301,7 @@ class Robin:
         self.send(E.VOICE_ASSISTANT_TTS_START, {"text": reply_text[:480]})
         await t.reply.close()
         self.send(E.VOICE_ASSISTANT_TTS_END, {"url": t.url})
-        self._playback_until = (t.play_started or time.monotonic()) + t.reply.seconds
+        self._playback_until = t.play_end if t.playing else time.monotonic() + t.reply.seconds
         self.send(E.VOICE_ASSISTANT_RUN_END)
 
     async def _apologise(self, t: Turn, err: Exception) -> None:
@@ -330,7 +332,11 @@ class Robin:
             first = True
             while (s := await queue.get()) is not None:
                 samples, rate = await asyncio.to_thread(self.tts.synthesize, s)
+                before = reply.seconds
                 await reply.push(samples, rate)
+                if turn is not None and turn.playing:
+                    # Audio made after the egg ran dry plays from now, not from where the last piece ended.
+                    turn.play_end = max(turn.play_end, time.monotonic()) + reply.seconds - before
                 if first:
                     first = False
                     if t0 is not None:
@@ -338,7 +344,7 @@ class Robin:
                     # A second tts_start_streaming would make the egg fetch the stream again from the start.
                     if turn is not None and self.opts.stream and not turn.playing:
                         turn.playing = True
-                        turn.play_started = time.monotonic()
+                        turn.play_end = time.monotonic() + reply.seconds
                         self.send(self.E.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
 
         worker = asyncio.create_task(voice())
@@ -361,19 +367,21 @@ class Robin:
     def _save_capture(self, t: Turn) -> None:
         if self.opts.save_audio is None:
             return
-        self.opts.save_audio.mkdir(parents=True, exist_ok=True)
         path = self.opts.save_audio / f"capture-{time.strftime('%Y%m%d-%H%M%S')}.wav"
-        with wave.open(str(path), "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(MIC_RATE)
-            w.writeframes(bytes(t.audio))
+        try:
+            self.opts.save_audio.mkdir(parents=True, exist_ok=True)
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(MIC_RATE)
+                w.writeframes(bytes(t.audio))
+        except OSError as err:  # keeping a capture is a bench aid; the person still gets an answer
+            LOG.warning("Could not save the mic capture to %s (%s)", path, err)
 
     # ---- proactive speech ----
 
     def _in_speaking_hours(self) -> bool:
-        start, end = self.opts.speaking_hours
-        return start <= time.localtime().tm_hour < end
+        return in_hours(time.localtime().tm_hour, self.opts.speaking_hours)
 
     def _hours(self) -> str:
         start, end = self.opts.speaking_hours
@@ -399,11 +407,26 @@ class Robin:
 
         self._announce_count += 1
         with tagged(f"a{self._announce_count}"):
+            try:
+                await asyncio.wait_for(self._until_idle(), ANNOUNCE_WAIT_S)
+            except asyncio.TimeoutError:
+                reason = self._busy_reason() or "the egg is busy"
+                LOG.info('Not announcing "%s": after %.0f s, %s', text, ANNOUNCE_WAIT_S, reason)
+                return (503 if self.client is None else 409), f"{reason}; not spoken"
             async with self._speaker_lock:
                 reply = await self._announcement(text, chime=True)
+                client = self.client
+                if client is None:
+                    LOG.info('Not announcing "%s": the egg disconnected before it could be spoken', text)
+                    return 503, "the egg is not connected"
                 url = self.web.add(reply)
                 LOG.info('Announcing: "%s"', text)
-                result = await self.client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
+                try:
+                    result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
+                except Exception as err:  # noqa: BLE001 - whoever asked must hear that it was not spoken
+                    why = str(err) or type(err).__name__
+                    LOG.warning('The egg did not play the announcement "%s" (%s)', text, why)
+                    return 502, f"the egg did not play it ({why})"
             LOG.info("Announcement finished (%s)", "spoken" if getattr(result, "success", True) else "the egg reported a failure")
         return 200, f"spoken ({getattr(result, 'success', result)})"
 
@@ -502,9 +525,10 @@ class Robin:
 
         stop = stop or asyncio.Event()
         attempts = [("your key", psk)] if psk else [("Noise with the all-zeros key", ZERO_PSK), ("plaintext", None)]
-        delay = 2.0
+        delay = RECONNECT_DELAY_S
         while not stop.is_set():
             client = None
+            errors: list[Exception] = []
             disconnected = asyncio.Event()
 
             async def on_stop(expected: bool) -> None:
@@ -519,15 +543,19 @@ class Robin:
                     break
                 except Exception as err:  # noqa: BLE001 - try the next mode, then retry later
                     LOG.debug("Could not connect using %s: %s", label, err)
+                    errors.append(err)
                     with contextlib.suppress(Exception):
                         await c.disconnect()
             if client is None:
-                LOG.info("Egg %s:%d not reachable; retrying in %.0f s", host, port, delay)
+                if key_refused(errors):
+                    LOG.warning("Egg %s:%d answered but refused the encryption key (%s). Check --psk; retrying in %.0f s", host, port, errors[0], delay)
+                else:
+                    LOG.info("Egg %s:%d not reachable; retrying in %.0f s", host, port, delay)
                 with contextlib.suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(stop.wait(), delay)
                 delay = min(delay * 2, 30)
                 continue
-            delay = 2.0
+            set_up = False
             try:
                 info = await client.device_info()
                 LOG.info("Egg: %s, ESPHome %s, %s %s", info.name, info.esphome_version, info.project_name, info.project_version)
@@ -546,6 +574,8 @@ class Robin:
                     handle_announcement_finished=self.handle_announcement_finished,
                 )
                 LOG.info("Ready. Say the wake word, then a question.")
+                set_up = True
+                delay = RECONNECT_DELAY_S
                 waiter = asyncio.create_task(stop.wait())
                 dropper = asyncio.create_task(disconnected.wait())
                 await asyncio.wait({waiter, dropper}, return_when=asyncio.FIRST_COMPLETED)
@@ -553,19 +583,47 @@ class Robin:
                 dropper.cancel()
                 if disconnected.is_set():
                     LOG.warning("Lost the egg; reconnecting")
+            except Exception as err:  # noqa: BLE001 - an egg that drops just after connecting is tried again, like any other drop
+                LOG.warning("Lost the egg (%s); reconnecting", str(err) or type(err).__name__)
             finally:
                 self.client = None
                 self._state.set()
                 self.last_match = None  # the next conversation starts fresh, whoever is in the room by then
-                if self.turn is not None and self.turn.task is not None:
-                    self.turn.task.cancel()
+                # A turn left "listening" would make the egg look busy after it reconnects.
+                turn, self.turn = self.turn, None
+                self._follow_up_pending = False
+                if turn is not None:
+                    turn.listening = False
+                    if turn.task is not None:
+                        turn.task.cancel()
+                    else:
+                        await turn.reply.close()
                 if self._proactive_task is not None and not self._proactive_task.done():
                     self._proactive_stopped_by = "the egg disconnected"
                     self._proactive_task.cancel()
                 self._reset_commands()  # half an enrolment must not resume with whoever speaks after a reconnect
                 with contextlib.suppress(Exception):
                     await client.disconnect()
+            if not set_up and not stop.is_set():
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(stop.wait(), delay)
+                delay = min(delay * 2, 30)
         await self._stop_proactive()
+
+
+def in_hours(hour: int, hours: tuple[int, int]) -> bool:
+    """Whether `hour` is inside start-end, start inclusive. 20-8 runs past midnight."""
+    start, end = hours
+    if start <= end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
+def key_refused(errors: list[Exception]) -> bool:
+    """Whether the egg answered but would not talk to us, which waiting will not fix."""
+    from aioesphomeapi.core import EncryptionPlaintextAPIError, InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
+
+    return any(isinstance(e, (InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError, EncryptionPlaintextAPIError)) for e in errors)
 
 
 async def _once(text: str) -> AsyncIterator[str]:
