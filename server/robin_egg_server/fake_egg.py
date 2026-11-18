@@ -26,6 +26,8 @@ from .mic_mute import MUTE_OBJECT_ID
 PROTO_TO_TYPE = {v: k for k, v in MESSAGE_TYPE_TO_PROTO.items()}
 CHUNK = 1024  # bytes of mic audio per message, 32 ms
 MUTE_KEY = 0x4D555445  # the fake's entity key for the mute switch; the server must not depend on it
+MEDIA_PLAYER_KEY = 0x5EA4E401  # entity keys are hashes on the real egg, so nothing may assume a value
+GROUP_PLAYER_KEY = 0x5EA4E402
 
 
 def varint(n: int) -> bytes:
@@ -67,6 +69,7 @@ class Run:
     final: bytes = b""  # the same URL fetched again after the run ended
     first_byte_at: float | None = None
     tts_end_at: float | None = None
+    volume_at_playback: float | None = None  # the media player's volume when the reply started playing
 
     def types(self) -> list[int]:
         return [t for t, _ in self.events]
@@ -76,9 +79,28 @@ class Run:
 
 
 class FakeEgg:
-    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu", announce_seconds: float = 0.0, wake_words: list[str | None] | None = None, mute_switch: bool = True, muted: bool = False) -> None:
+    def __init__(
+        self,
+        utterances: list[bytes],
+        realtime: bool = False,
+        wake_word: str = "Okay Nabu",
+        announce_seconds: float = 0.0,
+        wake_words: list[str | None] | None = None,
+        mute_switch: bool = True,
+        muted: bool = False,
+        volume: float = 0.5,
+        speaker_muted: bool = False,
+        media_player_object_id: str = "media_player",
+    ) -> None:
         """wake_words, when given, says how each run starts, one per utterance: a wake word
-        starts that run even if the server did not ask for a follow-up, and None means a follow-up."""
+        starts that run even if the server did not ask for a follow-up, and None means a follow-up.
+
+        muted is the microphone mute switch; speaker_muted is the media player's own mute.
+        The media player starts at the firmware's first-boot volume, 0.5, and is listed under
+        the firmware's object id unless media_player_object_id names another."""
+        self.volume, self.speaker_muted = volume, speaker_muted
+        self.media_player_object_id = media_player_object_id
+        self.volumes_set: list[float] = []  # every volume the server asked for, in order
         self.utterances = list(utterances)
         self.realtime = realtime
         self.wake_word = wake_word
@@ -147,11 +169,16 @@ class FakeEgg:
         elif isinstance(msg, pb.ListEntitiesRequest):
             if self.mute_switch:
                 self.send(pb.ListEntitiesSwitchResponse(object_id=MUTE_OBJECT_ID, key=MUTE_KEY, name="Microphone Mute"))
+            # The firmware lists a Sendspin group player as well as the speaker's own.
+            self.send(pb.ListEntitiesMediaPlayerResponse(object_id="sendspin_group", key=GROUP_PLAYER_KEY, name="Sendspin Group"))
+            self.send(pb.ListEntitiesMediaPlayerResponse(object_id=self.media_player_object_id, key=MEDIA_PLAYER_KEY, name="Media Player"))
             self.send(pb.ListEntitiesDoneResponse())
         elif isinstance(msg, pb.SubscribeStatesRequest):
             self._states_subscribed = True
             if self.mute_switch:
                 self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=self.muted))
+            self.send(pb.MediaPlayerStateResponse(key=GROUP_PLAYER_KEY, state=pb.MEDIA_PLAYER_STATE_IDLE, volume=1.0))
+            self._send_volume()
         elif isinstance(msg, pb.SubscribeVoiceAssistantRequest) and msg.subscribe:
             await asyncio.sleep(0.05)
             first = self.wake_words[0] if self.wake_words else None
@@ -163,6 +190,17 @@ class FakeEgg:
             await self._on_event(msg.event_type, {d.name: d.value for d in msg.data})
         elif isinstance(msg, pb.VoiceAssistantAnnounceRequest):
             asyncio.create_task(self._announce(msg))
+        elif isinstance(msg, pb.MediaPlayerCommandRequest) and msg.key == MEDIA_PLAYER_KEY:
+            if msg.has_command and msg.command in (pb.MEDIA_PLAYER_COMMAND_MUTE, pb.MEDIA_PLAYER_COMMAND_UNMUTE):
+                self.speaker_muted = msg.command == pb.MEDIA_PLAYER_COMMAND_MUTE
+            if msg.has_volume:
+                self.volume = msg.volume
+                self.volumes_set.append(msg.volume)
+            if self._states_subscribed:
+                self._send_volume()
+
+    def _send_volume(self) -> None:
+        self.send(pb.MediaPlayerStateResponse(key=MEDIA_PLAYER_KEY, state=pb.MEDIA_PLAYER_STATE_IDLE, volume=self.volume, muted=self.speaker_muted))
 
     async def _announce(self, msg) -> None:
         body = await asyncio.to_thread(self._get, msg.media_id)
@@ -221,10 +259,12 @@ class FakeEgg:
         if t == pb.VOICE_ASSISTANT_STT_VAD_END:
             self._mic_open = False
         elif t == pb.VOICE_ASSISTANT_INTENT_PROGRESS and data.get("tts_start_streaming") == "1":
+            run.volume_at_playback = self.volume
             self._fetch = asyncio.create_task(self._fetch_reply(run, run.data(pb.VOICE_ASSISTANT_RUN_START)["url"]))
         elif t == pb.VOICE_ASSISTANT_TTS_END:
             run.tts_end_at = time.monotonic()
             if self._fetch is None:  # not streamed: play the finished file now
+                run.volume_at_playback = self.volume
                 self._fetch = asyncio.create_task(self._fetch_reply(run, data["url"]))
         elif t == pb.VOICE_ASSISTANT_RUN_END:
             self._mic_open = False

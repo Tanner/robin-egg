@@ -46,6 +46,7 @@ from .speakers import Match, People, SpeakerId
 from .thinking import THINKING_CUE, ThinkingCue
 from .vad import ModelVad, make_vad
 from .voices import SpeechToText, TextToSpeech
+from .volume import MIN_VOLUME, EggVolume
 from .web import AudioServer
 
 LOG = logging.getLogger("robin.egg")
@@ -90,6 +91,7 @@ class Options:
     match_voice: bool = False  # also speak more quietly to someone who spoke quietly
     thinking_cue: bool = True  # a soft sound while Robin is slow to start answering; needs stream
     thinking_delay_s: float = 2.0  # how long after the end of speech before it starts
+    min_volume: float = MIN_VOLUME  # the quietest the egg can be set by voice, 0.0 to 1.0
 
 
 @dataclass
@@ -131,6 +133,7 @@ class Robin:
         self.speakers, self.people, self.commands = speakers, people, commands
         self.presence: Presence = presence or SpokenTo()
         self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
+        self.volume = EggVolume(min_volume=self.opts.min_volume)  # the egg's speaker volume, while it is connected
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
         self.last_said = LastSaid(self.opts.repeat_window_s)  # text only, for "say that again"
         self._unsure_streak = 0  # how many turns in a row ended in asking for a repeat
@@ -317,6 +320,9 @@ class Robin:
                 step = Step(whoami.SPEAKER_ID_OFF, False)
             else:
                 step = None
+            if step is None and (said := await self.volume.handle(heard)) is not None:
+                # Spoken once the egg has the new volume, so the reply itself shows how loud it is now.
+                step = Step(said, self.opts.follow_up == "always")
             if step is not None:
                 await self._speak(_once(step.say), t.reply, turn=t, t0=t0)
                 LOG.info('Robin: "%s"', step.say)
@@ -825,6 +831,7 @@ class Robin:
                 self.client = client
                 self._state.set()
                 self._egg_connected(True)
+                await self.volume.attach(client)
                 client.subscribe_voice_assistant(
                     handle_start=self.handle_start,
                     handle_stop=self.handle_stop,
@@ -846,6 +853,7 @@ class Robin:
             finally:
                 self.client = None
                 self.mic_mute.reset()
+                self.volume.detach()
                 self._state.set()
                 self._egg_connected(False)
                 self.last_match = None  # the next conversation starts fresh, whoever is in the room by then

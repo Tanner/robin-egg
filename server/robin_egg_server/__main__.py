@@ -18,6 +18,7 @@ from .logs import setup as setup_logging
 from .room import FLOOR_GAIN, parse_hours
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .vad import VAD_KINDS
+from .volume import MIN_VOLUME
 from .web import AudioServer
 
 LOG = logging.getLogger("robin")
@@ -80,6 +81,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--quiet-hours", default="21-7", help="Hours when Robin speaks more quietly, replies and announcements alike, e.g. 21-7; off for never")
     p.add_argument("--quiet-volume", type=int, default=60, metavar="PERCENT", help="How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100 (default 60)")
     p.add_argument("--match-voice", action=argparse.BooleanOptionalAction, default=False, help="Also speak more quietly to someone who spoke quietly (default off until it is tried on the real egg)")
+    p.add_argument("--min-volume", type=float, default=MIN_VOLUME, help=f"The quietest the egg can be set by voice, from 0 to 1 (default {MIN_VOLUME}). 'Set the volume to one' sets this")
     p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -102,6 +104,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error(f"--quiet-hours {err}")
     if not FLOOR_GAIN * 100 <= args.quiet_volume <= 100:
         p.error(f"--quiet-volume {args.quiet_volume} is outside {FLOOR_GAIN * 100:.0f} to 100; lower than that and speech is hard to follow")
+    if not 0.0 <= args.min_volume < 1.0:
+        p.error("--min-volume must be at least 0 and below 1")
     if not args.host and not args.demo:
         p.error("give the egg's address, or --demo AUDIO to test without hardware")
     if not args.echo:
@@ -199,6 +203,7 @@ def build(args: argparse.Namespace):
         match_voice=args.match_voice,
         thinking_cue=args.thinking_cue,
         thinking_delay_s=args.thinking_delay,
+        min_volume=args.min_volume,
     )
     if opts.thinking_cue and not opts.stream:
         LOG.info("The thinking sound is off, because it is carried in the streamed reply and --no-stream turns streaming off")

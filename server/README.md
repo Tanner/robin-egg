@@ -231,6 +231,26 @@ It asks once. If the next try is unsure too, the words go to Robin as heard, so 
 
 The defaults are cautious: they are Whisper's own limits for a failed transcript, so a fluent mishearing still passes. To tune them, compare the numbers on the "Heard" lines of turns that went wrong with those that went right, then set `--min-logprob`, `--max-no-speech` and `--max-compression`.
 
+## Volume by voice
+
+Say the wake word, then one of these. The server changes the egg's speaker volume itself, without asking Robin, and it works whether or not speaker recognition is on.
+
+| Say | What happens |
+| --- | --- |
+| "louder", "volume up", "turn it up" | One level up |
+| "quieter", "volume down", "turn it down" | One level down |
+| "set the volume to five", "volume five" | That level, from one to ten |
+
+Robin answers "Volume five." at the new volume, so the answer itself shows how loud the egg is now. At either end it says "That's as loud as I go." or "That's as quiet as I go." and changes nothing.
+
+Level ten is full volume. Level one is the quietest the egg can be set by voice, 30% of full unless `--min-volume` says otherwise, so nobody can talk the egg into silence. A volume set some other way, below that, is left alone: "quieter" will not raise it. A volume command also unmutes the egg.
+
+The egg keeps its volume across restarts and power cuts. Reflashing it over USB erases the saved volume, and it comes back at the firmware's 50%, which is level four.
+
+This is the egg's own volume. Quiet hours (`--quiet-hours`) make the reply audio quieter on top of it, so in the evening the same level sounds softer.
+
+The server finds the speaker by the firmware's entity name, "Media Player" (object id `media_player`). If the egg has no such entity, the log says so at connect and Robin answers "Sorry, I can't change the volume right now."
+
 ## Measuring accuracy
 
 To pick the accept threshold from real numbers, record clips with `--save-audio` and sort them into folders, one per person, plus `unknown` for guests, the TV and anyone not enrolled:
@@ -322,6 +342,7 @@ The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the
 | `--openai-model` | `gpt-4o-mini-tts` | The OpenAI speech model, with `--tts openai`. |
 | `--openai-voice` | `ash` | The OpenAI voice name, with `--tts openai`. |
 | `--tts-time-limit` | 4 s | How long the hosted voice gets for one sentence before Piper speaks the rest of the reply. |
+| `--min-volume` | 0.3 | The quietest the egg can be set by voice, from 0 to 1. "Set the volume to one" sets this. |
 | `--save-audio DIR` | off | Keep each mic capture as a WAV. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. Without it, the server waits at startup until the egg's name resolves. |
 | `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice" and checking with "who am I?". Not used with `--echo`. |
@@ -348,6 +369,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - The speech-model detector, `--vad model`. It has heard macOS `say` voices and test tones, not the egg's mic, the room, or the egg's own reply leaking into a follow-up. Its 0.5 threshold is Silero's default. Compare it with the energy detector on real captures before making it the default.
 - The hosted voice. `--tts openai` has only been run against a fake speech endpoint in the tests, never against OpenAI itself, so the real latency per sentence, whether 4 s is the right limit, and how a change from the OpenAI voice to Piper mid-reply sounds on the egg's speaker are all unknown.
 - Matching the room. Whether 60% is the right amount for the evening has only been judged from numbers, not heard through the egg's speaker at its volume setting. For `--match-voice`, nobody has measured how much of the difference between a quiet voice and a normal one survives the XVF3800's automatic gain. Read the "the voice measured" log lines for a few quiet and normal turns before turning it on.
+- Volume by voice. The fake egg's media player follows the firmware source, not the board. Untried: that the entity is listed as `media_player`, that a volume set in the middle of a run takes effect before the reply plays, that the egg reports the new volume back within a second, and that 30% is audible in the enclosure. On the bench the bare driver was quiet at 50%, so the floor may need raising with `--min-volume`. The firmware also lights the LED ring for 2 seconds on a volume change, which may cut into the "replying" light.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 - Presence. `--presence-minutes` has only been run against the fake egg. Whether "spoke in the last N minutes" is a fair guess at someone being in the room, and what N should be, needs living with the real egg.
 
@@ -372,6 +394,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/repeat.py` | The "say that again" command and the text of the last thing said |
 | `robin_egg_server/whoami.py` | The answer to "who am I?", from the turn's speaker match |
 | `robin_egg_server/mic_mute.py` | The egg's microphone mute switch, followed so that muting also stops Robin speaking first |
+| `robin_egg_server/volume.py` | The egg's speaker volume: finding the media player, following and setting its volume, and the volume commands |
 | `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce` and `/quiet` |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/sounds/urgent.flac` | The cue before an urgent message, made the same way |
@@ -386,6 +409,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_vad.py` | The speech-model detector with a stand-in model, and with the real one when it is installed |
 | `tests/test_room.py` | Quiet hours and voice matching, alone and through the fake egg |
 | `tests/conftest.py` | Runs every test at noon, so quiet hours do not depend on when the tests run |
+| `tests/test_volume.py` | Volume by voice: the phrases, the levels, and whole turns against the fake egg's media player |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
 | `tests/test_quiet.py` | Quiet by voice: the phrases, the pause and its file, and the pause through the fake egg |
 | `tests/test_room_context.py` | The room facts, alone and through the fake egg, against the fake robin-assistant |
