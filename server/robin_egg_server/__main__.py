@@ -67,6 +67,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 0-24 for always")
+    p.add_argument("--quiet-when-muted", action=argparse.BooleanOptionalAction, default=True, help="While the egg's microphone is muted, Robin does not speak first: its own messages and /announce are dropped (default on; --no-quiet-when-muted turns it off)")
     p.add_argument("--presence-minutes", type=float, metavar="N", help="Speak Robin's own messages only if someone spoke to the egg in the last N minutes, a stand-in for a presence sensor; otherwise drop them (default off; /announce is always spoken)")
     p.add_argument("--quiet-hours", default="21-7", help="Hours when Robin speaks more quietly, replies and announcements alike, e.g. 21-7; off for never")
     p.add_argument("--quiet-volume", type=int, default=60, metavar="PERCENT", help="How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100 (default 60)")
@@ -155,6 +156,7 @@ def build(args: argparse.Namespace):
         max_utterance_s=args.max_utterance,
         vad=args.vad,
         speaking_hours=(start, end),
+        quiet_when_muted=args.quiet_when_muted,
         presence_window_s=args.presence_minutes * 60 if args.presence_minutes is not None else None,
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,

@@ -29,6 +29,7 @@ from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .confidence import UNSURE, Confidence, ConfidenceLimits
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
+from .mic_mute import MicMute
 from .presence import Presence, SpokenTo, absence
 from .room import RoomVolume
 from .speaker_stream import SpeakerMessage
@@ -60,6 +61,7 @@ class Options:
     vad: str = "energy"  # what finds the end of speech: energy | model
     enrol_window_s: float = 10.0  # people need a moment to repeat an enrolment sentence
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
+    quiet_when_muted: bool = True  # the egg's microphone mute also stops Robin speaking first
     presence_window_s: float | None = None  # Robin's own messages need someone in the room this recently; None = no check
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
@@ -113,6 +115,7 @@ class Robin:
         self._turn_count = 0  # numbers the turns in the log
         self._announce_count = 0  # numbers the /announce calls in the log
         self.client: Any = None  # an APIClient while the egg is connected
+        self.mic_mute = MicMute()
         self.turn: Turn | None = None
         self._follow_up_pending = False
         self._playback_until = 0.0  # when the egg should finish playing the last reply
@@ -429,6 +432,9 @@ class Robin:
         start, end = self.opts.speaking_hours
         return start <= time.localtime().tm_hour < end
 
+    def _mic_muted(self) -> bool:
+        return self.opts.quiet_when_muted and self.mic_mute.muted
+
     def _nobody_here(self) -> str | None:
         """Why Robin's own messages should stay unspoken for want of a listener, or None."""
         return absence(self.presence, self.opts.presence_window_s)
@@ -459,6 +465,9 @@ class Robin:
             return 503, "the egg is not connected"
         if not self._in_speaking_hours():
             return 409, f"outside speaking hours ({self._hours()}); not spoken"
+        if self._mic_muted():
+            LOG.info('Did not announce "%s": the egg\'s microphone is muted', text)
+            return 409, "the egg's microphone is muted; not spoken"
 
         self._announce_count += 1
         with tagged(f"a{self._announce_count}"):
@@ -488,13 +497,16 @@ class Robin:
     async def proactive(self, msg: SpeakerMessage) -> None:
         """A message Robin sent on its own: a chime, then the message, once the egg is idle.
 
-        Outside speaking hours, or with nobody likely in the room when that is checked, it
-        is dropped, not saved for later. Messages that arrive
+        Outside speaking hours, while the egg's microphone is muted, or with nobody likely
+        in the room when that is checked, it is dropped, not saved for later. Messages that arrive
         together are spoken in order, one chime each.
         """
         with tagged(msg.tag):
             if not self._in_speaking_hours():
                 LOG.info("Dropped message %s: outside speaking hours (%s)", msg.describe(), self._hours())
+                return
+            if self._mic_muted():
+                LOG.info("Dropped message %s: the egg's microphone is muted", msg.describe())
                 return
             # A turn under way may be the first sign of someone, so the check waits for it to end.
             if not self._in_conversation() and (nobody := self._nobody_here()):
@@ -529,6 +541,9 @@ class Robin:
                 await self._until_idle()
                 if not self._in_speaking_hours():
                     LOG.info("Dropped message %s: speaking hours (%s) ended while it waited", msg.describe(), self._hours())
+                    continue
+                if self._mic_muted():
+                    LOG.info("Dropped message %s: the egg's microphone was muted while it waited", msg.describe())
                     continue
                 if nobody := self._nobody_here():
                     LOG.info("Dropped message %s: %s once the egg was idle", msg.describe(), nobody)
@@ -607,6 +622,7 @@ class Robin:
                         print(f"[egg] {line}", flush=True)
 
                     client.subscribe_logs(on_log, log_level=LogLevel.LOG_LEVEL_INFO, dump_config=False)
+                await self.mic_mute.watch(client)
                 self.client = client
                 self._state.set()
                 client.subscribe_voice_assistant(
@@ -625,6 +641,7 @@ class Robin:
                     LOG.warning("Lost the egg; reconnecting")
             finally:
                 self.client = None
+                self.mic_mute.reset()
                 self._state.set()
                 self.last_match = None  # the next conversation starts fresh, whoever is in the room by then
                 if self.turn is not None and self.turn.task is not None:
