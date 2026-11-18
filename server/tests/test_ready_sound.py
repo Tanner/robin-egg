@@ -90,6 +90,16 @@ def test_a_failed_ready_sound_is_logged_and_the_egg_stays_connected(caplog, monk
     assert "Lost the egg" not in caplog.text
 
 
+def test_a_ready_sound_the_egg_reports_as_failed_is_logged(caplog):
+    async def scenario(egg, robin, tts, handled):
+        await eventually(lambda: "The egg did not play the ready sound" in caplog.text)
+
+    with caplog.at_level(logging.INFO, logger="robin"):
+        egg, robin, _ = run(READY, scenario, announce_success=False)
+    assert "The egg did not play the ready sound (the egg reported a failure)" in caplog.text
+    assert "Lost the egg" not in caplog.text
+
+
 def test_a_message_that_arrives_during_the_ready_sound_is_spoken_after_it():
     go = asyncio.Event()
     script = [until(go), message(40, "The bins go out tonight.", "Bins")]

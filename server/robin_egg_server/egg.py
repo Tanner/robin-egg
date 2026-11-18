@@ -976,7 +976,9 @@ class Robin:
                 await reply.close()
                 url = self.web.add(reply)
                 LOG.info("Playing the ready sound")
-                await client.send_voice_assistant_announcement_await_response(url, timeout=10 + reply.seconds, text="")
+                result = await client.send_voice_assistant_announcement_await_response(url, timeout=10 + reply.seconds, text="")
+            if not getattr(result, "success", True):
+                LOG.warning("The egg did not play the ready sound (the egg reported a failure)")
         except asyncio.CancelledError:
             raise
         except Exception as err:  # noqa: BLE001 - a missed chime must never cost the connection

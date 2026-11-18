@@ -81,7 +81,7 @@ class Run:
 
 
 class FakeEgg:
-    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu", announce_seconds: float = 0.0, wake_words: list[str | None] | None = None, mute_switch: bool = True, muted: bool = False) -> None:
+    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu", announce_seconds: float = 0.0, wake_words: list[str | None] | None = None, mute_switch: bool = True, muted: bool = False, announce_success: bool = True) -> None:
         """wake_words, when given, says how each run starts, one per utterance: a wake word
         starts that run even if the server did not ask for a follow-up, and None means a follow-up."""
         self.utterances = list(utterances)
@@ -92,6 +92,7 @@ class FakeEgg:
         self.announcements: list[tuple[str, bytes]] = []
         self.start_conversations: list[bool] = []  # whether each announcement asked for the mic to reopen after it
         self.announce_seconds = announce_seconds  # how long each announcement "plays" before it is reported finished
+        self.announce_success = announce_success  # what each finished announcement reports, as the firmware does when playback fails
         self.announcing = asyncio.Event()  # set while an announcement plays
         self._announce_cut = asyncio.Event()
         # The "LED Ring" light. Its colour is the accent of the voice animations; the firmware's stock one is purple.
@@ -204,7 +205,7 @@ class FakeEgg:
         except asyncio.TimeoutError:
             cut = False
         self.announcing.clear()
-        self.send(pb.VoiceAssistantAnnounceFinished(success=True))
+        self.send(pb.VoiceAssistantAnnounceFinished(success=self.announce_success))
         if msg.start_conversation and not cut:
             # The firmware keeps start_conversation as continue_conversation and reopens its mic
             # once the announcement has played, reporting the last wake word it heard. Stopping
