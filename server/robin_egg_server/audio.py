@@ -71,8 +71,14 @@ class EnergyVad:
             else:
                 self.silence_run += 1
             elapsed = self.frames * f
-            if self.speech_started and self.speech_frames * f >= self.cfg.min_speech_s and self.silence_run * f >= self.cfg.end_silence_s:
+            paused = self.speech_started and self.silence_run * f >= self.cfg.end_silence_s
+            if paused and self.speech_frames * f >= self.cfg.min_speech_s:
                 self.done, self.reason = True, "end of speech"
+            elif paused and elapsed >= self.cfg.no_speech_timeout_s:
+                # A cough or a clunk starts "speech" but is too short to end it, so without this
+                # the mic would stay open to the length limit. It may have been a quick word, so
+                # the turn goes on to speech-to-text as usual.
+                self.done, self.reason = True, "only a short sound heard"
             elif not self.speech_started and elapsed >= self.cfg.no_speech_timeout_s:
                 self.done, self.reason = True, "no speech heard"
             elif elapsed >= self.cfg.max_utterance_s:
