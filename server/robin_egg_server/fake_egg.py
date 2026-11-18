@@ -3,7 +3,8 @@
 It speaks the ESPHome native API (plaintext) the way the formatBCE firmware does:
 it fires a "wake word", streams 16 kHz mic audio over the API, starts fetching the
 reply URL as soon as the server says streaming has started, and reopens the mic
-for a follow-up when the server asks for one. Used by the tests and by --demo.
+for a follow-up when the server asks for one, or after an announcement sent with
+start_conversation. Used by the tests and by --demo.
 """
 
 from __future__ import annotations
@@ -84,6 +85,7 @@ class FakeEgg:
         self.wake_words = list(wake_words) if wake_words is not None else None
         self.runs: list[Run] = []
         self.announcements: list[tuple[str, bytes]] = []
+        self.start_conversations: list[bool] = []  # whether each announcement asked for the mic to reopen after it
         self.announce_seconds = announce_seconds  # how long each announcement "plays" before it is reported finished
         self.announcing = asyncio.Event()  # set while an announcement plays
         self._announce_cut = asyncio.Event()
@@ -165,14 +167,23 @@ class FakeEgg:
     async def _announce(self, msg) -> None:
         body = await asyncio.to_thread(self._get, msg.media_id)
         self.announcements.append((msg.text, body))
+        self.start_conversations.append(msg.start_conversation)
         self._announce_cut.clear()
         self.announcing.set()
+        cut = True
         try:
             await asyncio.wait_for(self._announce_cut.wait(), self.announce_seconds)
         except asyncio.TimeoutError:
-            pass
+            cut = False
         self.announcing.clear()
         self.send(pb.VoiceAssistantAnnounceFinished(success=True))
+        if msg.start_conversation and not cut:
+            # The firmware keeps start_conversation as continue_conversation and reopens its mic
+            # once the announcement has played, reporting the last wake word it heard. Stopping
+            # the announcement clears it. The real egg takes a moment to start its mic; sending
+            # both messages together is the harder case for the server.
+            self.done.clear()
+            self._start_run(self.runs[-1].wake_word if self.runs else self.wake_word)
 
     def set_muted(self, muted: bool) -> None:
         """Press the mute button: the switch reports its new state, as the firmware does."""

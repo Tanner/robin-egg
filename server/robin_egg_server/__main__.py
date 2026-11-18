@@ -58,6 +58,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-stream", action="store_true", help="Play the reply only once it is complete (fallback if streaming misbehaves)")
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
+    p.add_argument("--answer-messages", choices=["questions", "always", "off"], default="questions", help="Reopen the mic after a message Robin sends on its own, so it can be answered without the wake word: only after a message that ends in a question (default), after every message, or never. Waits --follow-up-window seconds")
     p.add_argument("--max-utterance", type=float, default=30.0, help="Longest request in seconds; listening stops here even if the speaker has not paused")
     p.add_argument("--unsure-retries", type=int, default=1, help="Times in a row to say \"Sorry, I didn't catch that\" and listen again when speech-to-text is unsure of what it heard (default 1; 0 never asks)")
     p.add_argument("--min-logprob", type=float, default=-1.0, help="Speech-to-text is unsure when Whisper's average log-probability is below this (default -1.0)")
@@ -154,6 +155,7 @@ def build(args: argparse.Namespace):
         stream=not args.no_stream,
         follow_up=args.follow_up,
         follow_up_window_s=args.follow_up_window,
+        answer_messages=args.answer_messages,
         max_utterance_s=args.max_utterance,
         vad=args.vad,
         speaking_hours=(start, end),
