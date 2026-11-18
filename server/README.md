@@ -100,7 +100,7 @@ To make the egg speak something yourself:
 curl -d "Time to leave for the airport." http://localhost:8765/announce
 ```
 
-The egg plays the proactive chime first, then speaks, within the same speaking hours.
+The egg plays the proactive chime first, then speaks, within the same speaking hours. Like Robin's own messages, it does not talk over the egg: it waits up to 60 s for the egg to be idle. The answer says what happened: 200 when spoken, 409 outside speaking hours or when the egg stayed busy, 502 when the egg did not play it, and 503 when the egg is not connected.
 
 ## Telling voices apart
 
@@ -114,7 +114,7 @@ At startup the log says who is enrolled, for example `Voiceprints loaded for tan
 
 To enrol, say the wake word, then "learn my voice". Robin asks who is talking. Answer with your name as robin-assistant knows it. Robin then reads ten short sentences, one at a time, and you repeat each one. The mic stays open for 10 seconds after each sentence. If it misses a sentence, a cough or a mumble included, it asks for that one again. When it is done, Robin says "Thanks, Tanner, I'll know your voice now." Saying "stop" or "cancel", staying quiet, or saying the wake word ends enrolment, and nothing is saved.
 
-To remove your voice, say the wake word, then "forget my voice", and answer yes.
+To remove your voice, say the wake word, then "forget my voice", and answer yes. It has to follow the wake word: in a follow-up the server may only be assuming who is speaking, so it asks you to start again.
 
 Voiceprints are kept in `~/.robin-egg/voiceprints.json`. They hold no audio.
 
@@ -150,14 +150,14 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 | `--agent-name` | required | The robin-assistant agent to ask: its folder name under `~/.robin/agents/`. Not needed with `--echo`. |
 | `--robin-announcements`, `--no-robin-announcements` | on | Speak the messages Robin sends on its own. Not used with `--echo`. |
 | `--proactive-sound FILE` | `sounds/proactive.flac` | The sound before Robin speaks first: wav, aiff or flac. |
-| `--speaking-hours` | `8-20` | When Robin may speak first, its own messages and `/announce`. `0-24` for always. |
+| `--speaking-hours` | `8-20` | When Robin may speak first, its own messages and `/announce`. `20-8` runs past midnight; `0-24` for always. |
 | `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the turn failed. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
 | `--tts piper\|say` | `piper` | Which text-to-speech engine to use. |
 | `--piper-voice` | `voices/en_US-ryan-medium.onnx` | Another Piper voice, to audition. |
 | `--say-voice` | system voice | Any name from `say -v '?'`, with `--tts say`. |
 | `--save-audio DIR` | off | Keep each mic capture as a WAV. |
-| `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. |
+| `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. Without it, the server waits at startup until the egg's name resolves. |
 | `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice". Not used with `--echo`. |
 | `--voiceprints` | `~/.robin-egg/voiceprints.json` | Where the enrolled voiceprints are kept. |
 | `--speaker-model` | `models/wespeaker_en_voxceleb_resnet34_LM.onnx` | Another speaker embedding model. Changing it means everyone enrols again. |
@@ -187,5 +187,8 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
+| `tests/test_egg_faults.py` | Drops, slow replies and a busy egg, around a turn and `/announce` |
+| `tests/test_audio.py` | End-of-speech detection |
+| `tests/test_main.py` | The command line and finding this Mac's address |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |

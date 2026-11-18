@@ -264,6 +264,10 @@ class VoiceCommands:
         if match.key is None:
             LOG.info("Forget requested but the speaker is not recognised; nothing to forget")
             return Step("I don't know whose voice this is, so there's nothing to forget.", False)
+        if match.inherited:
+            # Carried over from the last turn, so it may be someone else answering. Enrolment ignores these too.
+            LOG.info("Forget requested in a follow-up too short to tell who is speaking; asking them to start again")
+            return Step("I'm not sure whose voice this is. Say the wake word, then 'forget my voice'.", False)
         name = _name_of(match.key, await self.people.current() or [])
         self._flow = _Flow("forget", person=Person(match.key, name))
         LOG.info("Forget requested by %s; asking for confirmation", match.key)

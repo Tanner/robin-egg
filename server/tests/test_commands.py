@@ -351,3 +351,13 @@ def test_a_failed_forget_ends_the_conversation(tmp_path, monkeypatch):
     assert FORGET_FAILED == "Sorry, I couldn't forget that. Try again in a bit."
     assert not commands.active
     assert say(commands, "what's the weather") is None
+
+
+def test_forget_does_not_act_on_a_speaker_carried_over_from_the_last_turn(tmp_path):
+    # A guest answering in a follow-up to Tanner's question must not be offered Tanner's voiceprint.
+    commands, store = make(tmp_path, enrolled=[("tanner", TANNER_VOICE)])
+    inherited = Match("tanner", 0.3, None, -1.0, 0.8, True, TANNER_VOICE)
+    step = say(commands, "forget my voice", inherited)
+    assert step.say == "I'm not sure whose voice this is. Say the wake word, then 'forget my voice'."
+    assert not step.listen and not commands.active
+    assert "tanner" in store.prints

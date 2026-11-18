@@ -410,3 +410,9 @@ def test_evaluate_warns_when_clips_are_from_one_person(tmp_path):
     assert ONE_PERSON in report
     assert NO_UNKNOWN not in report
     assert report.splitlines()[-1].startswith("Suggested accept threshold")
+
+
+def test_voiceprints_are_readable_only_by_their_owner(tmp_path):
+    store = VoiceprintStore(tmp_path / "voiceprints.json", "model.onnx")
+    store.replace("tanner", [unit(1, 0, 0)])
+    assert store.path.stat().st_mode & 0o777 == 0o600
