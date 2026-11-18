@@ -1,5 +1,6 @@
 """Make the egg's cues: the listening sound, the sound before a proactive message,
-the sound before an urgent one, the thinking sound, the closing sound, and the mute and unmute sounds.
+the sound before an urgent one, the thinking sound, the closing sound, the mute and unmute sounds,
+and the ready sound.
 
 All are the robin's "cheer-up" phrase played on a soft struck bell, like a celesta,
 at about a third of a robin's pitch. Listening is the falling step. A proactive message
@@ -12,13 +13,14 @@ Closing is B-flat falling a fifth to E-flat, the key's most final move, for when
 stops listening without a reply. It is as quiet as the thinking sound.
 Mute steps down three notes and settles on a low note, muffled as if a hand rests on the bar.
 Unmute takes the same path back up, opening as it goes, and ends on the listening cue's first note.
+Ready is the home chord, E-flat, G and B-flat struck together, played when the server connects to the egg.
 
 Usage, from the repository root (needs ffmpeg for the FLAC files):
 
     python3 tools/egg-sounds/make_sounds.py
 
 Writes wake_word_triggered.flac, mute_switch_on.flac and mute_switch_off.flac in firmware/sounds/,
-and proactive.flac, urgent.flac, thinking.flac and closing.flac in server/robin_egg_server/sounds/.
+and proactive.flac, urgent.flac, thinking.flac, closing.flac and ready.flac in server/robin_egg_server/sounds/.
 """
 
 import math
@@ -43,6 +45,7 @@ OUTPUTS = {
     "urgent": REPO / "server/robin_egg_server/sounds/urgent.flac",
     "thinking": REPO / "server/robin_egg_server/sounds/thinking.flac",
     "closing": REPO / "server/robin_egg_server/sounds/closing.flac",
+    "ready": REPO / "server/robin_egg_server/sounds/ready.flac",
 }
 
 # (frequency ratio, level, how long it rings relative to the fundamental)
@@ -50,6 +53,7 @@ CELESTA = [(1.0, 1.0, 1.0), (2.0, 0.22, 0.45), (3.0, 0.06, 0.25), (4.07, 0.05, 0
 
 C6, AS5, DS6, F5 = 1046.5, 932.3, 1244.5, 698.5
 AS4, C5, DS5 = AS5 / 2, C6 / 2, DS6 / 2
+G5 = 783.99
 # (start s, frequency, ring s, level), with an optional fifth value for how damped the note is
 CUES = {
     "listening": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.8, 1.0)],
@@ -58,6 +62,7 @@ CUES = {
                (0.80, C6, 0.35, 0.9), (0.95, AS5, 0.4, 1.0), (1.13, DS6, 0.9, 1.0)],
     "mute": [(0.00, AS5, 0.30, 0.8, 0.3), (0.13, F5, 0.30, 0.9, 0.4), (0.26, AS4, 0.7, 1.0, 0.5)],
     "unmute": [(0.00, AS4, 0.30, 0.8, 0.2), (0.13, F5, 0.30, 0.9, 0.1), (0.26, C6, 0.8, 1.0, 0.0)],
+    "ready": [(0.00, DS5, 1.3, 0.8), (0.00, G5, 1.2, 0.7), (0.00, AS5, 1.1, 0.65)],
 }
 THINKING = [(0.00, AS4, 0.9, 1.0), (1.00, C5, 0.9, 0.85)]
 CLOSING = [(0.00, AS5, 0.35, 0.9), (0.15, DS5, 0.9, 1.0)]

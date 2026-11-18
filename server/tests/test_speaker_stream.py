@@ -171,11 +171,11 @@ class TimedTTS(ToneTTS):
         return super().synthesize(text)
 
 
-async def egg_with_speaker(speaker_scripts, utterances, texts, brain, opts, scenario, announce_seconds=0.0):
+async def egg_with_speaker(speaker_scripts, utterances, texts, brain, opts, scenario, announce_seconds=0.0, **egg_kwargs):
     """The real server against the fake egg and the fake robin-assistant's speaker stream."""
     fake = FakeRobinAssistant([], speaker=speaker_scripts)
     url = await fake.start()
-    egg = FakeEgg(utterances, announce_seconds=announce_seconds)
+    egg = FakeEgg(utterances, announce_seconds=announce_seconds, **egg_kwargs)
     port = await egg.start()
     web = AudioServer()
     await web.start("127.0.0.1", 0, "127.0.0.1")

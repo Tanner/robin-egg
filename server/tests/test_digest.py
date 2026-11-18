@@ -227,6 +227,20 @@ def test_the_size_of_a_digest_can_be_changed_and_a_lone_leftover_is_spoken_plain
     assert [t for t, _ in egg.announcements] == ["Two things. The bins go out tonight. And the recycling too.", TAXI.text]
 
 
+def test_a_low_message_keeps_its_chime_alone_and_ends_the_digest_in_front_of_it():
+    nudge = SpeakerMessage(16, "The washing machine has finished.", "Laundry", low=True)
+    egg, robin, tts, spoken = waiting_together([BINS, RECYCLING, nudge, TAXI], announcements=3)
+    assert [t for t, _ in egg.announcements] == [f"Two things. {BINS_SAID} {RECYCLING.text}", "", TAXI.text]  # in arrival order
+    assert nudge.text not in tts.said
+    assert [h.msg.id for h in robin.waiting.waiting()] == [16]  # held for "what did I miss?"
+
+
+def test_with_message_waiting_off_a_low_message_is_spoken_in_the_digest():
+    nudge = SpeakerMessage(16, "The washing machine has finished.", "Laundry", low=True)
+    egg, robin, tts, spoken = waiting_together([BINS, nudge], always(message_waiting=False))
+    assert [t for t, _ in egg.announcements] == [f"Two things. {BINS_SAID} {nudge.text}"]
+
+
 # ---- answering ----
 
 

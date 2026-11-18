@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .brain import server_url
 from .digest import DEFAULT_MAX as DEFAULT_DIGEST_MAX, MAX_MAX as MAX_DIGEST_MAX, MIN_MAX as MIN_DIGEST_MAX
-from .egg import Options, Robin
+from .egg import READY_CHIME, Options, Robin
 from .health import OfflineAlert, keep_captures_trimmed, status
 from .hosted_tts import DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_VOICE, DEFAULT_TIME_LIMIT_S
 from .leds import DEFAULT_COLOURS_FILE, LedRing, PersonColours
@@ -65,6 +65,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--proactive-sound", metavar="FILE", help="Sound to play before each message Robin sends on its own (wav, aiff or flac). Default: the egg's own proactive chime")
     p.add_argument("--room-context", action=argparse.BooleanOptionalAction, default=True, help="Tell Robin facts about the room: whether the egg is connected, who last spoke to it and when, and what became of the last message Robin sent on its own. Never what anyone said (default on; not used with --echo)")
     p.add_argument("--urgent-sound", metavar="FILE", help="Sound to play before an urgent message instead (wav, aiff or flac). Default: the egg's own urgent cue")
+    p.add_argument("--ready-sound", metavar="FILE", default=str(READY_CHIME), help="Sound to play each time the server connects to the egg (wav, aiff or flac), or off. Default: the egg's own ready chime")
     p.add_argument("--server-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
     p.add_argument("--tts", choices=["piper", "say", "openai"], default="piper", help="Text-to-speech engine: piper (Robin's voice), macOS say, or openai (hosted; needs OPENAI_API_KEY in the environment and falls back to Piper)")
@@ -109,6 +110,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-turn-log", action="store_true", help="Do not record turns")
     p.add_argument("--turn-log-names", action="store_true", help="Also record who spoke each turn, not only whether they were recognised")
     p.add_argument("--message-waiting", action=argparse.BooleanOptionalAction, default=True, help="Hold the messages Robin sends on its own outside --speaking-hours, breathe the egg's ring while any wait, and read them out to 'what did I miss?' (default on; off drops them)")
+    p.add_argument("--morning-mention", action=argparse.BooleanOptionalAction, default=True, help="Once speaking hours have begun, end the first reply from Robin by saying how many held messages are waiting and how to hear them, once per batch (default on; needs --message-waiting)")
     p.add_argument("--min-volume", type=float, default=MIN_VOLUME, help=f"The quietest the egg can be set by voice, from 0 to 1 (default {MIN_VOLUME}). 'Set the volume to one' sets this")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -227,6 +229,7 @@ def build(args: argparse.Namespace):
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
         quiet_state=Path(args.quiet_state).expanduser(),
         urgent_sound=Path(args.urgent_sound).expanduser() if args.urgent_sound else None,
+        ready_sound=None if args.ready_sound == "off" else Path(args.ready_sound).expanduser(),
         unsure_retries=args.unsure_retries,
         confidence=ConfidenceLimits(args.min_logprob, args.max_no_speech, args.max_compression),
         quiet_hours=args.quiet_hours,
@@ -241,6 +244,7 @@ def build(args: argparse.Namespace):
         turn_log_names=args.turn_log_names,
         message_waiting=args.message_waiting,
         ring_file=RING_FILE,
+        morning_mention=args.morning_mention,
         min_volume=args.min_volume,
         digest=args.digest,
         digest_max=args.digest_max,
@@ -253,6 +257,8 @@ def build(args: argparse.Namespace):
         raise SystemExit(f"Proactive sound not found at {opts.proactive_sound}")
     if opts.urgent_sound and not opts.urgent_sound.exists():
         raise SystemExit(f"Urgent sound not found at {opts.urgent_sound}")
+    if opts.ready_sound and not opts.ready_sound.exists():
+        raise SystemExit(f"Ready sound not found at {opts.ready_sound}")
     speakers = people = commands = ring = colours = enrol_offer = None
     if recognise:
         from .commands import VoiceCommands

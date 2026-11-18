@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Protocol
 
-from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_sound
+from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, describe_level, load_sound
 from . import whoami
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .confidence import UNSURE, Confidence, ConfidenceLimits
@@ -42,6 +42,7 @@ from .enrol_offer import ENROL_OFFER, EnrolOffer
 from .logs import tagged
 from .quiet import QuietMode
 from .mic_mute import MicMute
+from .morning_mention import MorningMention
 from .repeat import DEFAULT_WINDOW_S, NOTHING_TO_REPEAT, LastSaid
 from .presence import Presence, SpokenTo, absence
 from .room import RoomVolume
@@ -60,6 +61,7 @@ LOG = logging.getLogger("robin.egg")
 ZERO_PSK = base64.b64encode(bytes(32)).decode()  # formatBCE: encryption on, no key set yet
 PROACTIVE_CHIME = Path(__file__).parent / "sounds" / "proactive.flac"  # made by tools/egg-sounds
 URGENT_CHIME = Path(__file__).parent / "sounds" / "urgent.flac"  # the cue before an urgent message
+READY_CHIME = Path(__file__).parent / "sounds" / "ready.flac"  # played each time the server connects to the egg
 CLOSING_CUE = Path(__file__).parent / "sounds" / "closing.flac"  # played when the egg stops listening without a reply
 NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
@@ -91,6 +93,7 @@ class Options:
     quiet_state: Path | None = None  # where a "quiet for an hour" pause is kept across restarts; in memory only if None
     repeat_window_s: float = DEFAULT_WINDOW_S  # how long "say that again" can bring back the last thing said; 0 turns it off
     urgent_sound: Path | None = None  # played before an urgent message instead; URGENT_CHIME if None
+    ready_sound: Path | None = None  # played each time the server connects to the egg, at any hour; off if None
     unsure_retries: int = 1  # times in a row to ask for a repeat when speech-to-text is unsure; 0 never asks
     confidence: ConfidenceLimits = field(default_factory=ConfidenceLimits)
     quiet_hours: tuple[int, int] | None = (21, 7)  # replies and announcements are quieter in this window
@@ -107,6 +110,7 @@ class Options:
     min_volume: float = MIN_VOLUME  # the quietest the egg can be set by voice, 0.0 to 1.0
     digest: bool = True  # speak several waiting messages as one announcement, after one cue
     digest_max: int = digests.DEFAULT_MAX  # the most messages in one digest; the rest follow in another
+    morning_mention: bool = True  # once speaking hours begin, end one reply by saying that messages are waiting
 
 
 @dataclass
@@ -183,10 +187,13 @@ class Robin:
         self.proactive_sound = load_sound(self.opts.proactive_sound or PROACTIVE_CHIME)
         self.quiet = QuietMode(self.opts.quiet_state, morning_hour=self.opts.speaking_hours[0])
         self.urgent_sound = load_sound(self.opts.urgent_sound or URGENT_CHIME)
+        self.ready_sound = load_sound(self.opts.ready_sound) if self.opts.ready_sound else None
+        self._ready_task: asyncio.Task | None = None  # the ready sound being sent after a connect
         self.thinking_sound = load_sound(THINKING_CUE)
         self.closing_sound = load_sound(CLOSING_CUE)
         self.turn_log = TurnLog(self.opts.turn_log, names=self.opts.turn_log_names)
         self.waiting = MessageWaiting(self.opts.ring_file) if self.opts.message_waiting else None
+        self.morning_mention = MorningMention() if self.waiting is not None and self.opts.morning_mention else None
         web.on_announce = self.announce
         web.on_quiet = self.quiet.http
 
@@ -295,6 +302,8 @@ class Robin:
         self.send(self.E.VOICE_ASSISTANT_STT_VAD_END)  # the egg stops its mic and shows "thinking"
         secs = len(t.audio) / 2 / MIC_RATE
         LOG.info("Heard %.1f s of audio (%s)", secs, t.vad.reason)
+        if not t.vad.speech_started:
+            LOG.info(describe_level(bytes(t.audio), t.vad.threshold if isinstance(t.vad, EnergyVad) else None))
         self._save_capture(t)
         t.task = asyncio.create_task(self._respond(t))
 
@@ -415,13 +424,15 @@ class Robin:
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
             cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))
-            if await self._enrol_offer_due(match):
-                await self._speak(_once(ENROL_OFFER), t.reply, turn=t)
-                LOG.info('Robin added: "%s"', ENROL_OFFER)
-                await self._finish_reply(t, f"{reply_text} {ENROL_OFFER}", cont)
+            # One hint a reply. The enrolment offer goes first, and the mention keeps for the next reply.
+            hint = ENROL_OFFER if await self._enrol_offer_due(match) else self._morning_mention_due()
+            if hint is not None:
+                await self._speak(_once(hint), t.reply, turn=t)
+                LOG.info('Robin added: "%s"', hint)
+                await self._finish_reply(t, f"{reply_text} {hint}", cont)
             else:
                 await self._finish_reply(t, reply_text, cont)
-            self.last_said.remember(reply_text)  # without the hint, which is offered once
+            self.last_said.remember(reply_text)  # without the hint, which is said once
             if self.speakers is not None:
                 self.speakers.learn(match)
             self.last_match = match
@@ -573,6 +584,22 @@ class Robin:
             LOG.warning("Could not work out whether to offer enrolment, so it is not offered this turn (%s)", err)
             return False
 
+    def _morning_mention_due(self) -> str | None:
+        """The sentence saying that messages are waiting, when this reply should end with it.
+
+        Only in speaking hours, and not while quiet was asked for by voice: then Robin says
+        no more than it was asked. Never raises: the answer was already spoken.
+        """
+        if self.morning_mention is None or self.waiting is None:
+            return None
+        try:
+            if not self._in_speaking_hours() or self.quiet.reason() is not None:
+                return None
+            return self.morning_mention.due(self.waiting.waiting())
+        except Exception as err:  # noqa: BLE001 - a hint is not worth an apology
+            LOG.warning("Could not work out whether to mention the waiting messages, so they are not mentioned this turn (%s)", err)
+            return None
+
     async def _finish_reply(self, t: Turn, reply_text: str, cont: bool) -> None:
         E = self.E
         self._follow_up_pending = cont
@@ -711,7 +738,19 @@ class Robin:
         await reply.close()
         return reply
 
-    async def announce(self, text: str, urgent: bool = False) -> tuple[int, str]:
+    async def _cue_alone(self) -> ReplyAudio:
+        """The proactive cue with no words after it, for a low-priority message."""
+        reply = ReplyAudio()
+        reply.gain = self.room.for_announcement()
+        await reply.push(self.proactive_sound, REPLY_RATE, gap_s=0.2)
+        await reply.close()
+        return reply
+
+    def _nudges(self, low: bool) -> bool:
+        """Whether a low-priority message gets the cue alone. With nowhere to hold the words, it is spoken."""
+        return low and self.waiting is not None
+
+    async def announce(self, text: str, urgent: bool = False, low: bool = False) -> tuple[int, str]:
         if self.client is None:
             return 503, "the egg is not connected"
         refusal = self._why_not_speak_first(urgent)
@@ -731,6 +770,10 @@ class Robin:
                 LOG.info('Not announcing "%s": after %.0f s, %s', text, ANNOUNCE_WAIT_S, reason)
                 return (503 if self.client is None else 409), f"{reason}; not spoken"
             async with self._speaker_lock:
+                if self._nudges(low):
+                    return await self._announce_nudge(text, f"a{self._announce_count}")
+                if low:
+                    LOG.info('The announcement "%s" is low priority, but message waiting is off, so it is spoken', text)
                 reply = await self._announcement(text, chime=True, urgent=urgent)
                 client = self.client
                 if client is None:
@@ -747,6 +790,24 @@ class Robin:
                     return 502, f"the egg did not play it ({why})"
             LOG.info("Announcement finished (%s)", "spoken" if getattr(result, "success", True) else "the egg reported a failure")
         return 200, f"spoken ({getattr(result, 'success', result)})"
+
+    async def _announce_nudge(self, text: str, tag: str) -> tuple[int, str]:
+        """A low-priority /announce: the cue alone, and the words held for "what did I miss?"."""
+        reply = await self._cue_alone()
+        client = self.client
+        if client is None:
+            LOG.info('Not holding the low-priority announcement "%s": the egg disconnected before its chime could play', text)
+            return 503, "the egg is not connected"
+        if not self.waiting.hold(SpeakerMessage(tag, text, "announce", low=True)):
+            return 400, "nothing to say once markdown is stripped; not held"
+        LOG.info('Holding the low-priority announcement "%s" for "what did I miss?" and playing only the chime', text)
+        try:
+            await client.send_voice_assistant_announcement_await_response(self.web.add(reply), timeout=60 + reply.seconds, text="")
+        except Exception as err:  # noqa: BLE001 - the words are held either way, and whoever asked hears the chime was missed
+            why = str(err) or type(err).__name__
+            LOG.warning('The egg did not play the chime for the low-priority announcement "%s" (%s); it is still held', text, why)
+            return 200, f'held for "what did I miss?"; the egg did not play the chime ({why})'
+        return 200, 'held for "what did I miss?" after the chime; not spoken'
 
     @property
     def proactive_waiting(self) -> int:
@@ -779,7 +840,9 @@ class Robin:
         one chime (see digest.py), or one chime each when digests are off. An urgent message is spoken at any
         hour, whoever is in the room, ahead of the messages already waiting, after the urgent
         cue. Quiet asked for by voice and a muted microphone still silence it: those are
-        someone's own choice.
+        someone's own choice. A low-priority message passes the same checks as a normal
+        one, and where that one would be spoken it gets the chime alone and is held for
+        "what did I miss?". With message waiting off it is spoken.
         """
         with tagged(msg.tag):
             refusal = self._why_not_speak_first(msg.urgent)
@@ -812,6 +875,8 @@ class Robin:
             self.turn_log.message_arrived(msg, busy)
             if busy:
                 LOG.info("Queued message %s until the egg is idle: %s", msg.describe(), busy)
+            elif self._nudges(msg.low):
+                LOG.info("Playing only the chime for message %s now: it is low priority", msg.describe())
             else:
                 LOG.info("Speaking message %s now", msg.describe())
         self._proactive_count += 1
@@ -868,6 +933,11 @@ class Robin:
                     self._message_outcome(msg, f"dropped, {nobody}")
                     continue
                 self._proactive_stopped_by = ""
+                if self._nudges(msg.low):
+                    await self._nudge(msg)
+                    continue
+                if msg.low:
+                    LOG.info("Message %s is low priority, but message waiting is off, so it is spoken", msg.describe())
                 digest = self._digest_from(msg, arrived)
                 self._proactive_task = task = asyncio.create_task(self._say_proactive(msg) if digest is None else self._say_digest(digest))
                 await asyncio.wait({task})
@@ -917,7 +987,8 @@ class Robin:
         `digest_max`. The message has just been cleared to be spoken, and what cleared it
         (speaking hours, quiet, the mute switch, presence) holds for the others too, so only
         each one's own age is checked. A message that ends a digest (see digest.ends_digest)
-        is the last one taken. An urgent message is always spoken on its own.
+        is the last one taken, and a low-priority message that gets the cue alone ends it
+        too. An urgent message is always spoken on its own.
         """
         if not self.opts.digest or msg.urgent or self._proactive_queue.empty():
             return None
@@ -926,7 +997,11 @@ class Robin:
             return None  # spoken alone, which drops it and says why
         parts = [Part(msg, arrived, text)]
         while len(parts) < self.opts.digest_max and not self._proactive_queue.empty() and not digests.ends_digest(parts[-1].text, self.opts.answer_messages):
-            _, _, came, other = self._proactive_queue.get_nowait()
+            entry = self._proactive_queue.get_nowait()
+            _, _, came, other = entry
+            if self._nudges(other.low):
+                self._proactive_queue.put_nowait(entry)  # it gets the cue alone, in its turn, after this digest
+                break
             with tagged(other.tag):
                 waited = time.monotonic() - came
                 if waited > self.opts.proactive_max_age_s:
@@ -1023,6 +1098,37 @@ class Robin:
         if self.room_context is not None and told:
             self.room_context.digest_outcome(digests.room_fact(told))
 
+    async def _nudge(self, msg: SpeakerMessage) -> None:
+        """A low-priority message: it is held for "what did I miss?", and only the cue plays.
+
+        It is held before the cue starts, so the wake word during the cue can already ask for it.
+        """
+        if not self.waiting.hold(msg):
+            LOG.info("Dropped message %s: nothing to say once markdown is stripped", msg.describe())
+            self._message_outcome(msg, "dropped, it had nothing to say")
+            return
+        self._proactive_task = task = asyncio.create_task(self._play_cue_alone())
+        await asyncio.wait({task})
+        if task.cancelled():
+            LOG.info('Stopped the chime for message %s partway: %s. It is held for "what did I miss?"', msg.describe(), self._proactive_stopped_by or "the server is stopping")
+            self._message_outcome(msg, "held, low priority, the chime was cut short")
+        elif task.exception() is not None or not task.result():
+            LOG.warning('The egg did not play the chime for message %s; it is held for "what did I miss?"', msg.describe(), exc_info=task.exception())
+            self._message_outcome(msg, "held, low priority, the chime did not play")
+        else:
+            LOG.info('Played the chime for message %s; it is held for "what did I miss?"', msg.describe())
+            self._message_outcome(msg, "held, low priority, after the chime")
+
+    async def _play_cue_alone(self) -> bool:
+        """Plays the proactive cue with no words. False when the egg was gone or reported a failure."""
+        async with self._speaker_lock:
+            reply = await self._cue_alone()
+            client = self.client
+            if client is None:
+                return False
+            result = await client.send_voice_assistant_announcement_await_response(self.web.add(reply), timeout=60 + reply.seconds, text="")
+            return bool(getattr(result, "success", True))
+
     def _message_outcome(self, msg: SpeakerMessage, outcome: str) -> None:
         if self.room_context is not None:
             self.room_context.message_outcome(msg.describe(), outcome)
@@ -1114,6 +1220,8 @@ class Robin:
                     handle_announcement_finished=self.handle_announcement_finished,
                 )
                 LOG.info("Ready. Say the wake word, then a question.")
+                if self.ready_sound is not None:
+                    self._ready_task = asyncio.create_task(self._play_ready_sound(client))
                 set_up = True
                 delay = RECONNECT_DELAY_S
                 waiter = asyncio.create_task(stop.wait())
@@ -1149,6 +1257,9 @@ class Robin:
                     self._proactive_stopped_by = "the egg disconnected"
                     self._proactive_task.cancel()
                 self._reset_commands()  # half an enrolment must not resume with whoever speaks after a reconnect
+                if self._ready_task is not None and not self._ready_task.done():
+                    self._ready_task.cancel()
+                self._ready_task = None
                 if self.ring is not None:
                     self.ring.detach()
                 with contextlib.suppress(Exception):
@@ -1158,6 +1269,28 @@ class Robin:
                     await asyncio.wait_for(stop.wait(), delay)
                 delay = min(delay * 2, 30)
         await self._stop_proactive()
+
+    async def _play_ready_sound(self, client: Any) -> None:
+        """The chord that says the egg is up and the server is talking to it.
+
+        Played on every connect, whatever the hour, quiet or mute, and never counted as
+        something Robin said. A chime that does not play is only logged: the egg stays connected.
+        """
+        try:
+            async with self._speaker_lock:
+                reply = ReplyAudio()
+                reply.gain = self.room.for_announcement()
+                await reply.push(self.ready_sound, REPLY_RATE)
+                await reply.close()
+                url = self.web.add(reply)
+                LOG.info("Playing the ready sound")
+                result = await client.send_voice_assistant_announcement_await_response(url, timeout=10 + reply.seconds, text="")
+            if not getattr(result, "success", True):
+                LOG.warning("The egg did not play the ready sound (the egg reported a failure)")
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001 - a missed chime must never cost the connection
+            LOG.warning("The egg did not play the ready sound (%s)", str(err) or type(err).__name__)
 
     def _egg_connected(self, connected: bool) -> None:
         if self.room_context is not None:
