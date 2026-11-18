@@ -5,7 +5,7 @@ exec(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'robin_egg.py
 body=make_body(); chassis=make_chassis(); crown=make_crown(); foot=make_foot()
 air = IN_BODY.intersect(slab(Z_BAFFLE+BAFFLE_T, Z_LEDGE_TOP)).cut(body)
 import sys; print("chamber air gross cm3 %.0f" % (air.val().Volume()/1000), flush=True)
-board = cq.importers.importStep(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'reference', 'datasheets', '3d', 'respeaker_mic_array_xvf3800_1_with-xiao-0820.stp'))
+board = cq.importers.importStep(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'reference', 'datasheets', '3d', 'respeaker_mic_array_xvf3800_1_with-xiao-0820.stp'))
 bsol = [s.translate(cq.Vector(-150,80,Z_PCB)) for s in board.solids().vals()]
 bb=cq.Compound.makeCompound(bsol).BoundingBox(); print("board bbox", round(bb.xmin,1),round(bb.xmax,1),round(bb.ymin,1),round(bb.ymax,1),round(bb.zmin,2),round(bb.zmax,2))
 for name,part in (("body",body),("chassis",chassis),("crown",crown)):

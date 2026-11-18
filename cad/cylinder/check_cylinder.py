@@ -5,7 +5,7 @@ from robin_cylinder import *
 
 base, body, chassis, top = make_base(), make_body(), make_chassis(), make_top()
 here = os.path.dirname(os.path.abspath(__file__))
-board = cq.importers.importStep(os.path.join(here, "..", "reference", "datasheets", "3d", "respeaker_mic_array_xvf3800_1_with-xiao-0820.stp"))
+board = cq.importers.importStep(os.path.join(here, "..", "..", "reference", "datasheets", "3d", "respeaker_mic_array_xvf3800_1_with-xiao-0820.stp"))
 bsol = [s.translate(cq.Vector(-150, 80, Z_PCB)) for s in board.solids().vals()]
 
 def clashes(name, part, solids):

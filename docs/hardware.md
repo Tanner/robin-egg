@@ -18,7 +18,7 @@ Last checked against Seeed's wiki and the formatBCE repo on 2026-11-14. Nothing 
 
 The egg is wall powered. There is no battery.
 
-Not bought yet, all for the enclosure stage. The full list with sizes is in the [CAD hardware table](../cad/README.md#hardware). Still needed: foam tape or silicone for the chamber seal, hot glue for the wire holes, polyester damping fill, and heat-shrink. Rubber feet and acoustic fabric can wait until after the half-egg test rig. The board standoffs are printed into the chassis, and the USB-C cable plugs straight into the XIAO port, so no standoffs or panel-mount socket are needed. A mic mute slide switch is only needed if the open mute question goes that way.
+Not bought yet, all for the enclosure stage. The full list with sizes is in the [CAD hardware table](../cad/egg/README.md#hardware). Still needed: foam tape or silicone for the chamber seal, hot glue for the wire holes, polyester damping fill, and heat-shrink. Rubber feet and acoustic fabric can wait until after the half-egg test rig. The board standoffs are printed into the chassis, and the USB-C cable plugs straight into the XIAO port, so no standoffs or panel-mount socket are needed. A mic mute slide switch is only needed if the open mute question goes that way.
 
 Optional sensors for later: LD2410-type mmWave presence, SHT4x temperature and humidity, VEML7700 light.
 

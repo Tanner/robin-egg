@@ -128,25 +128,25 @@ My call: v2 leaves out the light-sensor and mmWave mounts. A flat top has only 1
 
 ### Fit checks before calling it done
 
-Same method as `cad/check.py`:
+Same method as `cad/egg/check.py`:
 
 - the board model against body, chassis and top
 - the speaker envelope against base, body and chassis
 - the top twisting on from the unlocked angle without touching the board
 - the chamber's net volume
 
-Report each result in `cad/README.md`.
+Report each result in `cad/cylinder/README.md`.
 
 ## Left to the builder
 
-- **Files.** Whether the new source replaces `cad/robin_egg.py` or sits beside it. My suggestion: a new `cad/robin_cylinder.py`, with the egg's source, STLs, STEPs and previews moved under `cad/v1-egg/`, so the v1 renders keep working. `cad/README.md` and `docs/enclosure.md` get rewritten for v2.
+- **Files.** Settled 2026-11-17: each enclosure has its own folder, `cad/egg/` and `cad/cylinder/`, holding its source, fit check, STLs, STEPs and preview images. Part files carry the enclosure's name, such as `cylinder_body.stl`.
 - **Exact numbers** for the sound gap posts, the bayonet re-sizing, insert positions and wall thicknesses, within the limits above.
 - **Preview renders** like v1's (assembled, exploded, section).
 - **Hardware table** updated: add the 4 foam rings for the mics, keep the rest from v1.
 
 ## First print (2026-11-17)
 
-`cad/robin_cylinder.py` makes a first printable version so the shape and fit can be tried before the full design is finished. It differs from the design above in these ways:
+`cad/cylinder/robin_cylinder.py` makes a first printable version so the shape and fit can be tried before the full design is finished. It differs from the design above in these ways:
 
 - **Push-on top with a key, not the twist lock.** A 3 mm overlapping lip, with a 0.15 mm gap on each side, and a key tab at the front so the mic holes land over the mics.
 - **No foam at the mics.** The bosses stop 0.6 mm above the PCB.
@@ -154,7 +154,7 @@ Report each result in `cad/README.md`.
 - **The body starts at the baffle,** so it prints baffle-down. The sound gap is 7 mm between a 13 mm dark base band and the body.
 - **No sensor mounts.**
 
-`cad/check_cylinder.py` checks the parts against the board model and the speaker envelope. Results:
+`cad/cylinder/check_cylinder.py` checks the parts against the board model and the speaker envelope. Results:
 
 - No clashes and no overlaps between parts.
 - Chamber: 0.36 L of air, about 0.34 L once the speaker is in.

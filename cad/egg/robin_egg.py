@@ -1,7 +1,8 @@
 """Robin Egg enclosure, parametric CadQuery model.
 
 Run:  python3 robin_egg.py [outdir]
-Writes foot.stl, body.stl, chassis.stl, crown.stl (and .step) plus an assembly STEP.
+Writes stl/egg_foot.stl, egg_body.stl, egg_chassis.stl, egg_crown.stl, the same in step/,
+and step/egg_assembly.step. outdir defaults to this folder.
 
 Coordinates: z is up, in mm, measured from the tip of the unsliced egg (the
 table is at z = Z_FLOOR). +y is the back of the egg (USB-C side), +x is the
@@ -306,12 +307,13 @@ def mmwave_rails():
     return parts.intersect(OUT)
 
 def export(part, name, outdir):
-    cq.exporters.export(part, os.path.join(outdir, name + ".stl"), tolerance=0.03, angularTolerance=0.08)
-    cq.exporters.export(part, os.path.join(outdir, name + ".step"))
+    cq.exporters.export(part, os.path.join(outdir, "stl", "egg_" + name + ".stl"), tolerance=0.03, angularTolerance=0.08)
+    cq.exporters.export(part, os.path.join(outdir, "step", "egg_" + name + ".step"))
 
 if __name__ == "__main__":
-    outdir = sys.argv[1] if len(sys.argv) > 1 else "out"
-    os.makedirs(outdir, exist_ok=True)
+    outdir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
+    os.makedirs(os.path.join(outdir, "stl"), exist_ok=True)
+    os.makedirs(os.path.join(outdir, "step"), exist_ok=True)
     parts = {"foot": make_foot(), "body": make_body(), "chassis": make_chassis(), "crown": make_crown()}
     for n, p in parts.items():
         export(p, n, outdir)
@@ -319,4 +321,4 @@ if __name__ == "__main__":
     asm = cq.Assembly()
     for n, p in parts.items():
         asm.add(p, name=n)
-    asm.save(os.path.join(outdir, "robin_egg_assembly.step"))
+    asm.save(os.path.join(outdir, "step", "egg_assembly.step"))

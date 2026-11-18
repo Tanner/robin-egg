@@ -1,7 +1,8 @@
 """Robin Egg enclosure v2: squat cylinder, parametric CadQuery model.
 
 Run:  python3 robin_cylinder.py [outdir]
-Writes base.stl, body.stl, chassis.stl, top.stl (and .step) into outdir (default: cyl/).
+Writes stl/cylinder_base.stl, cylinder_body.stl, cylinder_chassis.stl, cylinder_top.stl
+and the same in step/. outdir defaults to this folder.
 
 Coordinates: z is up, in mm, from the table. +y is the back (USB-C side), +x is the
 mute side. Board numbers come from Seeed's STEP model, re-centred on the board with the
@@ -159,12 +160,13 @@ def make_top():
     return t
 
 def export(part, name, outdir):
-    cq.exporters.export(part, os.path.join(outdir, name + ".stl"), tolerance=0.05, angularTolerance=0.1)
-    cq.exporters.export(part, os.path.join(outdir, name + ".step"))
+    cq.exporters.export(part, os.path.join(outdir, "stl", "cylinder_" + name + ".stl"), tolerance=0.05, angularTolerance=0.1)
+    cq.exporters.export(part, os.path.join(outdir, "step", "cylinder_" + name + ".step"))
 
 if __name__ == "__main__":
-    outdir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "cyl")
-    os.makedirs(outdir, exist_ok=True)
+    outdir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
+    os.makedirs(os.path.join(outdir, "stl"), exist_ok=True)
+    os.makedirs(os.path.join(outdir, "step"), exist_ok=True)
     parts = {"base": make_base(), "body": make_body(), "chassis": make_chassis(), "top": make_top()}
     for n, p in parts.items():
         print("Exporting %s: valid %s, volume %.1f cm3" % (n, p.val().isValid(), p.val().Volume() / 1000), flush=True)

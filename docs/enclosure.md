@@ -1,6 +1,6 @@
 # Enclosure
 
-Status: v1 printable model done, in [`cad/`](../cad/README.md). Board and speaker positions there come from Seeed's STEP model and Dayton's drawing. Where this page and `cad/README.md` differ, the CAD wins. Check the real parts on the bench before a long print.
+Status: v1 egg printable model done, in [`cad/egg/`](../cad/egg/README.md). A v2 squat cylinder is in [`cad/cylinder/`](../cad/cylinder/README.md), first print 2026-11-17. Board and speaker positions there come from Seeed's STEP model and Dayton's drawing. Where this page and `cad/egg/README.md` differ, the CAD wins. Check the real parts on the bench before a long print.
 
 Updated 2026-11-15.
 
@@ -53,7 +53,7 @@ Tanner's point (2026-11-15): a lone egg looks awkward and like it could roll. Ry
 | Mic positions | Square with corners at ±33 mm, so 46.7 mm from centre, 90° apart | DSP geometry output. Drawing has an unlabelled 66.00 × 66.00 that matches |
 | Mounting holes, component heights, port positions | Unknown | Not in any text I could read. Measure on the bench |
 | DMA70-4 | Fs 113 Hz, Qts 0.44, Vas about 1.4 L, Sd 22.9 cm², Xmax 2 mm, 86 dB at 2.83 V | Dayton spec sheet via BRL |
-| DMA70-4 frame | 70 mm square | Measured on the bench 2026-11-17. Matches the 70 × 70 envelope in `cad/check.py` |
+| DMA70-4 frame | 70 mm square | Measured on the bench 2026-11-17. Matches the 70 × 70 envelope in `cad/egg/check.py` |
 | DMA70-4 screw holes | About 3.65 mm across, 59.35 mm centre to centre along a side (55.7 mm inner edges, 63 mm outer edges). The CAD's 59.46 mm is 0.1 mm off, well inside the screw clearance | Measured on the bench 2026-11-17 |
 | DMA70-4 basket diameter | Passes the 66 mm baffle hole | Checked on the bench 2026-11-17 |
 | DMA70-4 depth behind the mounting face | Estimated at 36 to 37 mm. The fit check models 35.6 mm, but the chamber leaves 39 mm under the chassis, so up to about 38 mm fits | Bench estimate 2026-11-17. Not yet measured exactly |
@@ -73,7 +73,7 @@ Target 0.35 to 0.40 L net. Speech intelligibility lives above 300 Hz, so a 250 H
 
 ## Layout sketch
 
-Matches `cad/robin_egg.py` v1. Egg 150 mm tall before the bottom is sliced, 137 mm after. 120 mm wide, widest at 60 to 70 mm up, 3.5 mm walls. Heights are measured from the unsliced egg's tip, so the table sits at z=13.
+Matches `cad/egg/robin_egg.py` v1. Egg 150 mm tall before the bottom is sliced, 137 mm after. 120 mm wide, widest at 60 to 70 mm up, 3.5 mm walls. Heights are measured from the unsliced egg's tip, so the table sits at z=13.
 
 ```
  z=150  ┌─ apex: light sensor window, 5 mm
@@ -116,7 +116,7 @@ Matches `cad/robin_egg.py` v1. Egg 150 mm tall before the bottom is sliced, 137 
 
 ## To buy for the enclosure
 
-- See the [CAD hardware table](../cad/README.md#hardware) for sizes and counts: M3 heat-set inserts, M3, M2.5 and M2 screws, rubber feet, foam tape or silicone, polyester damping fill, acoustic fabric. The board standoffs are printed into the chassis, so none need buying.
+- See the [CAD hardware table](../cad/egg/README.md#hardware) for sizes and counts: M3 heat-set inserts, M3, M2.5 and M2 screws, rubber feet, foam tape or silicone, polyester damping fill, acoustic fabric. The board standoffs are printed into the chassis, so none need buying.
 
 ## Open
 
