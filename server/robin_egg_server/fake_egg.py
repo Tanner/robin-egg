@@ -26,6 +26,7 @@ from .mic_mute import MUTE_OBJECT_ID
 PROTO_TO_TYPE = {v: k for k, v in MESSAGE_TYPE_TO_PROTO.items()}
 CHUNK = 1024  # bytes of mic audio per message, 32 ms
 MUTE_KEY = 0x4D555445  # the fake's entity key for the mute switch; the server must not depend on it
+RING_KEY = 0x1ED  # the LED ring light's entity key
 
 
 def varint(n: int) -> bytes:
@@ -67,12 +68,16 @@ class Run:
     final: bytes = b""  # the same URL fetched again after the run ended
     first_byte_at: float | None = None
     tts_end_at: float | None = None
+    ring: list[tuple[float, float, float]] = field(default_factory=list)  # the LED ring's colour as each event arrived
 
     def types(self) -> list[int]:
         return [t for t, _ in self.events]
 
     def data(self, event_type: int) -> dict[str, str]:
         return next((d for t, d in self.events if t == event_type), {})
+
+    def ring_at(self, event_type: int) -> tuple[float, float, float] | None:
+        return next((c for (t, _), c in zip(self.events, self.ring) if t == event_type), None)
 
 
 class FakeEgg:
@@ -89,6 +94,10 @@ class FakeEgg:
         self.announce_seconds = announce_seconds  # how long each announcement "plays" before it is reported finished
         self.announcing = asyncio.Event()  # set while an announcement plays
         self._announce_cut = asyncio.Event()
+        # The "LED Ring" light. Its colour is the accent of the voice animations; the firmware's stock one is purple.
+        self.ring_rgb: tuple[float, float, float] = (1.0, 0.0, 1.0)
+        self.ring_on = False
+        self.ring_commands: list[tuple[float, float, float]] = []  # every colour the server set, in order
         self.done = asyncio.Event()
         self.mute_switch = mute_switch  # False for firmware with no "Microphone Mute" switch
         self.muted = muted
@@ -147,11 +156,21 @@ class FakeEgg:
         elif isinstance(msg, pb.ListEntitiesRequest):
             if self.mute_switch:
                 self.send(pb.ListEntitiesSwitchResponse(object_id=MUTE_OBJECT_ID, key=MUTE_KEY, name="Microphone Mute"))
+            self.send(pb.ListEntitiesLightResponse(object_id="led_ring", key=RING_KEY, name="LED Ring", supported_color_modes=[pb.COLOR_MODE_RGB], effects=["Breathe", "Twinkle", "Comet CW", "Comet CCW"]))
             self.send(pb.ListEntitiesDoneResponse())
         elif isinstance(msg, pb.SubscribeStatesRequest):
             self._states_subscribed = True
             if self.mute_switch:
                 self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=self.muted))
+            self._send_ring_state()
+        elif isinstance(msg, pb.LightCommandRequest) and msg.key == RING_KEY:
+            # Like the firmware's light: a colour-only command changes the colour and leaves the light on or off as it was.
+            if msg.has_rgb:
+                self.ring_rgb = (msg.red, msg.green, msg.blue)
+                self.ring_commands.append(self.ring_rgb)
+            if msg.has_state:
+                self.ring_on = msg.state
+            self._send_ring_state()
         elif isinstance(msg, pb.SubscribeVoiceAssistantRequest) and msg.subscribe:
             await asyncio.sleep(0.05)
             first = self.wake_words[0] if self.wake_words else None
@@ -163,6 +182,10 @@ class FakeEgg:
             await self._on_event(msg.event_type, {d.name: d.value for d in msg.data})
         elif isinstance(msg, pb.VoiceAssistantAnnounceRequest):
             asyncio.create_task(self._announce(msg))
+
+    def _send_ring_state(self) -> None:
+        r, g, b = self.ring_rgb
+        self.send(pb.LightStateResponse(key=RING_KEY, state=self.ring_on, brightness=0.8, color_mode=pb.COLOR_MODE_RGB, color_brightness=1.0, red=r, green=g, blue=b))
 
     async def _announce(self, msg) -> None:
         body = await asyncio.to_thread(self._get, msg.media_id)
@@ -218,6 +241,7 @@ class FakeEgg:
     async def _on_event(self, t: int, data: dict[str, str]) -> None:
         run = self.runs[-1]
         run.events.append((t, data))
+        run.ring.append(self.ring_rgb)
         if t == pb.VOICE_ASSISTANT_STT_VAD_END:
             self._mic_open = False
         elif t == pb.VOICE_ASSISTANT_INTENT_PROGRESS and data.get("tts_start_streaming") == "1":

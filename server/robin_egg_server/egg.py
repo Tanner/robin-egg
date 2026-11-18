@@ -35,6 +35,7 @@ from . import whoami
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .confidence import UNSURE, Confidence, ConfidenceLimits
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
+from .leds import LedRing, PersonColours
 from .logs import tagged
 from .quiet import QuietMode
 from .mic_mute import MicMute
@@ -90,6 +91,7 @@ class Options:
     match_voice: bool = False  # also speak more quietly to someone who spoke quietly
     thinking_cue: bool = True  # a soft sound while Robin is slow to start answering; needs stream
     thinking_delay_s: float = 2.0  # how long after the end of speech before it starts
+    recognition_light: bool = True  # with a ring, show a recognised speaker's colour while Robin thinks and replies
 
 
 @dataclass
@@ -124,6 +126,8 @@ class Robin:
         people: People | None = None,
         commands: VoiceCommands | None = None,
         presence: Presence | None = None,
+        ring: LedRing | None = None,
+        colours: PersonColours | None = None,
     ) -> None:
         self.stt, self.brain, self.tts, self.web = stt, brain, tts, web
         self.E = events  # aioesphomeapi.VoiceAssistantEventType
@@ -131,6 +135,7 @@ class Robin:
         self.speakers, self.people, self.commands = speakers, people, commands
         self.presence: Presence = presence or SpokenTo()
         self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
+        self.ring, self.colours = ring, colours or PersonColours()
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
         self.last_said = LastSaid(self.opts.repeat_window_s)  # text only, for "say that again"
         self._unsure_streak = 0  # how many turns in a row ended in asking for a repeat
@@ -181,6 +186,8 @@ class Robin:
             self._proactive_stopped_by = "the wake word interrupted it"
             self._proactive_task.cancel()
         self._state.set()
+        if self.ring is not None:
+            self.ring.give_back()  # the new run listens in the ring's own colour, whoever spoke last
         previous_turn = self.turn
         if previous_turn is not None:
             with tagged(previous_turn.tag):
@@ -282,6 +289,7 @@ class Robin:
             (heard, confidence, stt_s), (match, id_s) = await asyncio.gather(self._transcribe(t), self._identify(t))
             sure = f", {confidence.describe()}" if confidence is not None else ""
             LOG.info('Heard: "%s" (STT %.2f s, speaker %.2f s%s)', heard, stt_s, id_s, sure)
+            self._show_who(match)
             enrolling = self.commands is not None and self.commands.active
             # A cough mid-enrolment is a missed answer to ask again, not a reason to drop the enrolment.
             if not heard and not enrolling:
@@ -349,6 +357,15 @@ class Robin:
             await self._end_thinking(t)
             await t.reply.close()
             self._state.set()
+            if self.ring is not None and self.turn is t:
+                self.ring.give_back_at(self._playback_until)  # at once if nothing is playing
+
+    def _show_who(self, match: Match) -> None:
+        """Puts the recognised speaker's colour on the ring. An unrecognised voice keeps the ring's own."""
+        if self.ring is None or not self.opts.recognition_light or match.key is None:
+            return
+        household = self.people.keys if self.people is not None else None
+        self.ring.borrow(self.colours.colour_for(match.key, household), why=f"for {match.key}")
 
     def _reopens_after(self, text: str) -> bool:
         return self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and text.rstrip().endswith("?"))
@@ -822,6 +839,8 @@ class Robin:
 
                     client.subscribe_logs(on_log, log_level=LogLevel.LOG_LEVEL_INFO, dump_config=False)
                 await self.mic_mute.watch(client)
+                if self.ring is not None:
+                    await self.ring.attach(client)  # before the first turn, so the ring's own colour is known by then
                 self.client = client
                 self._state.set()
                 self._egg_connected(True)
@@ -862,6 +881,8 @@ class Robin:
                     self._proactive_stopped_by = "the egg disconnected"
                     self._proactive_task.cancel()
                 self._reset_commands()  # half an enrolment must not resume with whoever speaks after a reconnect
+                if self.ring is not None:
+                    self.ring.detach()
                 with contextlib.suppress(Exception):
                     await client.disconnect()
             if not set_up and not stop.is_set():
