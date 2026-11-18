@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from .brain import server_url
+from .digest import DEFAULT_MAX as DEFAULT_DIGEST_MAX, MAX_MAX as MAX_DIGEST_MAX, MIN_MAX as MIN_DIGEST_MAX
 from .egg import Options, Robin
 from .health import OfflineAlert, keep_captures_trimmed, status
 from .hosted_tts import DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_VOICE, DEFAULT_TIME_LIMIT_S
@@ -36,6 +37,16 @@ SPEAKER_MODEL_DOWNLOAD = (
     "mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx "
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx"
 )
+
+
+def digest_size(value: str) -> int:
+    try:
+        size = int(value)
+    except ValueError:
+        size = 0
+    if not MIN_DIGEST_MAX <= size <= MAX_DIGEST_MAX:
+        raise argparse.ArgumentTypeError(f"give a whole number from {MIN_DIGEST_MAX} to {MAX_DIGEST_MAX}; --no-digest turns digests off")
+    return size
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -70,6 +81,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
     p.add_argument("--repeat-window", type=float, default=10.0, metavar="MINUTES", help="How long after Robin says something 'say that again' still repeats it (default 10; 0 turns the command off)")
     p.add_argument("--answer-messages", choices=["questions", "always", "off"], default="questions", help="Reopen the mic after a message Robin sends on its own, so it can be answered without the wake word: only after a message that ends in a question (default), after every message, or never. Waits --follow-up-window seconds")
+    p.add_argument("--digest", action=argparse.BooleanOptionalAction, default=True, help="Speak several of Robin's own messages that are waiting together as one announcement, after one sound (default on; --no-digest speaks each on its own)")
+    p.add_argument("--digest-max", type=digest_size, default=DEFAULT_DIGEST_MAX, metavar="N", help=f"The most messages in one digest, {MIN_DIGEST_MAX} to {MAX_DIGEST_MAX} (default {DEFAULT_DIGEST_MAX}); the rest are spoken in a following one")
     p.add_argument("--max-utterance", type=float, default=30.0, help="Longest request in seconds; listening stops here even if the speaker has not paused")
     p.add_argument("--unsure-retries", type=int, default=1, help="Times in a row to say \"Sorry, I didn't catch that\" and listen again when speech-to-text is unsure of what it heard (default 1; 0 never asks)")
     p.add_argument("--min-logprob", type=float, default=-1.0, help="Speech-to-text is unsure when Whisper's average log-probability is below this (default -1.0)")
@@ -229,6 +242,8 @@ def build(args: argparse.Namespace):
         message_waiting=args.message_waiting,
         ring_file=RING_FILE,
         min_volume=args.min_volume,
+        digest=args.digest,
+        digest_max=args.digest_max,
     )
     if opts.thinking_cue and not opts.stream:
         LOG.info("The thinking sound is off, because it is carried in the streamed reply and --no-stream turns streaming off")

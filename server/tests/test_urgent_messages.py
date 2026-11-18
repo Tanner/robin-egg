@@ -112,7 +112,7 @@ def test_an_urgent_message_jumps_the_queue_but_waits_for_the_reply_to_end():
         go.set()  # all four arrive while the egg is thinking about its reply
         await eventually(lambda: len(egg.announcements) == 4)
 
-    opts = Options(follow_up="off", speaking_hours=(0, 24))
+    opts = Options(follow_up="off", speaking_hours=(0, 24), digest=False)
     egg, robin, tts = asyncio.run(egg_with_speaker([script], [speech()], ["when is the dentist"], brain, opts, scenario))
     assert tts.said[0] == "Your dentist is at ten tomorrow."
     assert tts.at[1] >= robin._playback_until  # urgent or not, never over the reply

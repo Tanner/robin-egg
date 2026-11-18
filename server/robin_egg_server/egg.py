@@ -34,6 +34,8 @@ from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_
 from . import whoami
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .confidence import UNSURE, Confidence, ConfidenceLimits
+from . import digest as digests
+from .digest import Digest, Part
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .leds import LedRing, PersonColours
 from .enrol_offer import ENROL_OFFER, EnrolOffer
@@ -103,6 +105,8 @@ class Options:
     message_waiting: bool = True  # hold messages from outside speaking hours and show the waiting light
     ring_file: Path | None = None  # where the ring's own state is kept while the waiting light is on
     min_volume: float = MIN_VOLUME  # the quietest the egg can be set by voice, 0.0 to 1.0
+    digest: bool = True  # speak several waiting messages as one announcement, after one cue
+    digest_max: int = digests.DEFAULT_MAX  # the most messages in one digest; the rest follow in another
 
 
 @dataclass
@@ -170,6 +174,7 @@ class Robin:
         # Urgent messages first, then arrival order: (0 if urgent else 1, arrival number, when it arrived, message).
         self._proactive_queue: asyncio.PriorityQueue[tuple[int, int, float, SpeakerMessage]] = asyncio.PriorityQueue()
         self._proactive_count = 0
+        self._proactive_front = 0  # numbers the messages put back at the front of the queue, counting down
         self._proactive_worker: asyncio.Task | None = None
         self._proactive_task: asyncio.Task | None = None  # the message being spoken now
         self._proactive_stopped_by = ""  # why the message being spoken was cut short
@@ -769,8 +774,9 @@ class Robin:
         Outside speaking hours it is held for "what did I miss?" and the waiting light, or
         dropped when message waiting is off. While someone has asked for quiet or the egg's
         microphone is muted, or with nobody likely in the room when that is checked, it is
-        dropped, not saved for later, and so is one that waits too long for the egg. Messages that arrive
-        together are spoken in order, one chime each. An urgent message is spoken at any
+        dropped, not saved for later, and so is one that waits too long for the egg. Messages that are
+        waiting together when the egg becomes idle are spoken in order as one announcement after
+        one chime (see digest.py), or one chime each when digests are off. An urgent message is spoken at any
         hour, whoever is in the room, ahead of the messages already waiting, after the urgent
         cue. Quiet asked for by voice and a muted microphone still silence it: those are
         someone's own choice.
@@ -862,9 +868,12 @@ class Robin:
                     self._message_outcome(msg, f"dropped, {nobody}")
                     continue
                 self._proactive_stopped_by = ""
-                self._proactive_task = task = asyncio.create_task(self._say_proactive(msg))
+                digest = self._digest_from(msg, arrived)
+                self._proactive_task = task = asyncio.create_task(self._say_proactive(msg) if digest is None else self._say_digest(digest))
                 await asyncio.wait({task})
-                if task.cancelled():
+                if digest is not None:
+                    self._digest_ended(digest, task)
+                elif task.cancelled():
                     LOG.info("Stopped message %s partway: %s", msg.describe(), self._proactive_stopped_by or "the server is stopping")
                     self._message_outcome(msg, f"interrupted, {self._proactive_stopped_by or 'the server is stopping'}")
                 elif task.exception() is not None:
@@ -898,6 +907,121 @@ class Robin:
                 self._expect_answer(msg)
         LOG.info("Spoke message %s (%s)", msg.describe(), "finished" if spoken else "the egg reported a failure")
         self._message_outcome(msg, "spoken" if spoken else "failed, the egg reported a failure")
+
+    # ---- several waiting messages as one announcement ----
+
+    def _digest_from(self, msg: SpeakerMessage, arrived: float) -> Digest | None:
+        """The digest that starts with this message, or None when it is spoken on its own.
+
+        Takes the normal messages waiting behind it, in the order they arrived, up to
+        `digest_max`. The message has just been cleared to be spoken, and what cleared it
+        (speaking hours, quiet, the mute switch, presence) holds for the others too, so only
+        each one's own age is checked. A message that ends a digest (see digest.ends_digest)
+        is the last one taken. An urgent message is always spoken on its own.
+        """
+        if not self.opts.digest or msg.urgent or self._proactive_queue.empty():
+            return None
+        text = strip_markdown(msg.text)
+        if not text:
+            return None  # spoken alone, which drops it and says why
+        parts = [Part(msg, arrived, text)]
+        while len(parts) < self.opts.digest_max and not self._proactive_queue.empty() and not digests.ends_digest(parts[-1].text, self.opts.answer_messages):
+            _, _, came, other = self._proactive_queue.get_nowait()
+            with tagged(other.tag):
+                waited = time.monotonic() - came
+                if waited > self.opts.proactive_max_age_s:
+                    LOG.info("Dropped message %s: it waited %.0f s for the egg, longer than the %.0f s allowed", other.describe(), waited, self.opts.proactive_max_age_s)
+                    self._message_outcome(other, "dropped, it waited too long for the egg")
+                    continue
+                text = strip_markdown(other.text)
+                if not text:
+                    LOG.info("Dropped message %s: nothing to say once markdown is stripped", other.describe())
+                    self._message_outcome(other, "dropped, it had nothing to say")
+                    continue
+            parts.append(Part(other, came, text))
+        return Digest(parts) if len(parts) > 1 else None
+
+    async def _digest_audio(self, digest: Digest) -> ReplyAudio:
+        """One cue, the lead-in, then each message with a pause before the next. Notes where each message lies."""
+        reply = ReplyAudio()
+        reply.gain = self.room.for_announcement()
+        await reply.push(self.proactive_sound, REPLY_RATE, gap_s=0.2)
+        await self._speak(_once(digest.lead_in), reply)
+        for part in digest.parts:
+            if part is not digest.parts[0]:
+                await reply.push(digests.pause(), REPLY_RATE, gap_s=digests.PAUSE_S)
+            part.starts_s = reply.seconds
+            await self._speak(_once(part.text), reply)
+            part.ends_s = reply.seconds
+        await reply.close()
+        return reply
+
+    async def _say_digest(self, digest: Digest) -> None:
+        with tagged(digest.tag):
+            async with self._speaker_lock:
+                reply = await self._digest_audio(digest)
+                client = self.client
+                if client is None:
+                    LOG.info("Dropped messages %s: the egg disconnected before they could be spoken", digest.names())
+                    self._digest_outcome([(m, "dropped, the egg disconnected") for m in digest.messages])
+                    return
+                url = self.web.add(reply)
+                LOG.info('Speaking messages %s as one announcement: "%s"', digest.names(), digest.text)
+                self.last_said.remember(digest.text)
+                listen = digest.wants_answer(self.opts.answer_messages)
+                self._answer_wanted = listen
+                digest.started = time.monotonic()
+                try:
+                    result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=digest.text[:480], start_conversation=listen)
+                finally:
+                    self._answer_wanted = False
+                spoken = getattr(result, "success", True)
+                if listen and spoken:
+                    self._expect_answer(digest.messages[-1])
+            LOG.info("Spoke messages %s as one announcement (%s)", digest.names(), "finished" if spoken else "the egg reported a failure")
+            self._digest_outcome([(m, "spoken, in one announcement" if spoken else "failed, the egg reported a failure") for m in digest.messages])
+
+    def _digest_ended(self, digest: Digest, task: asyncio.Task) -> None:
+        """Settles a digest that did not play to its end.
+
+        Cut short, a message heard in full was spoken, the one playing was interrupted, and
+        the ones not reached go back to the front of the queue, to be spoken when the egg is
+        next idle, as a message waiting behind an interrupted one always was.
+        """
+        with tagged(digest.tag):
+            if task.cancelled():
+                why = self._proactive_stopped_by or "the server is stopping"
+                position = digest.position()
+                heard, cut, unreached = digest.split(position)
+                outcomes = [(p.msg, "spoken, in one announcement") for p in heard]
+                if cut is not None:
+                    outcomes.append((cut.msg, f"interrupted, {why}"))
+                LOG.info(
+                    "Stopped the announcement of messages %s about %.1f s in: %s. Heard in full: %s. Cut short: %s. Not reached, so waiting for the egg to be idle again: %s",
+                    digest.names(), position, why,
+                    digests.listed([p.msg.describe() for p in heard]) if heard else "none",
+                    cut.msg.describe() if cut is not None else "none",
+                    digests.listed([p.msg.describe() for p in unreached]) if unreached else "none",
+                )
+                self._proactive_front -= len(unreached)
+                for i, part in enumerate(unreached):
+                    self._proactive_queue.put_nowait((1, self._proactive_front + i, part.arrived, part.msg))
+                reached = [p.text for p in digest.parts if p not in unreached]
+                if unreached and reached:
+                    self.last_said.remember(" ".join(reached))  # "say that again" is not asked for what nobody heard
+                self._digest_outcome(outcomes, waiting=[p.msg for p in unreached])
+            elif task.exception() is not None:
+                LOG.error("Could not speak messages %s", digest.names(), exc_info=task.exception())
+                self._digest_outcome([(m, "failed, the egg server could not speak it") for m in digest.messages])
+
+    def _digest_outcome(self, outcomes: list[tuple[SpeakerMessage, str]], waiting: list[SpeakerMessage] | None = None) -> None:
+        """Each message gets its own line in the turn log; the room is told about the digest as one fact."""
+        for msg, outcome in outcomes:
+            fate, _, why = outcome.partition(", ")
+            self.turn_log.message(msg, fate, why)
+        told = [(m, o.replace("spoken, in", "spoken in")) for m, o in outcomes] + [(m, "not reached, still waiting") for m in waiting or []]
+        if self.room_context is not None and told:
+            self.room_context.digest_outcome(digests.room_fact(told))
 
     def _message_outcome(self, msg: SpeakerMessage, outcome: str) -> None:
         if self.room_context is not None:
