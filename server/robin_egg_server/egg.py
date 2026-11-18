@@ -28,6 +28,7 @@ from . import whoami
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
+from .room import RoomVolume
 from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
 from .voices import SpeechToText, TextToSpeech
@@ -57,6 +58,9 @@ class Options:
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
+    quiet_hours: tuple[int, int] | None = (21, 7)  # replies and announcements are quieter in this window
+    quiet_volume: float = 0.6  # the gain in quiet hours and for a quiet voice
+    match_voice: bool = False  # also speak more quietly to someone who spoke quietly
 
 
 @dataclass
@@ -94,6 +98,7 @@ class Robin:
         self.E = events  # aioesphomeapi.VoiceAssistantEventType
         self.opts = opts or Options()
         self.speakers, self.people, self.commands = speakers, people, commands
+        self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
         self._turn_count = 0  # numbers the turns in the log
         self._announce_count = 0  # numbers the /announce calls in the log
@@ -219,6 +224,7 @@ class Robin:
                 LOG.info("Nobody spoke; closing quietly")
                 self._end_without_reply()
                 return
+            t.reply.gain = self.room.for_reply(bytes(t.audio))
             t0 = time.monotonic()
             (heard, stt_s), (match, id_s) = await asyncio.gather(self._transcribe(t), self._identify(t))
             LOG.info('Heard: "%s" (STT %.2f s, speaker %.2f s)', heard, stt_s, id_s)
@@ -329,6 +335,8 @@ class Robin:
         """
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         spoken: list[str] = []
+        if (begin_reply := getattr(self.tts, "begin_reply", None)) is not None:
+            begin_reply(reply)
 
         async def voice() -> None:
             first = True
@@ -389,6 +397,7 @@ class Robin:
         A chime first, so Robin speaking unprompted does not startle anyone.
         """
         reply = ReplyAudio()
+        reply.gain = self.room.for_announcement()
         if chime:
             await reply.push(self.proactive_sound, REPLY_RATE, gap_s=0.2)
         await self._speak(_once(text), reply)

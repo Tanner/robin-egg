@@ -13,7 +13,9 @@ from pathlib import Path
 
 from .brain import server_url
 from .egg import Options, Robin
+from .hosted_tts import DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_VOICE, DEFAULT_TIME_LIMIT_S
 from .logs import setup as setup_logging
+from .room import FLOOR_GAIN, parse_hours
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .web import AudioServer
 
@@ -45,7 +47,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--proactive-sound", metavar="FILE", help="Sound to play before each message Robin sends on its own (wav, aiff or flac). Default: the egg's own proactive chime")
     p.add_argument("--server-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
-    p.add_argument("--tts", choices=["piper", "say"], default="piper", help="Text-to-speech engine: piper (Robin's voice) or macOS say")
+    p.add_argument("--tts", choices=["piper", "say", "openai"], default="piper", help="Text-to-speech engine: piper (Robin's voice), macOS say, or openai (hosted; needs OPENAI_API_KEY in the environment and falls back to Piper)")
+    p.add_argument("--openai-model", default=DEFAULT_OPENAI_MODEL, help="OpenAI speech model, with --tts openai")
+    p.add_argument("--openai-voice", default=DEFAULT_OPENAI_VOICE, help="OpenAI voice name, with --tts openai")
+    p.add_argument("--tts-time-limit", type=float, default=DEFAULT_TIME_LIMIT_S, help="Seconds the hosted voice gets for one sentence before Piper speaks the rest of the reply")
     p.add_argument("--piper-voice", default=str(DEFAULT_PIPER_VOICE), help="Path to a Piper .onnx voice (default: Robin's voice, Piper Ryan)")
     p.add_argument("--say-voice", help="macOS voice name for `say`, e.g. Samantha (`say -v '?'` lists them)")
     p.add_argument("--no-stream", action="store_true", help="Play the reply only once it is complete (fallback if streaming misbehaves)")
@@ -56,12 +61,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 0-24 for always")
+    p.add_argument("--quiet-hours", default="21-7", help="Hours when Robin speaks more quietly, replies and announcements alike, e.g. 21-7; off for never")
+    p.add_argument("--quiet-volume", type=int, default=60, metavar="PERCENT", help="How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100 (default 60)")
+    p.add_argument("--match-voice", action=argparse.BooleanOptionalAction, default=False, help="Also speak more quietly to someone who spoke quietly (default off until it is tried on the real egg)")
     p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
     if args.default_speaker_name is not None:
         p.error('--default-speaker-name is gone: a voice the server cannot identify is now sent as "Unknown Speaker". Remove the flag.')
+    if args.tts_time_limit <= 0:
+        p.error("--tts-time-limit must be more than 0 seconds")
+    try:
+        args.quiet_hours = parse_hours(args.quiet_hours)
+    except ValueError as err:
+        p.error(f"--quiet-hours {err}")
+    if not FLOOR_GAIN * 100 <= args.quiet_volume <= 100:
+        p.error(f"--quiet-volume {args.quiet_volume} is outside {FLOOR_GAIN * 100:.0f} to 100; lower than that and speech is hard to follow")
     if not args.host and not args.demo:
         p.error("give the egg's address, or --demo AUDIO to test without hardware")
     if not args.echo:
@@ -95,10 +111,14 @@ def build(args: argparse.Namespace):
         raise SystemExit(f"Speaker model not found at {args.speaker_model}. Download it from server/ as described in server/README.md, or start with --no-speaker-recognition:\n  {SPEAKER_MODEL_DOWNLOAD}")
     stt = WhisperSTT(args.whisper_model)
     stt.load()  # load now, so the first question is not slow
-    if args.tts == "piper":
+    if args.tts in ("piper", "openai"):
         if not Path(args.piper_voice).exists():
             raise SystemExit(f"Piper voice not found at {args.piper_voice}. Download it as described in server/README.md.")
         tts = PiperTTS(args.piper_voice)
+        if args.tts == "openai":
+            from .hosted_tts import openai_with_fallback
+
+            tts = openai_with_fallback(tts, args.openai_model, args.openai_voice, args.tts_time_limit)
     else:
         tts = SayTTS(args.say_voice)
     if args.echo:
@@ -118,6 +138,9 @@ def build(args: argparse.Namespace):
         speaking_hours=(start, end),
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
+        quiet_hours=args.quiet_hours,
+        quiet_volume=args.quiet_volume / 100,
+        match_voice=args.match_voice,
     )
     if opts.proactive_sound and not opts.proactive_sound.exists():
         raise SystemExit(f"Proactive sound not found at {opts.proactive_sound}")
