@@ -29,6 +29,7 @@ from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
 from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
+from .vad import ModelVad, make_vad
 from .voices import SpeechToText, TextToSpeech
 from .web import AudioServer
 
@@ -52,6 +53,7 @@ class Options:
     follow_up: str = "always"  # always | questions | off
     follow_up_window_s: float = 5.0
     max_utterance_s: float = 30.0  # longest request before the mic closes mid-sentence
+    vad: str = "energy"  # what finds the end of speech: energy | model
     enrol_window_s: float = 10.0  # people need a moment to repeat an enrolment sentence
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
     save_audio: Path | None = None
@@ -60,7 +62,7 @@ class Options:
 
 @dataclass
 class Turn:
-    vad: EnergyVad
+    vad: EnergyVad | ModelVad
     reply: ReplyAudio
     url: str
     wake_word: str | None
@@ -153,7 +155,7 @@ class Robin:
         tag = f"t{self._turn_count}"
         reply = ReplyAudio()
         url = self.web.add(reply, tag)
-        self.turn = Turn(EnergyVad(cfg), reply, url, wake_word_phrase, follow_up, tag=tag)
+        self.turn = Turn(make_vad(self.opts.vad, cfg), reply, url, wake_word_phrase, follow_up, tag=tag)
         with tagged(self.turn.tag):
             if follow_up:
                 LOG.info("Follow-up to %s: listening for %.0f s", previous_turn.tag if previous_turn else "the last turn", cfg.no_speech_timeout_s)

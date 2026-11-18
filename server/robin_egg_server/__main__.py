@@ -15,6 +15,7 @@ from .brain import server_url
 from .egg import Options, Robin
 from .logs import setup as setup_logging
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
+from .vad import VAD_KINDS
 from .web import AudioServer
 
 LOG = logging.getLogger("robin")
@@ -52,6 +53,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
     p.add_argument("--max-utterance", type=float, default=30.0, help="Longest request in seconds; listening stops here even if the speaker has not paused")
+    p.add_argument("--vad", choices=VAD_KINDS, default="energy", help="What finds the end of speech: energy (loudness against the room's noise floor) or model (the Silero speech model, which ignores noise that is not a voice)")
     p.add_argument("--speaker-recognition", action=argparse.BooleanOptionalAction, default=True, help="Tell household members apart by voice and let them enrol by saying 'learn my voice' (default on; --no-speaker-recognition turns it off; not used with --echo)")
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
@@ -93,6 +95,14 @@ def build(args: argparse.Namespace):
     recognise = args.speaker_recognition and not args.echo
     if recognise and not Path(args.speaker_model).exists():
         raise SystemExit(f"Speaker model not found at {args.speaker_model}. Download it from server/ as described in server/README.md, or start with --no-speaker-recognition:\n  {SPEAKER_MODEL_DOWNLOAD}")
+    if args.vad == "model":
+        from .vad import load_model
+
+        try:
+            load_model()  # load now, so a missing model stops the start and not the first turn
+        except Exception as err:  # noqa: BLE001
+            raise SystemExit(f"The speech model for --vad model could not be loaded: {err}. Start with --vad energy instead.") from err
+        LOG.info("The end of speech is found by the Silero speech model (--vad model)")
     stt = WhisperSTT(args.whisper_model)
     stt.load()  # load now, so the first question is not slow
     if args.tts == "piper":
@@ -115,6 +125,7 @@ def build(args: argparse.Namespace):
         follow_up=args.follow_up,
         follow_up_window_s=args.follow_up_window,
         max_utterance_s=args.max_utterance,
+        vad=args.vad,
         speaking_hours=(start, end),
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,

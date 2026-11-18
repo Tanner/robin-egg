@@ -137,6 +137,20 @@ Then run, from `server/`:
 
 It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json` (`--voiceprints` and `--speaker-model` change that). For each threshold from 0.30 to 0.70 it counts clips judged right, given to the wrong person, and sent as Unknown Speaker, with clips under 2 s apart from longer ones. The last line suggests the lowest threshold that gave no clip to the wrong person. With no clips there is no suggestion, and if the clips lack an `unknown/` folder or cover only one person, the report says what the suggestion does not show. Only 16 kHz mono 16-bit WAV files are read; others are skipped with a warning. These clips are audio the server otherwise never keeps, so delete the folder when you are done.
 
+## Finding the end of speech
+
+Two detectors can decide when someone has started and stopped talking. `--vad energy`, the default, compares loudness with the room's noise floor, so a tap running or the TV can hold the mic open. `--vad model` asks a small speech model (Silero VAD) whether each 32 ms of audio is a voice. The model is the one faster-whisper ships for its own filter and it runs on onnxruntime, so there is nothing more to install or download.
+
+Both end the turn the same three ways: a 0.8 s pause after speech, nobody speaking within the window (6 s after the wake word, `--follow-up-window` on a follow-up, 10 s while enrolling), or `--max-utterance`.
+
+To choose between them from real clips, record captures with `--save-audio`, then run, from `server/`:
+
+```sh
+.venv/bin/python -m robin_egg_server.vad compare captures
+```
+
+For each WAV in the folder and its subfolders it prints where each detector would have ended the turn, why, and how much speech it counted, then how often the model ended earlier or later than the energy detector. A capture stops where the server stopped listening, so a detector that would have waited longer shows as "still listening at the end". Captures recorded with `--vad model` therefore show whether the energy detector would have cut in sooner, and the other way round. `--no-speech-timeout`, `--max-utterance` and `--threshold` (the model's speech probability, default 0.5) change what is compared.
+
 ## Useful options
 
 | Option | Default | What it does |
@@ -145,6 +159,7 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. Enrolling and forgetting a voice still reopen it, whatever this is set to. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
 | `--max-utterance` | 30 s | The longest request. Listening stops here even if you have not paused. |
+| `--vad energy\|model` | `energy` | What finds the end of speech: loudness against the room's noise floor, or the Silero speech model. See [Finding the end of speech](#finding-the-end-of-speech). |
 | `--echo` | off | Repeat what was heard instead of asking Robin. Tests the audio chain with no robin-assistant. |
 | `--server` | required | robin-assistant's address: a host or IP, `host:port`, or a URL such as `https://robin.example.net`. A bare host gets port 8273; a URL keeps its scheme's port. Not needed with `--echo`. |
 | `--agent-name` | required | The robin-assistant agent to ask: its folder name under `~/.robin/agents/`. Not needed with `--echo`. |
@@ -170,6 +185,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
+- The speech-model detector, `--vad model`. It has heard macOS `say` voices and test tones, not the egg's mic, the room, or the egg's own reply leaking into a follow-up. Its 0.5 threshold is Silero's default. Compare it with the energy detector on real captures before making it the default.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 
 ## Files
@@ -177,7 +193,8 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | File | What it does |
 | --- | --- |
 | `robin_egg_server/egg.py` | The ESPHome connection with reconnects, and the voice turn |
-| `robin_egg_server/audio.py` | End-of-speech detection and the streamed FLAC reply |
+| `robin_egg_server/audio.py` | The energy end-of-speech detector and the streamed FLAC reply |
+| `robin_egg_server/vad.py` | The speech-model end-of-speech detector, and the `compare` command |
 | `robin_egg_server/voices.py` | Whisper, `say` and Piper |
 | `robin_egg_server/speaker_stream.py` | robin-assistant's speaker stream: Robin's own messages, with reconnects |
 | `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
@@ -187,5 +204,6 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
+| `tests/test_vad.py` | The speech-model detector with a stand-in model, and with the real one when it is installed |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |
