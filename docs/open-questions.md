@@ -48,10 +48,11 @@ Tanner listed this without a fixed meaning. The working definition is any way to
 
 ## Proactive pings
 
-- **Sound design.** Bird calls as chimes, with a robin's song as the signature. Do different calls mean different things, for example a reply ready, a reminder, something urgent? Keep the set small enough to learn.
-- **Speak or text.** The rule is text by default and speak when time-critical. Who decides per message, Robin or the egg server?
+- **Sound design.** Urgent messages have their own cue, the proactive phrase played twice; see [decisions.md](decisions.md). Still open: whether it reads as urgent on the real speaker without bothering the cat, and whether any other kind of message, such as a reply ready, deserves its own cue.
+- **Speak or text.** The rule is text by default and speak when time-critical. Robin marks a message urgent and the egg server acts on the mark. Still open: robin-assistant does not send the mark yet (proposed in [robin-chat-api.md](robin-chat-api.md)), and normal messages are all still spoken within speaking hours, not texted.
+- **What counts as urgent.** Robin's judgement per task, guided by the tool description. Needs real use to see whether it over-marks, since an urgent message can wake the house.
 - **Presence gating.** Only chime when someone is in the room. If nobody is there, text.
-- **Quiet hours** and a do-not-disturb state.
+- **Quiet hours** and a do-not-disturb state. Speaking hours are the quiet hours today, and an urgent message is spoken through them. Whether a do-not-disturb state should also hold back urgent messages is open.
 - **LED language.** What listening, thinking, speaking, muted and "message waiting" look like on the ring.
 - **Message waiting.** A silent light that means "ask me what's new" may beat a chime.
 

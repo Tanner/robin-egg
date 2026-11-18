@@ -94,13 +94,27 @@ Robin also writes messages into the plain web chat on its own: a reminder coming
 - The log shows each message's id and task label, and whether it was spoken, queued or dropped.
 - The sound is `robin_egg_server/sounds/proactive.flac` unless `--proactive-sound FILE` names another. `--no-robin-announcements` turns all of this off.
 
+A message may be marked urgent, meaning time-critical, with `"priority": "urgent"` on the speaker stream. A message with no `priority`, or one the server does not know, is a normal message. An urgent message differs in three ways:
+
+- It is spoken outside speaking hours.
+- It goes ahead of the normal messages that are waiting. Urgent messages keep their own order.
+- It plays the urgent cue, `robin_egg_server/sounds/urgent.flac`, in place of the proactive chime: the same phrase played twice, at the same level. `--urgent-sound FILE` names another.
+
+It still waits for the egg to be idle, so it never talks over a conversation or cuts off a message that is already being spoken, and the wake word stops it. The log marks it, for example `Speaking message 31 (Smoke alarm, urgent) now`. robin-assistant does not send `priority` yet; the proposed change is in [docs/robin-chat-api.md](../docs/robin-chat-api.md).
+
 To make the egg speak something yourself:
 
 ```sh
 curl -d "Time to leave for the airport." http://localhost:8765/announce
 ```
 
-The egg plays the proactive chime first, then speaks, within the same speaking hours.
+The egg plays the proactive chime first, then speaks, within the same speaking hours. Add `?priority=urgent` to speak at any hour, after the urgent cue:
+
+```sh
+curl -d "The taxi is outside." "http://localhost:8765/announce?priority=urgent"
+```
+
+`priority=normal` is the same as leaving it out. Any other value gets a 400.
 
 ## Telling voices apart
 
@@ -150,7 +164,8 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 | `--agent-name` | required | The robin-assistant agent to ask: its folder name under `~/.robin/agents/`. Not needed with `--echo`. |
 | `--robin-announcements`, `--no-robin-announcements` | on | Speak the messages Robin sends on its own. Not used with `--echo`. |
 | `--proactive-sound FILE` | `sounds/proactive.flac` | The sound before Robin speaks first: wav, aiff or flac. |
-| `--speaking-hours` | `8-20` | When Robin may speak first, its own messages and `/announce`. `0-24` for always. |
+| `--urgent-sound FILE` | `sounds/urgent.flac` | The sound before an urgent message, in place of the proactive sound: wav, aiff or flac. |
+| `--speaking-hours` | `8-20` | When Robin may speak first, its own messages and `/announce`. `0-24` for always. Urgent messages are spoken at any hour. |
 | `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the turn failed. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
 | `--tts piper\|say` | `piper` | Which text-to-speech engine to use. |
@@ -170,6 +185,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
+- Urgent messages. The urgent cue has not been heard on the egg's speaker, or by the cat. Nothing sends `"priority": "urgent"` yet except `/announce?priority=urgent`, so the speaker stream path has only met the fake robin-assistant.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 
 ## Files
@@ -185,7 +201,9 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/commands.py` | The "learn my voice" and "forget my voice" conversations |
 | `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
+| `robin_egg_server/sounds/urgent.flac` | The cue before an urgent message, made the same way |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |
+| `tests/test_urgent_messages.py` | Urgent messages: the cue, the speaking hours, the queue order and `/announce?priority=urgent` |

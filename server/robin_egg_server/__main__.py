@@ -43,6 +43,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--default-speaker-name", help=argparse.SUPPRESS)
     p.add_argument("--robin-announcements", action=argparse.BooleanOptionalAction, default=True, help="Speak the messages Robin sends on its own, such as reminders and scheduled tasks, after a chime and within --speaking-hours (default on; not used with --echo)")
     p.add_argument("--proactive-sound", metavar="FILE", help="Sound to play before each message Robin sends on its own (wav, aiff or flac). Default: the egg's own proactive chime")
+    p.add_argument("--urgent-sound", metavar="FILE", help="Sound to play before an urgent message instead (wav, aiff or flac). Default: the egg's own urgent cue")
     p.add_argument("--server-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
     p.add_argument("--tts", choices=["piper", "say"], default="piper", help="Text-to-speech engine: piper (Robin's voice) or macOS say")
@@ -118,9 +119,12 @@ def build(args: argparse.Namespace):
         speaking_hours=(start, end),
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
+        urgent_sound=Path(args.urgent_sound).expanduser() if args.urgent_sound else None,
     )
     if opts.proactive_sound and not opts.proactive_sound.exists():
         raise SystemExit(f"Proactive sound not found at {opts.proactive_sound}")
+    if opts.urgent_sound and not opts.urgent_sound.exists():
+        raise SystemExit(f"Urgent sound not found at {opts.urgent_sound}")
     speakers = people = commands = None
     if recognise:
         from .commands import VoiceCommands

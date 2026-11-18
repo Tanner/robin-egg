@@ -1,14 +1,18 @@
-"""Make the egg's two cues: the listening sound and the sound before a proactive message.
+"""Make the egg's three cues: the listening sound, the sound before a proactive message,
+and the sound before an urgent one.
 
-Both are the robin's "cheer-up" phrase played on a soft struck bell, like a celesta,
+All are the robin's "cheer-up" phrase played on a soft struck bell, like a celesta,
 at about a third of a robin's pitch. Listening is the falling step. A proactive message
 is the same step, then a lift to a higher note, so the two are related but easy to tell apart.
+An urgent message is the proactive phrase played twice. It insists by repeating, not by
+being louder, higher or faster: the same notes, level and pace.
 
 Usage, from the repository root (needs ffmpeg for the FLAC files):
 
     python3 tools/egg-sounds/make_sounds.py
 
-Writes firmware/sounds/wake_word_triggered.flac and server/robin_egg_server/sounds/proactive.flac.
+Writes firmware/sounds/wake_word_triggered.flac, and proactive.flac and urgent.flac in
+server/robin_egg_server/sounds/.
 """
 
 import math
@@ -25,6 +29,7 @@ REPO = Path(__file__).resolve().parents[2]
 OUTPUTS = {
     "listening": REPO / "firmware/sounds/wake_word_triggered.flac",
     "proactive": REPO / "server/robin_egg_server/sounds/proactive.flac",
+    "urgent": REPO / "server/robin_egg_server/sounds/urgent.flac",
 }
 
 # (frequency ratio, level, how long it rings relative to the fundamental)
@@ -34,6 +39,8 @@ C6, AS5, DS6 = 1046.5, 932.3, 1244.5
 CUES = {
     "listening": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.8, 1.0)],
     "proactive": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.4, 1.0), (0.33, DS6, 0.9, 1.0)],
+    "urgent": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.4, 1.0), (0.33, DS6, 0.6, 1.0),
+               (0.80, C6, 0.35, 0.9), (0.95, AS5, 0.4, 1.0), (1.13, DS6, 0.9, 1.0)],
 }
 
 
