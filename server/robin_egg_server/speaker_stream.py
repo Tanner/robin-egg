@@ -25,7 +25,8 @@ from .logs import tagged
 
 LOG = logging.getLogger("robin.speaker")
 
-URGENT = "urgent"  # the one value of a message's optional "priority" that changes anything
+URGENT = "urgent"  # a message's optional "priority": time-critical
+LOW = "low"  # a nudge: the cue alone, and the words are held for "what did I miss?"
 
 
 @dataclass
@@ -34,9 +35,10 @@ class SpeakerMessage:
     text: str  # as written, markdown included
     label: str | None = None  # the task's name, when there is one
     urgent: bool = False  # time-critical: spoken outside speaking hours, ahead of the queue, after its own cue
+    low: bool = False  # a nudge: only the proactive cue plays, and the words are held for "what did I miss?"
 
     def describe(self) -> str:
-        return f"{self.id} ({self.label or 'no label'}{', urgent' if self.urgent else ''})"
+        return f"{self.id} ({self.label or 'no label'}{', urgent' if self.urgent else ''}{', low' if self.low else ''})"
 
     @property
     def tag(self) -> str:
@@ -127,7 +129,7 @@ class SpeakerStream:
                     continue
                 label = data.get("label")
                 # A priority this server does not know is a normal message, so robin-assistant can add more.
-                msg = SpeakerMessage(data.get("id"), text, label if isinstance(label, str) and label else None, urgent=data.get("priority") == URGENT)
+                msg = SpeakerMessage(data.get("id"), text, label if isinstance(label, str) and label else None, urgent=data.get("priority") == URGENT, low=data.get("priority") == LOW)
                 with tagged(msg.tag):
                     LOG.info("Robin sent message %s on its own", msg.describe())
                     await self.on_message(msg)

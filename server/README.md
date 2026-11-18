@@ -106,6 +106,20 @@ A message may be marked urgent, meaning time-critical, with `"priority": "urgent
 
 It skips the `--presence-minutes` check, but a muted microphone silences it like any other message. It still waits for the egg to be idle, so it never talks over a conversation or cuts off a message that is already being spoken, and the wake word stops it. The log marks it, for example `Speaking message 31 (Smoke alarm, urgent) now`. robin-assistant does not send `priority` yet; the proposed change is in [docs/robin-chat-api.md](../docs/robin-chat-api.md).
 
+A message may instead be marked low, a nudge, with `"priority": "low"`. It is not spoken. The egg plays the proactive chime alone, the message joins the held messages that "what did I miss?" reads out, and the ring shows the waiting light: see [Message waiting](#message-waiting). The rule is that a low message passes the same checks as a normal one, and where a normal message would be spoken, the low one chimes and is held:
+
+| When | A low message |
+| --- | --- |
+| The egg is idle, inside speaking hours | Chime alone, then held with the waiting light. |
+| The egg is listening, thinking or replying | Waits in the queue, in arrival order with normal messages. The chime plays, and the message is held, once the egg is idle. Dropped after 10 minutes of waiting, like any other. |
+| Outside speaking hours | Held with no chime, as a normal message is. |
+| Quiet asked for by voice | Dropped with no chime. Asking for quiet stops the chime too, and nothing is held during quiet. |
+| The mic is muted | Dropped with no chime. |
+| `--presence-minutes` is set and nobody spoke recently | Dropped with no chime. |
+| `--no-message-waiting` | Spoken as a normal message, since there is nowhere to hold it. The log says so. |
+
+The wake word during the chime stops it, and the message stays held. The mic never reopens after a chime, whatever `--answer-messages` says, and "say that again" has nothing to repeat. If the egg fails to play the chime, the message is still held. The log marks it, for example `Played the chime for message 50 (Laundry, low); it is held for "what did I miss?"`. robin-assistant does not send `"low"` yet; the proposed change is in [docs/robin-chat-api.md](../docs/robin-chat-api.md).
+
 To make the egg speak something yourself:
 
 ```sh
@@ -116,6 +130,12 @@ The egg plays the proactive chime first, then speaks, within the same speaking h
 
 ```sh
 curl -d "The taxi is outside." "http://localhost:8765/announce?priority=urgent"
+```
+
+Add `?priority=low` to play the chime alone and hold the words for "what did I miss?". The answer is 200 and says the words were held, not spoken. Outside speaking hours, during quiet and while muted it is refused with 409 and nothing is held, like any other `/announce`. With `--no-message-waiting` it is spoken:
+
+```sh
+curl -d "The washing machine has finished." "http://localhost:8765/announce?priority=low"
 ```
 
 `priority=normal` is the same as leaving it out. Any other value gets a 400. The mic stays closed after `/announce`, whatever `--answer-messages` says.
@@ -267,6 +287,7 @@ A message Robin sends on its own outside speaking hours is held instead of spoke
 - After reading, the mic reopens for a follow-up when `--follow-up` is `always`, so a message can be answered.
 - Only speaking hours hold a message. One dropped because someone asked for quiet by voice, the mic is muted, nobody seems to be in the room, or it waited too long for the egg is still dropped. So is one cut off by the wake word, or sent to `/announce` outside speaking hours.
 - An urgent message is spoken at any hour, so it is never held.
+- A low-priority message is held inside speaking hours too, after the chime. It is read out with the same words as the others, "came in while I was quiet". The morning mention counts it like any held message, so the next reply from Robin after a chime ends with the sentence saying a message is waiting.
 - "Say that again" repeats the read-out.
 - `--no-message-waiting` turns this off. Messages outside speaking hours are then dropped and the question goes to Robin.
 
@@ -403,7 +424,7 @@ The OpenAI voice took longer than 4 s for one sentence, so Piper speaks the rest
 The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the server still starts, says so in the log, and Piper speaks every reply.
 ## Measuring latency and false wake-ups
 
-The server writes one line per voice turn, and one per message Robin sends on its own, to `~/.robin-egg/turns.jsonl`. A turn's line has the time, the turn's tag, whether a wake word or a follow-up started it and which wake word, how many seconds of audio were heard and why listening ended, how the turn ended, and the timings the log prints: speech-to-text, speaker identification, first audio ready, whole reply ready, and the reply's length. It also says whether the speaker was recognised and with what score. A message's line has its id, whether it was urgent, whether it was spoken, dropped, interrupted or failed, why, and how long it waited for the egg if it was queued.
+The server writes one line per voice turn, and one per message Robin sends on its own, to `~/.robin-egg/turns.jsonl`. A turn's line has the time, the turn's tag, whether a wake word or a follow-up started it and which wake word, how many seconds of audio were heard and why listening ended, how the turn ended, and the timings the log prints: speech-to-text, speaker identification, first audio ready, whole reply ready, and the reply's length. It also says whether the speaker was recognised and with what score. A message's line has its id, whether it was urgent or low, whether it was spoken, held, dropped, interrupted or failed, why, and how long it waited for the egg if it was queued.
 
 The file never holds audio, what anyone said, what Robin said, or a task's label. It holds who spoke only with `--turn-log-names`.
 
@@ -460,7 +481,7 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 | `--quiet-hours` | `21-7` | When Robin speaks more quietly, replies and announcements alike. The window may wrap past midnight. `off` for never. |
 | `--quiet-volume` | 60 | How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100. |
 | `--match-voice`, `--no-match-voice` | off | Also speak more quietly to someone who spoke quietly. Off until it is tried on the real egg. |
-| `--message-waiting`, `--no-message-waiting` | on | Hold Robin's own messages from outside `--speaking-hours`, breathe the ring while any wait, and read them out to "what did I miss?". Off drops them. |
+| `--message-waiting`, `--no-message-waiting` | on | Hold Robin's own messages from outside `--speaking-hours`, and low-priority ones after their chime, breathe the ring while any wait, and read them out to "what did I miss?". Off drops the first and speaks the second. |
 | `--morning-mention`, `--no-morning-mention` | on | Once speaking hours have begun, end the first reply from Robin with one sentence saying how many held messages are waiting and how to hear them. Once per batch of messages. Needs `--message-waiting`. |
 | `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the turn failed. |
 | `--unsure-retries` | 1 | Times in a row to say "Sorry, I didn't catch that." and listen again when speech-to-text is unsure. `0` never asks. |
@@ -504,6 +525,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Room facts. The posts have only met the fake robin-assistant, not the real `/api/context` route, and nobody has yet read how Robin uses them in a real answer. Whether a Wi-Fi blip on the real egg makes `egg_connection` flap between `disconnected` and `connected` is unknown.
 - "Say that again". The phrases were chosen by guess, not from what Whisper hears through the egg's mic, so a short one such as "pardon" may be transcribed as something else and go to Robin. Whether a repeated long reply plays cleanly on the egg is also untested.
 - Urgent messages. The urgent cue has not been heard on the egg's speaker, or by the cat. Nothing sends `"priority": "urgent"` yet except `/announce?priority=urgent`, so the speaker stream path has only met the fake robin-assistant.
+- Chime-only nudges. Whether the egg plays an announcement that is under a second of sound with no words, and goes back to idle and the waiting light afterwards, is untested. The firmware may show its replying light for that second. The fake egg does not model the wake word stopping an announcement on the egg itself, only the server's side of it. Nothing sends `"priority": "low"` yet except `/announce?priority=low`, so the speaker stream path has only met the fake robin-assistant. Whether the chime alone is noticed from across the room, or is too easy to miss, needs living with.
 - Asking again. The limits are Whisper's own, not chosen from speech recorded on the egg. On the Mac, clear synthetic speech scored `logprob` −0.31, and noise that Whisper turned into "You" scored `no-speech` 0.90 and was caught, but reversed speech scored `logprob` −0.54 and passed. Check the "Heard" lines from real use before trusting the defaults.
 - "Who am I?". Spoken on its own after the wake word it may be under the one second of speech needed to judge a voice, so the usual answer could be "too short". How Whisper writes the question on the egg's mic is also unknown; the phrasings it matches are in `whoami.py`.
 - Mute means quiet. The server looks for a switch with the object id `microphone_mute` (the firmware's "Microphone Mute") and follows its state. Whether the real egg lists the switch under that object id, sends its state on connect, and reports each button press has only been seen on the fake egg. The log says "The egg's microphone was muted" when it works, and "The egg has no microphone_mute switch" when the switch is not found.
@@ -580,6 +602,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |
 | `tests/test_repeat.py` | "Say that again", alone and through the fake egg |
 | `tests/test_urgent_messages.py` | Urgent messages: the cue, the speaking hours, the queue order and `/announce?priority=urgent` |
+| `tests/test_low_messages.py` | Chime-only nudges: the cue alone, the held message and waiting light, each gate, and `/announce?priority=low` |
 | `tests/test_answer_messages.py` | Answering a message Robin sent on its own without the wake word |
 | `tests/test_morning_mention.py` | The morning mention, its rules alone and through the fake egg |
 | `tests/test_presence.py` | `--presence-minutes`: Robin's own messages spoken or dropped by when someone last spoke |
