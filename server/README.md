@@ -102,6 +102,17 @@ curl -d "Time to leave for the airport." http://localhost:8765/announce
 
 The egg plays the proactive chime first, then speaks, within the same speaking hours.
 
+## Saying it again
+
+Say the wake word, then "say that again", or just say it in the follow-up window. The egg repeats the last thing Robin said without asking robin-assistant, so it is quick and works while robin-assistant is down. "Repeat that", "what did you say", "what was that", "come again", "pardon" and "one more time" do the same, with or without "Robin", "please", "sorry" or "for me" around them. The phrase has to be the whole request: "repeat that song" still goes to Robin.
+
+- What counts as the last thing said: Robin's last reply, a message Robin sent on its own, or an `/announce`. A message is repeated without its chime. The egg's own lines do not count: the enrolment questions, "nothing to repeat" and the apology after a failed turn. A reply the wake word cut off partway does not count either, so the one before it is repeated.
+- It stays repeatable for 10 minutes after it was said. Change that with `--repeat-window`; `0` turns the command off and the words go to Robin like any others. Repeating it starts the 10 minutes again.
+- With nothing to repeat, the egg says "I haven't said anything lately, so there's nothing to repeat." and does not ask Robin.
+- Only the text is kept, in memory, one thing at a time, for the whole household. No audio is kept, nothing is written to disk, and a restart forgets it.
+- The mic reopens after a repeat as `--follow-up` says, as after any reply.
+- While a voice is being enrolled the command is off, because every turn there is an answer to the enrolment.
+
 ## Telling voices apart
 
 The server works out which household member is talking and sends their name to Robin with each question. Anyone it does not recognise is sent as "Unknown Speaker". It needs the speaker model downloaded as above, and the people robin-assistant lists for the agent. It is on by default; `--no-speaker-recognition` turns it off, and then every voice is "Unknown Speaker".
@@ -144,6 +155,7 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. Enrolling and forgetting a voice still reopen it, whatever this is set to. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
+| `--repeat-window` | 10 min | How long after Robin says something "say that again" still repeats it. `0` turns the command off. |
 | `--max-utterance` | 30 s | The longest request. Listening stops here even if you have not paused. |
 | `--echo` | off | Repeat what was heard instead of asking Robin. Tests the audio chain with no robin-assistant. |
 | `--server` | required | robin-assistant's address: a host or IP, `host:port`, or a URL such as `https://robin.example.net`. A bare host gets port 8273; a URL keeps its scheme's port. Not needed with `--echo`. |
@@ -170,6 +182,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
+- "Say that again". The phrases were chosen by guess, not from what Whisper hears through the egg's mic, so a short one such as "pardon" may be transcribed as something else and go to Robin. Whether a repeated long reply plays cleanly on the egg is also untested.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 
 ## Files
@@ -183,9 +196,11 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
 | `robin_egg_server/speakers.py` | Speaker embeddings, the voiceprint store, and matching a voice to a person |
 | `robin_egg_server/commands.py` | The "learn my voice" and "forget my voice" conversations |
+| `robin_egg_server/repeat.py` | The "say that again" command and the text of the last thing said |
 | `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |
+| `tests/test_repeat.py` | "Say that again", alone and through the fake egg |

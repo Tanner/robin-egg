@@ -51,6 +51,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-stream", action="store_true", help="Play the reply only once it is complete (fallback if streaming misbehaves)")
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
+    p.add_argument("--repeat-window", type=float, default=10.0, metavar="MINUTES", help="How long after Robin says something 'say that again' still repeats it (default 10; 0 turns the command off)")
     p.add_argument("--max-utterance", type=float, default=30.0, help="Longest request in seconds; listening stops here even if the speaker has not paused")
     p.add_argument("--speaker-recognition", action=argparse.BooleanOptionalAction, default=True, help="Tell household members apart by voice and let them enrol by saying 'learn my voice' (default on; --no-speaker-recognition turns it off; not used with --echo)")
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
@@ -115,6 +116,7 @@ def build(args: argparse.Namespace):
         follow_up=args.follow_up,
         follow_up_window_s=args.follow_up_window,
         max_utterance_s=args.max_utterance,
+        repeat_window_s=args.repeat_window * 60,
         speaking_hours=(start, end),
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
