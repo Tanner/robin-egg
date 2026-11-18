@@ -190,7 +190,7 @@ def announce_request(web_setup, request: bytes) -> bytes:
 
 
 def test_a_malformed_announce_request_gets_an_answer():
-    async def spoken(text: str) -> tuple[int, str]:
+    async def spoken(text: str, urgent: bool = False) -> tuple[int, str]:
         return 200, "spoken"
 
     def setup(web: AudioServer) -> None:
@@ -202,7 +202,7 @@ def test_a_malformed_announce_request_gets_an_answer():
 
 
 def test_an_announce_that_fails_inside_the_server_gets_an_answer():
-    async def broken(text: str) -> tuple[int, str]:
+    async def broken(text: str, urgent: bool = False) -> tuple[int, str]:
         raise RuntimeError("the voice model is missing")
 
     def setup(web: AudioServer) -> None:

@@ -34,6 +34,7 @@ from .confidence import UNSURE, Confidence, ConfidenceLimits
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
 from .mic_mute import MicMute
+from .repeat import DEFAULT_WINDOW_S, NOTHING_TO_REPEAT, LastSaid
 from .presence import Presence, SpokenTo, absence
 from .room import RoomVolume
 from .speaker_stream import SpeakerMessage
@@ -46,6 +47,7 @@ LOG = logging.getLogger("robin.egg")
 
 ZERO_PSK = base64.b64encode(bytes(32)).decode()  # formatBCE: encryption on, no key set yet
 PROACTIVE_CHIME = Path(__file__).parent / "sounds" / "proactive.flac"  # made by tools/egg-sounds
+URGENT_CHIME = Path(__file__).parent / "sounds" / "urgent.flac"  # the cue before an urgent message
 NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 # After a reply that asked for a follow-up, how long past its end to wait for the egg to reopen its mic.
@@ -73,6 +75,8 @@ class Options:
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
     proactive_max_age_s: float = 600.0  # a message that waited longer than this for the egg is stale, and dropped
+    repeat_window_s: float = DEFAULT_WINDOW_S  # how long "say that again" can bring back the last thing said; 0 turns it off
+    urgent_sound: Path | None = None  # played before an urgent message instead; URGENT_CHIME if None
     unsure_retries: int = 1  # times in a row to ask for a repeat when speech-to-text is unsure; 0 never asks
     confidence: ConfidenceLimits = field(default_factory=ConfidenceLimits)
     quiet_hours: tuple[int, int] | None = (21, 7)  # replies and announcements are quieter in this window
@@ -119,6 +123,7 @@ class Robin:
         self.presence: Presence = presence or SpokenTo()
         self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
+        self.last_said = LastSaid(self.opts.repeat_window_s)  # text only, for "say that again"
         self._unsure_streak = 0  # how many turns in a row ended in asking for a repeat
         self._turn_count = 0  # numbers the turns in the log
         self._announce_count = 0  # numbers the /announce calls in the log
@@ -129,13 +134,16 @@ class Robin:
         self._playback_until = 0.0  # when the egg should finish playing the last reply
         self._state = asyncio.Event()  # set whenever the egg may have become idle
         self._speaker_lock = asyncio.Lock()  # one announcement at a time
-        self._proactive_queue: asyncio.Queue[tuple[SpeakerMessage, float]] = asyncio.Queue()  # with when each arrived
+        # Urgent messages first, then arrival order: (0 if urgent else 1, arrival number, when it arrived, message).
+        self._proactive_queue: asyncio.PriorityQueue[tuple[int, int, float, SpeakerMessage]] = asyncio.PriorityQueue()
+        self._proactive_count = 0
         self._proactive_worker: asyncio.Task | None = None
         self._proactive_task: asyncio.Task | None = None  # the message being spoken now
         self._proactive_stopped_by = ""  # why the message being spoken was cut short
         self._answer_wanted = False  # the message being spoken asked the egg to listen once it has played
         self._answering: str | None = None  # the message the egg's next run answers, as the log names it
         self.proactive_sound = load_sound(self.opts.proactive_sound or PROACTIVE_CHIME)
+        self.urgent_sound = load_sound(self.opts.urgent_sound or URGENT_CHIME)
         web.on_announce = self.announce
 
     # ---- events to the egg ----
@@ -274,7 +282,13 @@ class Robin:
             # Enrolment matches each sentence itself and asks again on a miss.
             if not enrolling and await self._ask_again_if_unsure(t, confidence, t0):
                 return
-            if self.commands is not None:
+            # Mid-enrolment every turn is an answer to the enrolment, whatever it sounds like.
+            again = None if enrolling else self.last_said.answer(heard)
+            if again is not None:
+                step = Step(again, self._reopens_after(again))
+                if again != NOTHING_TO_REPEAT:
+                    self.last_said.remember(again)  # said again just now, so it stays repeatable
+            elif self.commands is not None:
                 step = await self.commands.handle(heard, match)
             elif is_voice_command(heard):
                 # Robin would only guess at what this means, so the egg answers it itself.
@@ -297,6 +311,7 @@ class Robin:
             LOG.info('Robin: "%s"', reply_text)
             cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))
             await self._finish_reply(t, reply_text, cont)
+            self.last_said.remember(reply_text)
             if self.speakers is not None:
                 self.speakers.learn(match)
             self.last_match = match
@@ -313,6 +328,9 @@ class Robin:
         finally:
             await t.reply.close()
             self._state.set()
+
+    def _reopens_after(self, text: str) -> bool:
+        return self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and text.rstrip().endswith("?"))
 
     def _reset_commands(self) -> None:
         if self.commands is not None:
@@ -471,23 +489,24 @@ class Robin:
         start, end = self.opts.speaking_hours
         return f"{start}:00 to {end}:00"
 
-    async def _announcement(self, text: str, chime: bool = False) -> ReplyAudio:
+    async def _announcement(self, text: str, chime: bool = False, urgent: bool = False) -> ReplyAudio:
         """The whole announcement as one finished file, spoken sentence by sentence.
 
-        A chime first, so Robin speaking unprompted does not startle anyone.
+        A chime first, so Robin speaking unprompted does not startle anyone. An urgent
+        announcement gets the urgent cue in its place.
         """
         reply = ReplyAudio()
         reply.gain = self.room.for_announcement()
         if chime:
-            await reply.push(self.proactive_sound, REPLY_RATE, gap_s=0.2)
+            await reply.push(self.urgent_sound if urgent else self.proactive_sound, REPLY_RATE, gap_s=0.2)
         await self._speak(_once(text), reply)
         await reply.close()
         return reply
 
-    async def announce(self, text: str) -> tuple[int, str]:
+    async def announce(self, text: str, urgent: bool = False) -> tuple[int, str]:
         if self.client is None:
             return 503, "the egg is not connected"
-        if not self._in_speaking_hours():
+        if not self._in_speaking_hours() and not urgent:
             return 409, f"outside speaking hours ({self._hours()}); not spoken"
         if self._mic_muted():
             LOG.info('Did not announce "%s": the egg\'s microphone is muted', text)
@@ -502,13 +521,14 @@ class Robin:
                 LOG.info('Not announcing "%s": after %.0f s, %s', text, ANNOUNCE_WAIT_S, reason)
                 return (503 if self.client is None else 409), f"{reason}; not spoken"
             async with self._speaker_lock:
-                reply = await self._announcement(text, chime=True)
+                reply = await self._announcement(text, chime=True, urgent=urgent)
                 client = self.client
                 if client is None:
                     LOG.info('Not announcing "%s": the egg disconnected before it could be spoken', text)
                     return 503, "the egg is not connected"
                 url = self.web.add(reply)
-                LOG.info('Announcing: "%s"', text)
+                LOG.info('Announcing%s: "%s"', " as urgent" if urgent else "", text)
+                self.last_said.remember(text)
                 try:
                     result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
                 except Exception as err:  # noqa: BLE001 - whoever asked must hear that it was not spoken
@@ -538,17 +558,22 @@ class Robin:
 
         Outside speaking hours, while the egg's microphone is muted, or with nobody likely
         in the room when that is checked, it is dropped, not saved for later, and so is one that
-        waits too long for the egg. Messages that arrive together are spoken in order, one chime each.
+        waits too long for the egg. Messages that arrive together are spoken in order, one chime
+        each. An urgent message is spoken at any hour, whoever is in the room, ahead of the
+        messages already waiting, after the urgent cue. A muted microphone still silences it:
+        that is someone's own choice.
         """
         with tagged(msg.tag):
             if not self._in_speaking_hours():
-                LOG.info("Dropped message %s: outside speaking hours (%s)", msg.describe(), self._hours())
-                return
+                if not msg.urgent:
+                    LOG.info("Dropped message %s: outside speaking hours (%s)", msg.describe(), self._hours())
+                    return
+                LOG.info("Message %s is urgent, so it is spoken outside speaking hours (%s)", msg.describe(), self._hours())
             if self._mic_muted():
                 LOG.info("Dropped message %s: the egg's microphone is muted", msg.describe())
                 return
             # A turn under way may be the first sign of someone, so the check waits for it to end.
-            if not self._in_conversation() and (nobody := self._nobody_here()):
+            if not msg.urgent and not self._in_conversation() and (nobody := self._nobody_here()):
                 LOG.info("Dropped message %s: %s", msg.describe(), nobody)
                 return
             if self._proactive_task is not None and not self._proactive_task.done():
@@ -561,7 +586,8 @@ class Robin:
                 LOG.info("Queued message %s until the egg is idle: %s", msg.describe(), busy)
             else:
                 LOG.info("Speaking message %s now", msg.describe())
-        self._proactive_queue.put_nowait((msg, time.monotonic()))
+        self._proactive_count += 1
+        self._proactive_queue.put_nowait((0 if msg.urgent else 1, self._proactive_count, time.monotonic(), msg))
         if self._proactive_worker is None or self._proactive_worker.done():
             self._proactive_worker = asyncio.create_task(self._speak_proactive_messages())
 
@@ -573,23 +599,34 @@ class Robin:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._state.wait(), 0.25)  # playback ends on a clock, not an event
 
+    async def _next_proactive(self) -> tuple[SpeakerMessage, float]:
+        """The message to speak next, once the egg is idle, with when it arrived.
+
+        The choice is made after the wait, so an urgent message that arrives while the
+        egg is busy goes ahead of the one that was waiting for it.
+        """
+        entry = await self._proactive_queue.get()
+        await self._until_idle()
+        self._proactive_queue.put_nowait(entry)
+        _, _, arrived, msg = self._proactive_queue.get_nowait()
+        return msg, arrived
+
     async def _speak_proactive_messages(self) -> None:
         while True:
-            msg, arrived = await self._proactive_queue.get()
+            msg, arrived = await self._next_proactive()
             with tagged(msg.tag):  # the speaking task started here keeps the tag
-                await self._until_idle()
                 waited = time.monotonic() - arrived
                 if waited > self.opts.proactive_max_age_s:
                     # A reminder spoken hours late, when the egg comes back, is worse than one left in the chat.
                     LOG.info("Dropped message %s: it waited %.0f s for the egg, longer than the %.0f s allowed", msg.describe(), waited, self.opts.proactive_max_age_s)
                     continue
-                if not self._in_speaking_hours():
+                if not msg.urgent and not self._in_speaking_hours():
                     LOG.info("Dropped message %s: speaking hours (%s) ended while it waited", msg.describe(), self._hours())
                     continue
                 if self._mic_muted():
                     LOG.info("Dropped message %s: the egg's microphone was muted while it waited", msg.describe())
                     continue
-                if nobody := self._nobody_here():
+                if not msg.urgent and (nobody := self._nobody_here()):
                     LOG.info("Dropped message %s: %s once the egg was idle", msg.describe(), nobody)
                     continue
                 self._proactive_stopped_by = ""
@@ -606,13 +643,14 @@ class Robin:
             LOG.info("Dropped message %s: nothing to say once markdown is stripped", msg.describe())
             return
         async with self._speaker_lock:
-            reply = await self._announcement(text, chime=True)
+            reply = await self._announcement(text, chime=True, urgent=msg.urgent)
             client = self.client
             if client is None:
                 LOG.info("Dropped message %s: the egg disconnected before it could be spoken", msg.describe())
                 return
             url = self.web.add(reply)
             LOG.info('Speaking message %s: "%s"', msg.describe(), text)
+            self.last_said.remember(text)
             listen = self.opts.answer_messages == "always" or (self.opts.answer_messages == "questions" and text.rstrip().endswith("?"))
             self._answer_wanted = listen
             try:
