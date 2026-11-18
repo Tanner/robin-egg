@@ -25,6 +25,7 @@ from typing import Any, AsyncIterator, Protocol
 
 from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_sound
 from .brain import Brain, QuietTurn, sentences, strip_markdown
+from .confidence import UNSURE, Confidence, ConfidenceLimits
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
 from .speaker_stream import SpeakerMessage
@@ -56,6 +57,8 @@ class Options:
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
+    unsure_retries: int = 1  # times in a row to ask for a repeat when speech-to-text is unsure; 0 never asks
+    confidence: ConfidenceLimits = field(default_factory=ConfidenceLimits)
 
 
 @dataclass
@@ -94,6 +97,7 @@ class Robin:
         self.opts = opts or Options()
         self.speakers, self.people, self.commands = speakers, people, commands
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
+        self._unsure_streak = 0  # how many turns in a row ended in asking for a repeat
         self._turn_count = 0  # numbers the turns in the log
         self._announce_count = 0  # numbers the /announce calls in the log
         self.client: Any = None  # an APIClient while the egg is connected
@@ -144,6 +148,7 @@ class Robin:
         self._follow_up_pending = False
         if not follow_up:
             self.last_match = None  # a new conversation never inherits the last speaker
+            self._unsure_streak = 0
             self._reset_commands()  # a wake word mid-enrolment means the person wants Robin, not the next sentence
         cfg = VadConfig(max_utterance_s=self.opts.max_utterance_s)
         if follow_up:
@@ -219,8 +224,9 @@ class Robin:
                 self._end_without_reply()
                 return
             t0 = time.monotonic()
-            (heard, stt_s), (match, id_s) = await asyncio.gather(self._transcribe(t), self._identify(t))
-            LOG.info('Heard: "%s" (STT %.2f s, speaker %.2f s)', heard, stt_s, id_s)
+            (heard, confidence, stt_s), (match, id_s) = await asyncio.gather(self._transcribe(t), self._identify(t))
+            sure = f", {confidence.describe()}" if confidence is not None else ""
+            LOG.info('Heard: "%s" (STT %.2f s, speaker %.2f s%s)', heard, stt_s, id_s, sure)
             enrolling = self.commands is not None and self.commands.active
             # A cough mid-enrolment is a missed answer to ask again, not a reason to drop the enrolment.
             if not heard and not enrolling:
@@ -229,6 +235,9 @@ class Robin:
                 return
             self.send(E.VOICE_ASSISTANT_STT_END, {"text": heard})
             self.send(E.VOICE_ASSISTANT_INTENT_START)
+            # Enrolment matches each sentence itself and asks again on a miss.
+            if not enrolling and await self._ask_again_if_unsure(t, confidence, t0):
+                return
             if self.commands is not None:
                 step = await self.commands.handle(heard, match)
             elif is_voice_command(heard):
@@ -270,10 +279,35 @@ class Robin:
         if self.commands is not None:
             self.commands.reset()
 
-    async def _transcribe(self, t: Turn) -> tuple[str, float]:
+    async def _transcribe(self, t: Turn) -> tuple[str, Confidence | None, float]:
         start = time.monotonic()
-        heard = await asyncio.to_thread(self.stt.transcribe, bytes(t.audio))
-        return heard, time.monotonic() - start
+        with_confidence = getattr(self.stt, "transcribe_with_confidence", None)
+        if with_confidence is not None:
+            heard, confidence = await asyncio.to_thread(with_confidence, bytes(t.audio))
+        else:
+            heard, confidence = await asyncio.to_thread(self.stt.transcribe, bytes(t.audio)), None
+        return heard, confidence, time.monotonic() - start
+
+    async def _ask_again_if_unsure(self, t: Turn, confidence: Confidence | None, t0: float) -> bool:
+        """Asks for a repeat and reopens the mic when speech-to-text doubts what it heard.
+
+        After `unsure_retries` repeats in a row the words go to Robin as heard, so the
+        egg cannot keep someone in a loop of apologies.
+        """
+        doubt = self.opts.confidence.doubt(confidence) if confidence is not None else None
+        if doubt is None or self.opts.unsure_retries <= 0:
+            self._unsure_streak = 0
+            return False
+        if self._unsure_streak >= self.opts.unsure_retries:
+            LOG.info("Speech-to-text is still unsure (%s) after asking %d time(s) in a row; sending it to Robin as heard", doubt, self._unsure_streak)
+            self._unsure_streak = 0
+            return False
+        self._unsure_streak += 1
+        LOG.info("Speech-to-text is unsure (%s); asking the person to say it again", doubt)
+        await self._speak(_once(UNSURE), t.reply, turn=t, t0=t0)
+        LOG.info('Robin: "%s"', UNSURE)
+        await self._finish_reply(t, UNSURE, cont=True)
+        return True
 
     async def _identify(self, t: Turn) -> tuple[Match, float]:
         """Who spoke this turn. Never raises: not knowing who asked must not stop the answer."""
