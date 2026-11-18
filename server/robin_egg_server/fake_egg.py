@@ -21,9 +21,11 @@ from aioesphomeapi import api_pb2 as pb
 from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
 
 from .audio import MIC_RATE, resample
+from .mic_mute import MUTE_OBJECT_ID
 
 PROTO_TO_TYPE = {v: k for k, v in MESSAGE_TYPE_TO_PROTO.items()}
 CHUNK = 1024  # bytes of mic audio per message, 32 ms
+MUTE_KEY = 0x4D555445  # the fake's entity key for the mute switch; the server must not depend on it
 
 
 def varint(n: int) -> bytes:
@@ -74,7 +76,7 @@ class Run:
 
 
 class FakeEgg:
-    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu", announce_seconds: float = 0.0, wake_words: list[str | None] | None = None) -> None:
+    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu", announce_seconds: float = 0.0, wake_words: list[str | None] | None = None, mute_switch: bool = True, muted: bool = False) -> None:
         """wake_words, when given, says how each run starts, one per utterance: a wake word
         starts that run even if the server did not ask for a follow-up, and None means a follow-up."""
         self.utterances = list(utterances)
@@ -88,6 +90,9 @@ class FakeEgg:
         self.announcing = asyncio.Event()  # set while an announcement plays
         self._announce_cut = asyncio.Event()
         self.done = asyncio.Event()
+        self.mute_switch = mute_switch  # False for firmware with no "Microphone Mute" switch
+        self.muted = muted
+        self._states_subscribed = False
         self._w: asyncio.StreamWriter | None = None
         self._mic_open = False
         self._fetch: asyncio.Task | None = None
@@ -116,6 +121,7 @@ class FakeEgg:
                 w.close()
                 return
             self._w = w
+            self._states_subscribed = False
             first = True
             while True:
                 if not first and (await r.readexactly(1)) != b"\x00":
@@ -138,6 +144,14 @@ class FakeEgg:
             self.send(pb.PingResponse())
         elif isinstance(msg, pb.DisconnectRequest):
             self.send(pb.DisconnectResponse())
+        elif isinstance(msg, pb.ListEntitiesRequest):
+            if self.mute_switch:
+                self.send(pb.ListEntitiesSwitchResponse(object_id=MUTE_OBJECT_ID, key=MUTE_KEY, name="Microphone Mute"))
+            self.send(pb.ListEntitiesDoneResponse())
+        elif isinstance(msg, pb.SubscribeStatesRequest):
+            self._states_subscribed = True
+            if self.mute_switch:
+                self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=self.muted))
         elif isinstance(msg, pb.SubscribeVoiceAssistantRequest) and msg.subscribe:
             await asyncio.sleep(0.05)
             first = self.wake_words[0] if self.wake_words else None
@@ -170,6 +184,12 @@ class FakeEgg:
             # both messages together is the harder case for the server.
             self.done.clear()
             self._start_run(self.runs[-1].wake_word if self.runs else self.wake_word)
+
+    def set_muted(self, muted: bool) -> None:
+        """Press the mute button: the switch reports its new state, as the firmware does."""
+        self.muted = muted
+        if self.mute_switch and self._states_subscribed and self._w is not None:
+            self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=muted))
 
     def wake(self) -> None:
         """Hear the wake word now, cutting off any announcement that is playing."""
