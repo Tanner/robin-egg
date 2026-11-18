@@ -92,3 +92,11 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | The urgent cue is the proactive phrase played twice, at the same level, pitch and pace | It insists by repeating. Louder, higher or faster would be sharp, and closer to a bird for the cat |
 | There are three cues in all: listening, proactive and urgent | Small enough to learn |
 | An urgent message skips the `--presence-minutes` check, but a muted microphone silences it | Presence is a guess from the last voice turn. Mute is someone's own choice to have quiet |
+
+## Mute sounds, decided 2026-11-17
+
+| Decision | Why |
+| --- | --- |
+| The egg plays its own mute and unmute sounds, made by `tools/egg-sounds/make_sounds.py`, in place of the formatBCE ones | Every sound the egg makes should be in the same soft bell voice |
+| Mute steps down three notes to a low, muffled note. Unmute takes the same path back up and ends on the listening cue's first note | Down and closed reads as off, up and open as on. Three notes avoid the two-note rise that sounded like Siri |
+| They are set by overriding the `mute_switch_on_sound_file` and `mute_switch_off_sound_file` substitutions, not by changing the packages | The formatBCE packages stay as released, so updating `respeaker_ref` stays simple |

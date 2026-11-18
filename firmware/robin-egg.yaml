@@ -19,8 +19,10 @@ substitutions:
   # XMOS DSP firmware together.
   respeaker_ref: 2026.11.0
 
-  # The listening cue, made by tools/egg-sounds/make_sounds.py.
+  # The listening, mute and unmute cues, made by tools/egg-sounds/make_sounds.py.
   wake_word_triggered_sound_file: sounds/wake_word_triggered.flac
+  mute_switch_on_sound_file: sounds/mute_switch_on.flac
+  mute_switch_off_sound_file: sounds/mute_switch_off.flac
 
 packages:
   respeaker:
