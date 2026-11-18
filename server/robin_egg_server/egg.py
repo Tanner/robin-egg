@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Protocol
 
-from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_sound
+from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, describe_level, load_sound
 from . import whoami
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .confidence import UNSURE, Confidence, ConfidenceLimits
@@ -293,6 +293,8 @@ class Robin:
         self.send(self.E.VOICE_ASSISTANT_STT_VAD_END)  # the egg stops its mic and shows "thinking"
         secs = len(t.audio) / 2 / MIC_RATE
         LOG.info("Heard %.1f s of audio (%s)", secs, t.vad.reason)
+        if not t.vad.speech_started:
+            LOG.info(describe_level(bytes(t.audio), t.vad.threshold if isinstance(t.vad, EnergyVad) else None))
         self._save_capture(t)
         t.task = asyncio.create_task(self._respond(t))
 
