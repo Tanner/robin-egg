@@ -9,6 +9,10 @@ Event order for one turn, matching what Home Assistant sends when it streams TTS
 
 With continue_conversation=1 the egg reopens its mic after the reply, with no wake
 word, which is how follow-up questions work.
+
+A message Robin sends on its own is an announcement, not a run. Sent with
+start_conversation, the firmware starts a run of its own once the announcement has
+played, again with no wake word, so the message can be answered out loud.
 """
 
 from __future__ import annotations
@@ -51,6 +55,7 @@ class Options:
     stream: bool = True  # start playback at the first sentence instead of after the whole reply
     follow_up: str = "always"  # always | questions | off
     follow_up_window_s: float = 5.0
+    answer_messages: str = "questions"  # reopen the mic after a message Robin sent on its own: questions | always | off
     max_utterance_s: float = 30.0  # longest request before the mic closes mid-sentence
     enrol_window_s: float = 10.0  # people need a moment to repeat an enrolment sentence
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
@@ -106,6 +111,8 @@ class Robin:
         self._proactive_worker: asyncio.Task | None = None
         self._proactive_task: asyncio.Task | None = None  # the message being spoken now
         self._proactive_stopped_by = ""  # why the message being spoken was cut short
+        self._answer_wanted = False  # the message being spoken asked the egg to listen once it has played
+        self._answering: str | None = None  # the message the egg's next run answers, as the log names it
         self.proactive_sound = load_sound(self.opts.proactive_sound or PROACTIVE_CHIME)
         web.on_announce = self.announce
 
@@ -121,6 +128,11 @@ class Robin:
     # ---- handlers for aioesphomeapi.subscribe_voice_assistant ----
 
     async def handle_start(self, conversation_id: str, flags: int, audio_settings: Any, wake_word_phrase: str | None) -> int | None:
+        if self._answer_wanted:
+            # The egg reports the message finished and reopens its mic in one breath, and this
+            # handler runs before the speaking task has heard the first. Let it catch up, so
+            # the run it asked for is not taken for the wake word cutting the message short.
+            await asyncio.sleep(0)
         if self._proactive_task is not None and not self._proactive_task.done():
             LOG.info("The wake word interrupted a message Robin sent on its own; stopping it")
             self._proactive_stopped_by = "the wake word interrupted it"
@@ -142,6 +154,7 @@ class Robin:
         reopened = time.monotonic() <= self._playback_until + FOLLOW_UP_GRACE_S
         follow_up = self._follow_up_pending and (not wake_word_phrase or reopened)
         self._follow_up_pending = False
+        answering, self._answering = self._answering if follow_up else None, None
         if not follow_up:
             self.last_match = None  # a new conversation never inherits the last speaker
             self._reset_commands()  # a wake word mid-enrolment means the person wants Robin, not the next sentence
@@ -155,7 +168,9 @@ class Robin:
         url = self.web.add(reply, tag)
         self.turn = Turn(EnergyVad(cfg), reply, url, wake_word_phrase, follow_up, tag=tag)
         with tagged(self.turn.tag):
-            if follow_up:
+            if answering:
+                LOG.info("Answer to message %s: listening for %.0f s", answering, cfg.no_speech_timeout_s)
+            elif follow_up:
                 LOG.info("Follow-up to %s: listening for %.0f s", previous_turn.tag if previous_turn else "the last turn", cfg.no_speech_timeout_s)
             else:
                 LOG.info("Wake word: %s", wake_word_phrase or "(started another way)")
@@ -484,8 +499,27 @@ class Robin:
                 return
             url = self.web.add(reply)
             LOG.info('Speaking message %s: "%s"', msg.describe(), text)
-            result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
-        LOG.info("Spoke message %s (%s)", msg.describe(), "finished" if getattr(result, "success", True) else "the egg reported a failure")
+            listen = self.opts.answer_messages == "always" or (self.opts.answer_messages == "questions" and text.rstrip().endswith("?"))
+            self._answer_wanted = listen
+            try:
+                result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480], start_conversation=listen)
+            finally:
+                self._answer_wanted = False
+            spoken = getattr(result, "success", True)
+            if listen and spoken:
+                self._expect_answer(msg)
+        LOG.info("Spoke message %s (%s)", msg.describe(), "finished" if spoken else "the egg reported a failure")
+
+    def _expect_answer(self, msg: SpeakerMessage) -> None:
+        """The egg reopens its mic now, so the run that follows is an answer to this message.
+
+        It is handled as a follow-up: a short wait for speech, and silence closes it quietly.
+        """
+        self._follow_up_pending = True
+        self._playback_until = time.monotonic()
+        self._answering = msg.describe()
+        self.last_match = None  # nobody has spoken yet, so there is no speaker to inherit
+        LOG.info("Listening for an answer to message %s without the wake word", msg.describe())
 
     async def _stop_proactive(self) -> None:
         for task in (self._proactive_task, self._proactive_worker):

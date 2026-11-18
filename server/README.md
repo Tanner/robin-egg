@@ -90,6 +90,7 @@ Robin also writes messages into the plain web chat on its own: a reminder coming
 - Only between 8 AM and 8 PM. Change it with `--speaking-hours`. A message outside those hours is dropped, not saved for later.
 - It never talks over the egg. A message that arrives while the egg is listening, thinking or playing a reply waits until the egg is idle. Several waiting messages are spoken in order, each after its own sound.
 - The wake word stops a message partway, as it stops a reply.
+- A message that ends in a question can be answered without the wake word. The egg reopens its mic when the message has played and waits `--follow-up-window` seconds, so "yes please" or "remind me in ten minutes" goes to Robin as an ordinary turn in the same chat. If nobody speaks, the mic closes with no sound and no error light. `--answer-messages always` listens after every message, and `off` never does. The next waiting message is held until the answer is done.
 - Nothing is replayed. A message sent while the server is not connected is missed, but it is still in the chat. The stream closes when Robin reloads, and the server reconnects after 1 s, doubling to 30 s.
 - The log shows each message's id and task label, and whether it was spoken, queued or dropped.
 - The sound is `robin_egg_server/sounds/proactive.flac` unless `--proactive-sound FILE` names another. `--no-robin-announcements` turns all of this off.
@@ -100,7 +101,7 @@ To make the egg speak something yourself:
 curl -d "Time to leave for the airport." http://localhost:8765/announce
 ```
 
-The egg plays the proactive chime first, then speaks, within the same speaking hours.
+The egg plays the proactive chime first, then speaks, within the same speaking hours. The mic stays closed after `/announce`, whatever `--answer-messages` says.
 
 ## Telling voices apart
 
@@ -144,6 +145,7 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. Enrolling and forgetting a voice still reopen it, whatever this is set to. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
+| `--answer-messages questions\|always\|off` | `questions` | When to reopen the mic after a message Robin sends on its own, so it can be answered without the wake word. It waits `--follow-up-window` seconds. Never after `/announce`. |
 | `--max-utterance` | 30 s | The longest request. Listening stops here even if you have not paused. |
 | `--echo` | off | Repeat what was heard instead of asking Robin. Tests the audio chain with no robin-assistant. |
 | `--server` | required | robin-assistant's address: a host or IP, `host:port`, or a URL such as `https://robin.example.net`. A bare host gets port 8273; a URL keeps its scheme's port. Not needed with `--echo`. |
@@ -168,6 +170,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 
 - Streamed replies. The server sends the reply URL at the start of the run and tells the egg to start playing after the first sentence, which is how Home Assistant streams. The FLAC header says "length unknown" until the end. If replies cut out, use `--no-stream`.
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
+- Answering a message Robin sent on its own. The server sends the announcement with `start_conversation`, and the firmware source says the egg then starts a run with no wake word once the announcement has played. Unchecked on the egg: that the mic does reopen, that it does not pick up the tail of the message through the speaker, that 5 s is long enough to react to a message nobody was expecting, and that silence ends with the light going back to idle. In the firmware source the wake word during a message only stops it and clears the reopening, so the mic should stay closed after a barge-in.
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
@@ -189,3 +192,4 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_server.py` | End-to-end tests against the fake egg |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |
+| `tests/test_answer_messages.py` | Answering a message Robin sent on its own without the wake word |
