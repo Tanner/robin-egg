@@ -128,7 +128,7 @@ def test_announce_does_not_talk_over_a_conversation(monkeypatch):
     class Egg:
         def send_voice_assistant_event(self, *args) -> None: ...
 
-        async def send_voice_assistant_announcement_await_response(self, url, timeout, text):
+        async def send_voice_assistant_announcement_await_response(self, url, timeout, text, **kwargs):
             played.append(text)
 
     async def scenario():
@@ -150,7 +150,7 @@ def test_announce_waits_for_the_egg_to_be_idle(monkeypatch):
     class Egg:
         def send_voice_assistant_event(self, *args) -> None: ...
 
-        async def send_voice_assistant_announcement_await_response(self, url, timeout, text):
+        async def send_voice_assistant_announcement_await_response(self, url, timeout, text, **kwargs):
             played.append(text)
 
     async def scenario():
@@ -238,7 +238,7 @@ def test_a_message_that_waited_too_long_for_the_egg_is_dropped(caplog):
     played: list[str] = []
 
     class Egg:
-        async def send_voice_assistant_announcement_await_response(self, url, timeout, text):
+        async def send_voice_assistant_announcement_await_response(self, url, timeout, text, **kwargs):
             played.append(text)
 
     async def scenario() -> None:

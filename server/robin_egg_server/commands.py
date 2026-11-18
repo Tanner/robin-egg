@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import whoami
 from .speakers import Match, People, Person, Thresholds, VoiceprintStore, scores
 
 LOG = logging.getLogger("robin.commands")
@@ -132,6 +133,8 @@ class VoiceCommands:
                 return await self._start_enrolment(match)
             if is_command(heard, FORGET_PHRASE):
                 return await self._start_forget(match)
+            if whoami.asked(heard):
+                return Step(whoami.answer(match, await self.people.current(), set(self.store.prints), self.thresholds), False)
             return None
         if flow.kind == "forget":
             return self._answer_forget(flow, heard)

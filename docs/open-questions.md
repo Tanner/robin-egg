@@ -50,7 +50,7 @@ Tanner listed this without a fixed meaning. The working definition is any way to
 
 - **Sound design.** Bird calls as chimes, with a robin's song as the signature. Do different calls mean different things, for example a reply ready, a reminder, something urgent? Keep the set small enough to learn.
 - **Speak or text.** The rule is text by default and speak when time-critical. Who decides per message, Robin or the egg server?
-- **Presence gating.** Only chime when someone is in the room. If nobody is there, text.
+- **Presence gating.** Only chime when someone is in the room. If nobody is there, text. A stand-in exists until there is a sensor: with `--presence-minutes N` the server speaks Robin's own messages only if someone spoke to the egg in the last N minutes, and drops them otherwise (`server/robin_egg_server/presence.py`). It is off by default. Still open: what N should be, whether a dropped message should light the ring or go out as a text instead, and replacing the guess with the mmWave sensor or the firmware's voice-direction sensor behind the same `Presence` interface.
 - **Quiet hours** and a do-not-disturb state.
 - **LED language.** What listening, thinking, speaking, muted and "message waiting" look like on the ring.
 - **Message waiting.** A silent light that means "ask me what's new" may beat a chime.

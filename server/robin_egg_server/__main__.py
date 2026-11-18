@@ -57,12 +57,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-stream", action="store_true", help="Play the reply only once it is complete (fallback if streaming misbehaves)")
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
+    p.add_argument("--answer-messages", choices=["questions", "always", "off"], default="questions", help="Reopen the mic after a message Robin sends on its own, so it can be answered without the wake word: only after a message that ends in a question (default), after every message, or never. Waits --follow-up-window seconds")
     p.add_argument("--max-utterance", type=float, default=30.0, help="Longest request in seconds; listening stops here even if the speaker has not paused")
+    p.add_argument("--unsure-retries", type=int, default=1, help="Times in a row to say \"Sorry, I didn't catch that\" and listen again when speech-to-text is unsure of what it heard (default 1; 0 never asks)")
+    p.add_argument("--min-logprob", type=float, default=-1.0, help="Speech-to-text is unsure when Whisper's average log-probability is below this (default -1.0)")
+    p.add_argument("--max-no-speech", type=float, default=0.8, help="Speech-to-text is unsure when Whisper's no-speech probability is above this (default 0.8)")
+    p.add_argument("--max-compression", type=float, default=2.4, help="Speech-to-text is unsure when Whisper's compression ratio is above this (default 2.4)")
     p.add_argument("--vad", choices=VAD_KINDS, default="energy", help="What finds the end of speech: energy (loudness against the room's noise floor) or model (the Silero speech model, which ignores noise that is not a voice)")
     p.add_argument("--speaker-recognition", action=argparse.BooleanOptionalAction, default=True, help="Tell household members apart by voice and let them enrol by saying 'learn my voice' (default on; --no-speaker-recognition turns it off; not used with --echo)")
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 20-8 runs past midnight; 0-24 for always")
+    p.add_argument("--quiet-when-muted", action=argparse.BooleanOptionalAction, default=True, help="While the egg's microphone is muted, Robin does not speak first: its own messages and /announce are dropped (default on; --no-quiet-when-muted turns it off)")
+    p.add_argument("--presence-minutes", type=float, metavar="N", help="Speak Robin's own messages only if someone spoke to the egg in the last N minutes, a stand-in for a presence sensor; otherwise drop them (default off; /announce is always spoken)")
     p.add_argument("--quiet-hours", default="21-7", help="Hours when Robin speaks more quietly, replies and announcements alike, e.g. 21-7; off for never")
     p.add_argument("--quiet-volume", type=int, default=60, metavar="PERCENT", help="How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100 (default 60)")
     p.add_argument("--match-voice", action=argparse.BooleanOptionalAction, default=False, help="Also speak more quietly to someone who spoke quietly (default off until it is tried on the real egg)")
@@ -78,6 +85,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             raise ValueError("cannot be off; use --no-robin-announcements to stop Robin speaking first")
     except ValueError as err:
         p.error(f"--speaking-hours {err}. Give start-end, such as 8-20, 20-8 to run past midnight, or 0-24 for always")
+    if args.presence_minutes is not None and args.presence_minutes <= 0:
+        p.error("--presence-minutes must be more than 0; leave it out to speak Robin's messages whether or not anyone is around")
     if args.tts_time_limit <= 0:
         p.error("--tts-time-limit must be more than 0 seconds")
     try:
@@ -126,6 +135,7 @@ async def wait_for_local_ip(host: str, first_delay_s: float = 2.0) -> str:
 def build(args: argparse.Namespace):
     from aioesphomeapi import VoiceAssistantEventType
 
+    from .confidence import ConfidenceLimits
     from .voices import PiperTTS, SayTTS, WhisperSTT
 
     # There is no robin-assistant behind --echo to say who lives here.
@@ -164,11 +174,16 @@ def build(args: argparse.Namespace):
         stream=not args.no_stream,
         follow_up=args.follow_up,
         follow_up_window_s=args.follow_up_window,
+        answer_messages=args.answer_messages,
         max_utterance_s=args.max_utterance,
         vad=args.vad,
         speaking_hours=args.speaking_hours,
+        quiet_when_muted=args.quiet_when_muted,
+        presence_window_s=args.presence_minutes * 60 if args.presence_minutes is not None else None,
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
+        unsure_retries=args.unsure_retries,
+        confidence=ConfidenceLimits(args.min_logprob, args.max_no_speech, args.max_compression),
         quiet_hours=args.quiet_hours,
         quiet_volume=args.quiet_volume / 100,
         match_voice=args.match_voice,
@@ -227,6 +242,8 @@ async def run(args: argparse.Namespace) -> None:
             from .speaker_stream import SpeakerStream
 
             listener = asyncio.create_task(SpeakerStream(args.server, args.agent_name, robin.proactive).run(stop))
+            if args.presence_minutes is not None:
+                LOG.info("Robin's own messages are spoken only if someone spoke to the egg in the last %g minutes (--presence-minutes)", args.presence_minutes)
         elif not args.echo:
             LOG.info("Not listening for messages Robin sends on its own (--no-robin-announcements)")
         try:

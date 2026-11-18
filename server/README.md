@@ -68,7 +68,7 @@ Each line made during a turn starts with that turn's tag, so one turn can be fol
 
 ```text
 21:08:12 INFO  robin.egg [t1] Wake word: Okay Nabu
-21:08:15 INFO  robin.egg [t1] Heard: "What's a good name for a robin?" (STT 0.35 s, speaker 0.00 s)
+21:08:15 INFO  robin.egg [t1] Heard: "What's a good name for a robin?" (STT 0.35 s, speaker 0.00 s, logprob -0.31, no-speech 0.00, compression 0.84)
 21:08:16 INFO  robin.web [t1] HTTP GET /audio/cd6dbec3eccb.flac from 127.0.0.1
 21:08:16 INFO  robin.egg [t2] Follow-up to t1: listening for 5 s
 ```
@@ -88,8 +88,11 @@ Say "Okay Nabu" (the stock wake word), then a question. macOS asks whether Pytho
 Robin also writes messages into the plain web chat on its own: a reminder coming due, a scheduled task, a held update, a routine. The server holds robin-assistant's speaker stream (`GET /api/chat/:agent/speaker`) open for its whole life and speaks each message after a sound.
 
 - Only between 8 AM and 8 PM. Change it with `--speaking-hours`. A message outside those hours is dropped, not saved for later.
+- Not while the egg's microphone is muted. Pressing the mute button also means "do not speak first": a message that arrives, or is still waiting, while the mic is muted is dropped, not saved for later, and `/announce` answers 409. Answers to a question are not affected. `--no-quiet-when-muted` turns this off.
+- With `--presence-minutes N`, only if someone spoke to the egg in the last N minutes. The egg has no presence sensor yet, so a voice turn in which speech was recognised stands in for one. Otherwise the message is dropped, not saved for later, and the log says so. This is off by default. After a restart nobody counts as present until someone speaks. A message that arrives during a turn waits for the turn to end before the check. `/announce` is not held to this, since whoever calls it wants it heard.
 - It never talks over the egg. A message that arrives while the egg is listening, thinking or playing a reply waits until the egg is idle. Several waiting messages are spoken in order, each after its own sound. A message that has waited more than 10 minutes, as when the egg was off the network, is dropped; it is still in the chat.
 - The wake word stops a message partway, as it stops a reply.
+- A message that ends in a question can be answered without the wake word. The egg reopens its mic when the message has played and waits `--follow-up-window` seconds, so "yes please" or "remind me in ten minutes" goes to Robin as an ordinary turn in the same chat. If nobody speaks, the mic closes with no sound and no error light. `--answer-messages always` listens after every message, and `off` never does. The next waiting message is held until the answer is done.
 - Nothing is replayed. A message sent while the server is not connected is missed, but it is still in the chat. The stream closes when Robin reloads, and the server reconnects after 1 s, doubling to 30 s.
 - The log shows each message's id and task label, and whether it was spoken, queued or dropped.
 - The sound is `robin_egg_server/sounds/proactive.flac` unless `--proactive-sound FILE` names another. `--no-robin-announcements` turns all of this off.
@@ -100,7 +103,7 @@ To make the egg speak something yourself:
 curl -d "Time to leave for the airport." http://localhost:8765/announce
 ```
 
-The egg plays the proactive chime first, then speaks, within the same speaking hours. Like Robin's own messages, it does not talk over the egg: it waits up to 60 s for the egg to be idle. The answer says what happened: 200 when spoken, 409 outside speaking hours or when the egg stayed busy, 502 when the egg did not play it, and 503 when the egg is not connected.
+The egg plays the proactive chime first, then speaks, within the same speaking hours and only while the mic is not muted. The mic stays closed after `/announce`, whatever `--answer-messages` says. Like Robin's own messages, it does not talk over the egg: it waits up to 60 s for the egg to be idle. The answer says what happened: 200 when spoken, 409 outside speaking hours, while muted or when the egg stayed busy, 502 when the egg did not play it, and 503 when the egg is not connected.
 
 ## Matching the room
 
@@ -130,7 +133,25 @@ To enrol, say the wake word, then "learn my voice". Robin asks who is talking. A
 
 To remove your voice, say the wake word, then "forget my voice", and answer yes. It has to follow the wake word: in a follow-up the server may only be assuming who is speaking, so it asks you to start again.
 
+To check who Robin thinks you are, say the wake word, then "who am I?" or "who is this?". The server answers this itself, without asking Robin, from the same match it sends with every question: "You're Tanner. I'm sure of it.", "I'm fairly sure you're Tanner.", or "I don't recognise your voice", with a pointer to "learn my voice" for anyone who has not enrolled. A clip under a second is too short to judge, and it says so; "do you recognise my voice?" is long enough and works too. The log line `Asked who is speaking` has the scores. These turns never change a voiceprint.
+
 Voiceprints are kept in `~/.robin-egg/voiceprints.json`. They hold no audio.
+
+## When it is unsure what it heard
+
+Whisper reports how sure it was of each transcript, and the server logs those numbers on the "Heard" line. If they fall outside the limits, the egg says "Sorry, I didn't catch that." and reopens its mic, and nothing is sent to Robin. This reopens the mic whatever `--follow-up` is set to.
+
+| Number | Unsure when | What it means |
+| --- | --- | --- |
+| `logprob` | below −1.0 | The average log-probability of the words Whisper chose. Clear speech is around −0.3. |
+| `no-speech` | above 0.8 | How likely the audio held no speech, as when noise is turned into a word or two. |
+| `compression` | above 2.4 | How repetitive the text is. Above 2.4 is usually Whisper stuck repeating itself. |
+
+Each number is checked on its own. Over a long request, `logprob` and `no-speech` are averaged by segment length and `compression` is the worst segment.
+
+It asks once. If the next try is unsure too, the words go to Robin as heard, so nobody is kept in a loop; `--unsure-retries` changes how many times it asks in a row, and `0` turns the check off. The check is skipped while enrolling or forgetting a voice, where the sentence matching already asks again on a miss.
+
+The defaults are cautious: they are Whisper's own limits for a failed transcript, so a fluent mishearing still passes. To tune them, compare the numbers on the "Heard" lines of turns that went wrong with those that went right, then set `--min-logprob`, `--max-no-speech` and `--max-compression`.
 
 ## Measuring accuracy
 
@@ -191,6 +212,7 @@ The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. Enrolling and forgetting a voice still reopen it, whatever this is set to. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
+| `--answer-messages questions\|always\|off` | `questions` | When to reopen the mic after a message Robin sends on its own, so it can be answered without the wake word. It waits `--follow-up-window` seconds. Never after `/announce`. |
 | `--max-utterance` | 30 s | The longest request. Listening stops here even if you have not paused. |
 | `--vad energy\|model` | `energy` | What finds the end of speech: loudness against the room's noise floor, or the Silero speech model. See [Finding the end of speech](#finding-the-end-of-speech). |
 | `--echo` | off | Repeat what was heard instead of asking Robin. Tests the audio chain with no robin-assistant. |
@@ -199,10 +221,16 @@ The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the
 | `--robin-announcements`, `--no-robin-announcements` | on | Speak the messages Robin sends on its own. Not used with `--echo`. |
 | `--proactive-sound FILE` | `sounds/proactive.flac` | The sound before Robin speaks first: wav, aiff or flac. |
 | `--speaking-hours` | `8-20` | When Robin may speak first, its own messages and `/announce`. `20-8` runs past midnight; `0-24` for always. |
+| `--quiet-when-muted`, `--no-quiet-when-muted` | on | While the egg's microphone is muted, Robin does not speak first: its own messages and `/announce` are dropped. |
+| `--presence-minutes N` | off | Speak Robin's own messages only if someone spoke to the egg in the last N minutes, and drop them otherwise. A stand-in until the egg has a presence sensor. `/announce` is always spoken. |
 | `--quiet-hours` | `21-7` | When Robin speaks more quietly, replies and announcements alike. The window may wrap past midnight. `off` for never. |
 | `--quiet-volume` | 60 | How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100. |
 | `--match-voice`, `--no-match-voice` | off | Also speak more quietly to someone who spoke quietly. Off until it is tried on the real egg. |
 | `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the turn failed. |
+| `--unsure-retries` | 1 | Times in a row to say "Sorry, I didn't catch that." and listen again when speech-to-text is unsure. `0` never asks. |
+| `--min-logprob` | −1.0 | Speech-to-text is unsure below this average log-probability. Closer to 0 is stricter. |
+| `--max-no-speech` | 0.8 | Speech-to-text is unsure above this no-speech probability. |
+| `--max-compression` | 2.4 | Speech-to-text is unsure above this compression ratio. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
 | `--tts piper\|say\|openai` | `piper` | Which text-to-speech engine to use. `openai` is the hosted voice described under "A hosted voice". |
 | `--piper-voice` | `voices/en_US-ryan-medium.onnx` | Another Piper voice, to audition. |
@@ -212,7 +240,7 @@ The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the
 | `--tts-time-limit` | 4 s | How long the hosted voice gets for one sentence before Piper speaks the rest of the reply. |
 | `--save-audio DIR` | off | Keep each mic capture as a WAV. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. Without it, the server waits at startup until the egg's name resolves. |
-| `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice". Not used with `--echo`. |
+| `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice" and checking with "who am I?". Not used with `--echo`. |
 | `--voiceprints` | `~/.robin-egg/voiceprints.json` | Where the enrolled voiceprints are kept. |
 | `--speaker-model` | `models/wespeaker_en_voxceleb_resnet34_LM.onnx` | Another speaker embedding model. Changing it means everyone enrols again. |
 
@@ -222,12 +250,17 @@ The fake egg follows the firmware source, but these are untested on hardware:
 
 - Streamed replies. The server sends the reply URL at the start of the run and tells the egg to start playing after the first sentence, which is how Home Assistant streams. The FLAC header says "length unknown" until the end. If replies cut out, use `--no-stream`.
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
+- Answering a message Robin sent on its own. The server sends the announcement with `start_conversation`, and the firmware source says the egg then starts a run with no wake word once the announcement has played. Unchecked on the egg: that the mic does reopen, that it does not pick up the tail of the message through the speaker, that 5 s is long enough to react to a message nobody was expecting, and that silence ends with the light going back to idle. In the firmware source the wake word during a message only stops it and clears the reopening, so the mic should stay closed after a barge-in.
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
+- Asking again. The limits are Whisper's own, not chosen from speech recorded on the egg. On the Mac, clear synthetic speech scored `logprob` −0.31, and noise that Whisper turned into "You" scored `no-speech` 0.90 and was caught, but reversed speech scored `logprob` −0.54 and passed. Check the "Heard" lines from real use before trusting the defaults.
+- "Who am I?". Spoken on its own after the wake word it may be under the one second of speech needed to judge a voice, so the usual answer could be "too short". How Whisper writes the question on the egg's mic is also unknown; the phrasings it matches are in `whoami.py`.
+- Mute means quiet. The server looks for a switch with the object id `microphone_mute` (the firmware's "Microphone Mute") and follows its state. Whether the real egg lists the switch under that object id, sends its state on connect, and reports each button press has only been seen on the fake egg. The log says "The egg's microphone was muted" when it works, and "The egg has no microphone_mute switch" when the switch is not found.
 - The speech-model detector, `--vad model`. It has heard macOS `say` voices and test tones, not the egg's mic, the room, or the egg's own reply leaking into a follow-up. Its 0.5 threshold is Silero's default. Compare it with the energy detector on real captures before making it the default.
 - The hosted voice. `--tts openai` has only been run against a fake speech endpoint in the tests, never against OpenAI itself, so the real latency per sentence, whether 4 s is the right limit, and how a change from the OpenAI voice to Piper mid-reply sounds on the egg's speaker are all unknown.
 - Matching the room. Whether 60% is the right amount for the evening has only been judged from numbers, not heard through the egg's speaker at its volume setting. For `--match-voice`, nobody has measured how much of the difference between a quiet voice and a normal one survives the XVF3800's automatic gain. Read the "the voice measured" log lines for a few quiet and normal turns before turning it on.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
+- Presence. `--presence-minutes` has only been run against the fake egg. Whether "spoke in the last N minutes" is a fair guess at someone being in the room, and what N should be, needs living with the real egg.
 
 ## Files
 
@@ -238,11 +271,15 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/vad.py` | The speech-model end-of-speech detector, and the `compare` command |
 | `robin_egg_server/room.py` | Quieter replies in quiet hours and to a quiet voice |
 | `robin_egg_server/voices.py` | Whisper, `say` and Piper |
+| `robin_egg_server/confidence.py` | How sure speech-to-text was, and the limits for asking again |
 | `robin_egg_server/hosted_tts.py` | The OpenAI voice, and the fallback to Piper when it fails or is slow |
 | `robin_egg_server/speaker_stream.py` | robin-assistant's speaker stream: Robin's own messages, with reconnects |
+| `robin_egg_server/presence.py` | Whether anyone is likely in the room: the last voice turn, until there is a sensor |
 | `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
 | `robin_egg_server/speakers.py` | Speaker embeddings, the voiceprint store, and matching a voice to a person |
 | `robin_egg_server/commands.py` | The "learn my voice" and "forget my voice" conversations |
+| `robin_egg_server/whoami.py` | The answer to "who am I?", from the turn's speaker match |
+| `robin_egg_server/mic_mute.py` | The egg's microphone mute switch, followed so that muting also stops Robin speaking first |
 | `robin_egg_server/web.py` | The HTTP server for reply audio and `/announce` |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
@@ -250,8 +287,12 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_egg_faults.py` | Drops, slow replies and a busy egg, around a turn and `/announce` |
 | `tests/test_audio.py` | End-of-speech detection |
 | `tests/test_main.py` | The command line and finding this Mac's address |
+| `tests/test_confidence.py` | Asking again when speech-to-text is unsure, against the fake egg |
 | `tests/test_vad.py` | The speech-model detector with a stand-in model, and with the real one when it is installed |
 | `tests/test_room.py` | Quiet hours and voice matching, alone and through the fake egg |
 | `tests/conftest.py` | Runs every test at noon, so quiet hours do not depend on when the tests run |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
+| `tests/test_mic_mute.py` | Muting the fake egg's microphone: dropped messages, `/announce`, the option, a missing switch, reconnects |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |
+| `tests/test_answer_messages.py` | Answering a message Robin sent on its own without the wake word |
+| `tests/test_presence.py` | `--presence-minutes`: Robin's own messages spoken or dropped by when someone last spoke |

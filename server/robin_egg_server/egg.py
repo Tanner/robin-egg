@@ -9,6 +9,10 @@ Event order for one turn, matching what Home Assistant sends when it streams TTS
 
 With continue_conversation=1 the egg reopens its mic after the reply, with no wake
 word, which is how follow-up questions work.
+
+A message Robin sends on its own is an announcement, not a run. Sent with
+start_conversation, the firmware starts a run of its own once the announcement has
+played, again with no wake word, so the message can be answered out loud.
 """
 
 from __future__ import annotations
@@ -24,9 +28,13 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Protocol
 
 from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_sound
+from . import whoami
 from .brain import Brain, QuietTurn, sentences, strip_markdown
+from .confidence import UNSURE, Confidence, ConfidenceLimits
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
+from .mic_mute import MicMute
+from .presence import Presence, SpokenTo, absence
 from .room import RoomVolume
 from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
@@ -55,13 +63,18 @@ class Options:
     stream: bool = True  # start playback at the first sentence instead of after the whole reply
     follow_up: str = "always"  # always | questions | off
     follow_up_window_s: float = 5.0
+    answer_messages: str = "questions"  # reopen the mic after a message Robin sent on its own: questions | always | off
     max_utterance_s: float = 30.0  # longest request before the mic closes mid-sentence
     vad: str = "energy"  # what finds the end of speech: energy | model
     enrol_window_s: float = 10.0  # people need a moment to repeat an enrolment sentence
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
+    quiet_when_muted: bool = True  # the egg's microphone mute also stops Robin speaking first
+    presence_window_s: float | None = None  # Robin's own messages need someone in the room this recently; None = no check
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
     proactive_max_age_s: float = 600.0  # a message that waited longer than this for the egg is stale, and dropped
+    unsure_retries: int = 1  # times in a row to ask for a repeat when speech-to-text is unsure; 0 never asks
+    confidence: ConfidenceLimits = field(default_factory=ConfidenceLimits)
     quiet_hours: tuple[int, int] | None = (21, 7)  # replies and announcements are quieter in this window
     quiet_volume: float = 0.6  # the gain in quiet hours and for a quiet voice
     match_voice: bool = False  # also speak more quietly to someone who spoke quietly
@@ -97,16 +110,20 @@ class Robin:
         speakers: SpeakerId | None = None,
         people: People | None = None,
         commands: VoiceCommands | None = None,
+        presence: Presence | None = None,
     ) -> None:
         self.stt, self.brain, self.tts, self.web = stt, brain, tts, web
         self.E = events  # aioesphomeapi.VoiceAssistantEventType
         self.opts = opts or Options()
         self.speakers, self.people, self.commands = speakers, people, commands
+        self.presence: Presence = presence or SpokenTo()
         self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
+        self._unsure_streak = 0  # how many turns in a row ended in asking for a repeat
         self._turn_count = 0  # numbers the turns in the log
         self._announce_count = 0  # numbers the /announce calls in the log
         self.client: Any = None  # an APIClient while the egg is connected
+        self.mic_mute = MicMute()
         self.turn: Turn | None = None
         self._follow_up_pending = False
         self._playback_until = 0.0  # when the egg should finish playing the last reply
@@ -116,6 +133,8 @@ class Robin:
         self._proactive_worker: asyncio.Task | None = None
         self._proactive_task: asyncio.Task | None = None  # the message being spoken now
         self._proactive_stopped_by = ""  # why the message being spoken was cut short
+        self._answer_wanted = False  # the message being spoken asked the egg to listen once it has played
+        self._answering: str | None = None  # the message the egg's next run answers, as the log names it
         self.proactive_sound = load_sound(self.opts.proactive_sound or PROACTIVE_CHIME)
         web.on_announce = self.announce
 
@@ -131,6 +150,11 @@ class Robin:
     # ---- handlers for aioesphomeapi.subscribe_voice_assistant ----
 
     async def handle_start(self, conversation_id: str, flags: int, audio_settings: Any, wake_word_phrase: str | None) -> int | None:
+        if self._answer_wanted:
+            # The egg reports the message finished and reopens its mic in one breath, and this
+            # handler runs before the speaking task has heard the first. Let it catch up, so
+            # the run it asked for is not taken for the wake word cutting the message short.
+            await asyncio.sleep(0)
         if self._proactive_task is not None and not self._proactive_task.done():
             LOG.info("The wake word interrupted a message Robin sent on its own; stopping it")
             self._proactive_stopped_by = "the wake word interrupted it"
@@ -152,8 +176,10 @@ class Robin:
         reopened = time.monotonic() <= self._playback_until + FOLLOW_UP_GRACE_S
         follow_up = self._follow_up_pending and (not wake_word_phrase or reopened)
         self._follow_up_pending = False
+        answering, self._answering = self._answering if follow_up else None, None
         if not follow_up:
             self.last_match = None  # a new conversation never inherits the last speaker
+            self._unsure_streak = 0
             self._reset_commands()  # a wake word mid-enrolment means the person wants Robin, not the next sentence
         cfg = VadConfig(max_utterance_s=self.opts.max_utterance_s)
         if follow_up:
@@ -165,7 +191,9 @@ class Robin:
         url = self.web.add(reply, tag)
         self.turn = Turn(make_vad(self.opts.vad, cfg), reply, url, wake_word_phrase, follow_up, tag=tag)
         with tagged(self.turn.tag):
-            if follow_up:
+            if answering:
+                LOG.info("Answer to message %s: listening for %.0f s", answering, cfg.no_speech_timeout_s)
+            elif follow_up:
                 LOG.info("Follow-up to %s: listening for %.0f s", previous_turn.tag if previous_turn else "the last turn", cfg.no_speech_timeout_s)
             else:
                 LOG.info("Wake word: %s", wake_word_phrase or "(started another way)")
@@ -230,22 +258,31 @@ class Robin:
                 return
             t.reply.gain = self.room.for_reply(bytes(t.audio))
             t0 = time.monotonic()
-            (heard, stt_s), (match, id_s) = await asyncio.gather(self._transcribe(t), self._identify(t))
-            LOG.info('Heard: "%s" (STT %.2f s, speaker %.2f s)', heard, stt_s, id_s)
+            (heard, confidence, stt_s), (match, id_s) = await asyncio.gather(self._transcribe(t), self._identify(t))
+            sure = f", {confidence.describe()}" if confidence is not None else ""
+            LOG.info('Heard: "%s" (STT %.2f s, speaker %.2f s%s)', heard, stt_s, id_s, sure)
             enrolling = self.commands is not None and self.commands.active
             # A cough mid-enrolment is a missed answer to ask again, not a reason to drop the enrolment.
             if not heard and not enrolling:
                 LOG.info("Nothing recognisable was said; closing quietly")
                 self._end_without_reply()
                 return
+            if heard:
+                self.presence.spoke()
             self.send(E.VOICE_ASSISTANT_STT_END, {"text": heard})
             self.send(E.VOICE_ASSISTANT_INTENT_START)
+            # Enrolment matches each sentence itself and asks again on a miss.
+            if not enrolling and await self._ask_again_if_unsure(t, confidence, t0):
+                return
             if self.commands is not None:
                 step = await self.commands.handle(heard, match)
             elif is_voice_command(heard):
                 # Robin would only guess at what this means, so the egg answers it itself.
                 LOG.info("Heard a voice command, but speaker recognition is turned off")
                 step = Step(SPEAKER_ID_OFF, False)
+            elif whoami.asked(heard):
+                LOG.info("Asked who is speaking, but speaker recognition is turned off")
+                step = Step(whoami.SPEAKER_ID_OFF, False)
             else:
                 step = None
             if step is not None:
@@ -281,10 +318,35 @@ class Robin:
         if self.commands is not None:
             self.commands.reset()
 
-    async def _transcribe(self, t: Turn) -> tuple[str, float]:
+    async def _transcribe(self, t: Turn) -> tuple[str, Confidence | None, float]:
         start = time.monotonic()
-        heard = await asyncio.to_thread(self.stt.transcribe, bytes(t.audio))
-        return heard, time.monotonic() - start
+        with_confidence = getattr(self.stt, "transcribe_with_confidence", None)
+        if with_confidence is not None:
+            heard, confidence = await asyncio.to_thread(with_confidence, bytes(t.audio))
+        else:
+            heard, confidence = await asyncio.to_thread(self.stt.transcribe, bytes(t.audio)), None
+        return heard, confidence, time.monotonic() - start
+
+    async def _ask_again_if_unsure(self, t: Turn, confidence: Confidence | None, t0: float) -> bool:
+        """Asks for a repeat and reopens the mic when speech-to-text doubts what it heard.
+
+        After `unsure_retries` repeats in a row the words go to Robin as heard, so the
+        egg cannot keep someone in a loop of apologies.
+        """
+        doubt = self.opts.confidence.doubt(confidence) if confidence is not None else None
+        if doubt is None or self.opts.unsure_retries <= 0:
+            self._unsure_streak = 0
+            return False
+        if self._unsure_streak >= self.opts.unsure_retries:
+            LOG.info("Speech-to-text is still unsure (%s) after asking %d time(s) in a row; sending it to Robin as heard", doubt, self._unsure_streak)
+            self._unsure_streak = 0
+            return False
+        self._unsure_streak += 1
+        LOG.info("Speech-to-text is unsure (%s); asking the person to say it again", doubt)
+        await self._speak(_once(UNSURE), t.reply, turn=t, t0=t0)
+        LOG.info('Robin: "%s"', UNSURE)
+        await self._finish_reply(t, UNSURE, cont=True)
+        return True
 
     async def _identify(self, t: Turn) -> tuple[Match, float]:
         """Who spoke this turn. Never raises: not knowing who asked must not stop the answer."""
@@ -394,6 +456,17 @@ class Robin:
     def _in_speaking_hours(self) -> bool:
         return in_hours(time.localtime().tm_hour, self.opts.speaking_hours)
 
+    def _mic_muted(self) -> bool:
+        return self.opts.quiet_when_muted and self.mic_mute.muted
+
+    def _nobody_here(self) -> str | None:
+        """Why Robin's own messages should stay unspoken for want of a listener, or None."""
+        return absence(self.presence, self.opts.presence_window_s)
+
+    def _in_conversation(self) -> bool:
+        t = self.turn
+        return t is not None and (t.listening or (t.task is not None and not t.task.done()))
+
     def _hours(self) -> str:
         start, end = self.opts.speaking_hours
         return f"{start}:00 to {end}:00"
@@ -416,6 +489,9 @@ class Robin:
             return 503, "the egg is not connected"
         if not self._in_speaking_hours():
             return 409, f"outside speaking hours ({self._hours()}); not spoken"
+        if self._mic_muted():
+            LOG.info('Did not announce "%s": the egg\'s microphone is muted', text)
+            return 409, "the egg's microphone is muted; not spoken"
 
         self._announce_count += 1
         with tagged(f"a{self._announce_count}"):
@@ -446,8 +522,7 @@ class Robin:
         """Why Robin should not speak first right now, or None when the egg is idle."""
         if self.client is None:
             return "the egg is not connected"
-        t = self.turn
-        if t is not None and (t.listening or (t.task is not None and not t.task.done())):
+        if self._in_conversation():
             return "the egg is in a conversation"
         now = time.monotonic()
         if now < self._playback_until:
@@ -461,12 +536,20 @@ class Robin:
     async def proactive(self, msg: SpeakerMessage) -> None:
         """A message Robin sent on its own: a chime, then the message, once the egg is idle.
 
-        Outside speaking hours it is dropped, not saved for later, and so is one that waits
-        too long for the egg. Messages that arrive together are spoken in order, one chime each.
+        Outside speaking hours, while the egg's microphone is muted, or with nobody likely
+        in the room when that is checked, it is dropped, not saved for later, and so is one that
+        waits too long for the egg. Messages that arrive together are spoken in order, one chime each.
         """
         with tagged(msg.tag):
             if not self._in_speaking_hours():
                 LOG.info("Dropped message %s: outside speaking hours (%s)", msg.describe(), self._hours())
+                return
+            if self._mic_muted():
+                LOG.info("Dropped message %s: the egg's microphone is muted", msg.describe())
+                return
+            # A turn under way may be the first sign of someone, so the check waits for it to end.
+            if not self._in_conversation() and (nobody := self._nobody_here()):
+                LOG.info("Dropped message %s: %s", msg.describe(), nobody)
                 return
             if self._proactive_task is not None and not self._proactive_task.done():
                 busy: str | None = "another message is being spoken"
@@ -503,6 +586,12 @@ class Robin:
                 if not self._in_speaking_hours():
                     LOG.info("Dropped message %s: speaking hours (%s) ended while it waited", msg.describe(), self._hours())
                     continue
+                if self._mic_muted():
+                    LOG.info("Dropped message %s: the egg's microphone was muted while it waited", msg.describe())
+                    continue
+                if nobody := self._nobody_here():
+                    LOG.info("Dropped message %s: %s once the egg was idle", msg.describe(), nobody)
+                    continue
                 self._proactive_stopped_by = ""
                 self._proactive_task = task = asyncio.create_task(self._say_proactive(msg))
                 await asyncio.wait({task})
@@ -524,8 +613,27 @@ class Robin:
                 return
             url = self.web.add(reply)
             LOG.info('Speaking message %s: "%s"', msg.describe(), text)
-            result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
-        LOG.info("Spoke message %s (%s)", msg.describe(), "finished" if getattr(result, "success", True) else "the egg reported a failure")
+            listen = self.opts.answer_messages == "always" or (self.opts.answer_messages == "questions" and text.rstrip().endswith("?"))
+            self._answer_wanted = listen
+            try:
+                result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480], start_conversation=listen)
+            finally:
+                self._answer_wanted = False
+            spoken = getattr(result, "success", True)
+            if listen and spoken:
+                self._expect_answer(msg)
+        LOG.info("Spoke message %s (%s)", msg.describe(), "finished" if spoken else "the egg reported a failure")
+
+    def _expect_answer(self, msg: SpeakerMessage) -> None:
+        """The egg reopens its mic now, so the run that follows is an answer to this message.
+
+        It is handled as a follow-up: a short wait for speech, and silence closes it quietly.
+        """
+        self._follow_up_pending = True
+        self._playback_until = time.monotonic()
+        self._answering = msg.describe()
+        self.last_match = None  # nobody has spoken yet, so there is no speaker to inherit
+        LOG.info("Listening for an answer to message %s without the wake word", msg.describe())
 
     async def _stop_proactive(self) -> None:
         for task in (self._proactive_task, self._proactive_worker):
@@ -582,6 +690,7 @@ class Robin:
                         print(f"[egg] {line}", flush=True)
 
                     client.subscribe_logs(on_log, log_level=LogLevel.LOG_LEVEL_INFO, dump_config=False)
+                await self.mic_mute.watch(client)
                 self.client = client
                 self._state.set()
                 client.subscribe_voice_assistant(
@@ -604,6 +713,7 @@ class Robin:
                 LOG.warning("Lost the egg (%s); reconnecting", str(err) or type(err).__name__)
             finally:
                 self.client = None
+                self.mic_mute.reset()
                 self._state.set()
                 self.last_match = None  # the next conversation starts fresh, whoever is in the room by then
                 # A turn left "listening" would make the egg look busy after it reconnects.

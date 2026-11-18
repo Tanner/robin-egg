@@ -3,7 +3,8 @@
 It speaks the ESPHome native API (plaintext) the way the formatBCE firmware does:
 it fires a "wake word", streams 16 kHz mic audio over the API, starts fetching the
 reply URL as soon as the server says streaming has started, and reopens the mic
-for a follow-up when the server asks for one. Used by the tests and by --demo.
+for a follow-up when the server asks for one, or after an announcement sent with
+start_conversation. Used by the tests and by --demo.
 """
 
 from __future__ import annotations
@@ -20,9 +21,11 @@ from aioesphomeapi import api_pb2 as pb
 from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
 
 from .audio import MIC_RATE, resample
+from .mic_mute import MUTE_OBJECT_ID
 
 PROTO_TO_TYPE = {v: k for k, v in MESSAGE_TYPE_TO_PROTO.items()}
 CHUNK = 1024  # bytes of mic audio per message, 32 ms
+MUTE_KEY = 0x4D555445  # the fake's entity key for the mute switch; the server must not depend on it
 
 
 def varint(n: int) -> bytes:
@@ -73,7 +76,7 @@ class Run:
 
 
 class FakeEgg:
-    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu", announce_seconds: float = 0.0, wake_words: list[str | None] | None = None) -> None:
+    def __init__(self, utterances: list[bytes], realtime: bool = False, wake_word: str = "Okay Nabu", announce_seconds: float = 0.0, wake_words: list[str | None] | None = None, mute_switch: bool = True, muted: bool = False) -> None:
         """wake_words, when given, says how each run starts, one per utterance: a wake word
         starts that run even if the server did not ask for a follow-up, and None means a follow-up."""
         self.utterances = list(utterances)
@@ -82,10 +85,14 @@ class FakeEgg:
         self.wake_words = list(wake_words) if wake_words is not None else None
         self.runs: list[Run] = []
         self.announcements: list[tuple[str, bytes]] = []
+        self.start_conversations: list[bool] = []  # whether each announcement asked for the mic to reopen after it
         self.announce_seconds = announce_seconds  # how long each announcement "plays" before it is reported finished
         self.announcing = asyncio.Event()  # set while an announcement plays
         self._announce_cut = asyncio.Event()
         self.done = asyncio.Event()
+        self.mute_switch = mute_switch  # False for firmware with no "Microphone Mute" switch
+        self.muted = muted
+        self._states_subscribed = False
         self._w: asyncio.StreamWriter | None = None
         self._mic_open = False
         self._fetch: asyncio.Task | None = None
@@ -114,6 +121,7 @@ class FakeEgg:
                 w.close()
                 return
             self._w = w
+            self._states_subscribed = False
             first = True
             while True:
                 if not first and (await r.readexactly(1)) != b"\x00":
@@ -136,6 +144,14 @@ class FakeEgg:
             self.send(pb.PingResponse())
         elif isinstance(msg, pb.DisconnectRequest):
             self.send(pb.DisconnectResponse())
+        elif isinstance(msg, pb.ListEntitiesRequest):
+            if self.mute_switch:
+                self.send(pb.ListEntitiesSwitchResponse(object_id=MUTE_OBJECT_ID, key=MUTE_KEY, name="Microphone Mute"))
+            self.send(pb.ListEntitiesDoneResponse())
+        elif isinstance(msg, pb.SubscribeStatesRequest):
+            self._states_subscribed = True
+            if self.mute_switch:
+                self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=self.muted))
         elif isinstance(msg, pb.SubscribeVoiceAssistantRequest) and msg.subscribe:
             await asyncio.sleep(0.05)
             first = self.wake_words[0] if self.wake_words else None
@@ -151,14 +167,29 @@ class FakeEgg:
     async def _announce(self, msg) -> None:
         body = await asyncio.to_thread(self._get, msg.media_id)
         self.announcements.append((msg.text, body))
+        self.start_conversations.append(msg.start_conversation)
         self._announce_cut.clear()
         self.announcing.set()
+        cut = True
         try:
             await asyncio.wait_for(self._announce_cut.wait(), self.announce_seconds)
         except asyncio.TimeoutError:
-            pass
+            cut = False
         self.announcing.clear()
         self.send(pb.VoiceAssistantAnnounceFinished(success=True))
+        if msg.start_conversation and not cut:
+            # The firmware keeps start_conversation as continue_conversation and reopens its mic
+            # once the announcement has played, reporting the last wake word it heard. Stopping
+            # the announcement clears it. The real egg takes a moment to start its mic; sending
+            # both messages together is the harder case for the server.
+            self.done.clear()
+            self._start_run(self.runs[-1].wake_word if self.runs else self.wake_word)
+
+    def set_muted(self, muted: bool) -> None:
+        """Press the mute button: the switch reports its new state, as the firmware does."""
+        self.muted = muted
+        if self.mute_switch and self._states_subscribed and self._w is not None:
+            self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=muted))
 
     def wake(self) -> None:
         """Hear the wake word now, cutting off any announcement that is playing."""
