@@ -213,6 +213,15 @@ To remove your voice, say the wake word, then "forget my voice", and answer yes.
 
 To check who Robin thinks you are, say the wake word, then "who am I?" or "who is this?". The server answers this itself, without asking Robin, from the same match it sends with every question: "You're Tanner. I'm sure of it.", "I'm fairly sure you're Tanner.", or "I don't recognise your voice", with a pointer to "learn my voice" for anyone who has not enrolled. A clip under a second is too short to judge, and it says so; "do you recognise my voice?" is long enough and works too. The log line `Asked who is speaking` has the scores. These turns never change a voiceprint.
 
+While someone in the household has no voiceprint, the server offers enrolment to a voice it keeps not recognising. After the third question from the same unrecognised voice, Robin's reply ends with "By the way, I don't know your voice yet. Say 'learn my voice' and I'll learn it."
+
+- It is only a spoken hint. Nothing is saved and no voiceprint is made from those turns. Enrolment still starts only when someone says "learn my voice".
+- To tell that the questions came from one voice, the server compares the turns to each other. It keeps those comparisons in memory only and forgets a voice 30 minutes after last hearing it.
+- Each unrecognised voice is offered once, and there is at most one offer a day. The daily limit starts again when the server restarts.
+- Turns with under a second of speech are not counted, and neither are "learn my voice", "forget my voice" or anything said during enrolment.
+- Once everyone robin-assistant lists has enrolled, an unrecognised voice is a guest: nothing is offered and nothing is remembered.
+- `--no-offer-enrolment` turns it off.
+
 Voiceprints are kept in `~/.robin-egg/voiceprints.json`. They hold no audio.
 
 ## When it is unsure what it heard
@@ -325,6 +334,7 @@ The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the
 | `--save-audio DIR` | off | Keep each mic capture as a WAV. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. Without it, the server waits at startup until the egg's name resolves. |
 | `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice" and checking with "who am I?". Not used with `--echo`. |
+| `--offer-enrolment`, `--no-offer-enrolment` | on | After three questions from the same unrecognised voice, end the reply with a hint to say "learn my voice". Only while someone in the household has no voiceprint, and at most once a day. |
 | `--voiceprints` | `~/.robin-egg/voiceprints.json` | Where the enrolled voiceprints are kept. |
 | `--speaker-model` | `models/wespeaker_en_voxceleb_resnet34_LM.onnx` | Another speaker embedding model. Changing it means everyone enrols again. |
 
@@ -348,6 +358,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - The speech-model detector, `--vad model`. It has heard macOS `say` voices and test tones, not the egg's mic, the room, or the egg's own reply leaking into a follow-up. Its 0.5 threshold is Silero's default. Compare it with the energy detector on real captures before making it the default.
 - The hosted voice. `--tts openai` has only been run against a fake speech endpoint in the tests, never against OpenAI itself, so the real latency per sentence, whether 4 s is the right limit, and how a change from the OpenAI voice to Piper mid-reply sounds on the egg's speaker are all unknown.
 - Matching the room. Whether 60% is the right amount for the evening has only been judged from numbers, not heard through the egg's speaker at its volume setting. For `--match-voice`, nobody has measured how much of the difference between a quiet voice and a normal one survives the XVF3800's automatic gain. Read the "the voice measured" log lines for a few quiet and normal turns before turning it on.
+- Offering enrolment. Whether two turns from one unrecognised person score as the same voice (0.5 or more against each other) has only been tried with made-up vectors, not real speech through the egg's mic. Too low a score means the hint never comes; too high a score for two different people means it comes early.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 - Presence. `--presence-minutes` has only been run against the fake egg. Whether "spoke in the last N minutes" is a fair guess at someone being in the room, and what N should be, needs living with the real egg.
 
@@ -373,6 +384,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/whoami.py` | The answer to "who am I?", from the turn's speaker match |
 | `robin_egg_server/mic_mute.py` | The egg's microphone mute switch, followed so that muting also stops Robin speaking first |
 | `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce` and `/quiet` |
+| `robin_egg_server/enrol_offer.py` | When to offer enrolment to a voice that keeps going unrecognised |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/sounds/urgent.flac` | The cue before an urgent message, made the same way |
 | `robin_egg_server/thinking.py` | The thinking sound: writes the loop into a reply until the first sentence is ready |
@@ -386,6 +398,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_vad.py` | The speech-model detector with a stand-in model, and with the real one when it is installed |
 | `tests/test_room.py` | Quiet hours and voice matching, alone and through the fake egg |
 | `tests/conftest.py` | Runs every test at noon, so quiet hours do not depend on when the tests run |
+| `tests/test_enrol_offer.py` | The enrolment offer, its rules alone and through the fake egg |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
 | `tests/test_quiet.py` | Quiet by voice: the phrases, the pause and its file, and the pause through the fake egg |
 | `tests/test_room_context.py` | The room facts, alone and through the fake egg, against the fake robin-assistant |

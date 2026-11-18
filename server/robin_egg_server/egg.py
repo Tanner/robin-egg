@@ -35,6 +35,7 @@ from . import whoami
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .confidence import UNSURE, Confidence, ConfidenceLimits
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
+from .enrol_offer import ENROL_OFFER, EnrolOffer
 from .logs import tagged
 from .quiet import QuietMode
 from .mic_mute import MicMute
@@ -124,6 +125,7 @@ class Robin:
         people: People | None = None,
         commands: VoiceCommands | None = None,
         presence: Presence | None = None,
+        enrol_offer: EnrolOffer | None = None,
     ) -> None:
         self.stt, self.brain, self.tts, self.web = stt, brain, tts, web
         self.E = events  # aioesphomeapi.VoiceAssistantEventType
@@ -131,6 +133,7 @@ class Robin:
         self.speakers, self.people, self.commands = speakers, people, commands
         self.presence: Presence = presence or SpokenTo()
         self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
+        self.enrol_offer = enrol_offer
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
         self.last_said = LastSaid(self.opts.repeat_window_s)  # text only, for "say that again"
         self._unsure_streak = 0  # how many turns in a row ended in asking for a repeat
@@ -329,8 +332,13 @@ class Robin:
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
             cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))
-            await self._finish_reply(t, reply_text, cont)
-            self.last_said.remember(reply_text)
+            if await self._enrol_offer_due(match):
+                await self._speak(_once(ENROL_OFFER), t.reply, turn=t)
+                LOG.info('Robin added: "%s"', ENROL_OFFER)
+                await self._finish_reply(t, f"{reply_text} {ENROL_OFFER}", cont)
+            else:
+                await self._finish_reply(t, reply_text, cont)
+            self.last_said.remember(reply_text)  # without the hint, which is offered once
             if self.speakers is not None:
                 self.speakers.learn(match)
             self.last_match = match
@@ -435,6 +443,16 @@ class Robin:
             LOG.warning("Could not identify the speaker; treating them as Unknown Speaker (%s)", err)
             match = unknown
         return match, time.monotonic() - start
+
+    async def _enrol_offer_due(self, match: Match) -> bool:
+        """Whether to end this reply with the hint to enrol. Never raises: the answer was already spoken."""
+        if self.enrol_offer is None or self.people is None:
+            return False
+        try:
+            return self.enrol_offer.due(match, await self.people.current())
+        except Exception as err:  # noqa: BLE001 - a hint is not worth an apology
+            LOG.warning("Could not work out whether to offer enrolment, so it is not offered this turn (%s)", err)
+            return False
 
     async def _finish_reply(self, t: Turn, reply_text: str, cont: bool) -> None:
         E = self.E

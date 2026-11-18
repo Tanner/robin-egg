@@ -71,6 +71,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-compression", type=float, default=2.4, help="Speech-to-text is unsure when Whisper's compression ratio is above this (default 2.4)")
     p.add_argument("--vad", choices=VAD_KINDS, default="energy", help="What finds the end of speech: energy (loudness against the room's noise floor) or model (the Silero speech model, which ignores noise that is not a voice)")
     p.add_argument("--speaker-recognition", action=argparse.BooleanOptionalAction, default=True, help="Tell household members apart by voice and let them enrol by saying 'learn my voice' (default on; --no-speaker-recognition turns it off; not used with --echo)")
+    p.add_argument("--offer-enrolment", action=argparse.BooleanOptionalAction, default=True, help="After a few questions from the same unrecognised voice, add a spoken hint that it can say 'learn my voice', while someone in the household has no voiceprint (default on; at most once a day)")
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 20-8 runs past midnight; 0-24 for always")
@@ -206,7 +207,7 @@ def build(args: argparse.Namespace):
         raise SystemExit(f"Proactive sound not found at {opts.proactive_sound}")
     if opts.urgent_sound and not opts.urgent_sound.exists():
         raise SystemExit(f"Urgent sound not found at {opts.urgent_sound}")
-    speakers = people = commands = None
+    speakers = people = commands = enrol_offer = None
     if recognise:
         from .commands import VoiceCommands
         from .speakers import People, SherpaEmbedder, SpeakerId
@@ -217,10 +218,16 @@ def build(args: argparse.Namespace):
         speakers = SpeakerId(embedder, store)
         people = People(brain.people)
         commands = VoiceCommands(people, store, speakers.thresholds)
+        if args.offer_enrolment:
+            from .enrol_offer import EnrolOffer
+
+            enrol_offer = EnrolOffer(store, speakers.thresholds)
+        else:
+            LOG.info("Not offering enrolment to voices that are not recognised (--no-offer-enrolment)")
     else:
         LOG.info("Speaker recognition is off, so every voice is sent as Unknown Speaker")
     web = AudioServer()
-    return Robin(stt, brain, tts, web, VoiceAssistantEventType, opts, speakers=speakers, people=people, commands=commands), web
+    return Robin(stt, brain, tts, web, VoiceAssistantEventType, opts, speakers=speakers, people=people, commands=commands, enrol_offer=enrol_offer), web
 
 
 def log_enrolment(people: list[Person] | None, store: VoiceprintStore) -> None:
