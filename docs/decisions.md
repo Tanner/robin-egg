@@ -91,3 +91,4 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | An urgent message still waits for the egg to be idle and never cuts off a conversation, a reply or a message being spoken. The wake word stops it | Two voices at once help nobody, and the wait is seconds |
 | The urgent cue is the proactive phrase played twice, at the same level, pitch and pace | It insists by repeating. Louder, higher or faster would be sharp, and closer to a bird for the cat |
 | There are three cues in all: listening, proactive and urgent | Small enough to learn |
+| An urgent message skips the `--presence-minutes` check, but a muted microphone silences it | Presence is a guess from the last voice turn. Mute is someone's own choice to have quiet |
