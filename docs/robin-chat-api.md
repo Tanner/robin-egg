@@ -179,3 +179,58 @@ Added 2026-11-16. robin-assistant's design is `docs/superpowers/specs/2026-11-16
 On the egg server side, `speaker_stream.py` holds it open for the server's life, apart from `RobinBrain`. It reconnects after 1 s, doubling to 30 s, honours `Retry-After`, and resets the backoff once a connection has stayed up 30 s. A stream that sends nothing for 45 s, not even a ping, counts as dropped. 404 and 409 are logged as errors, since only a config change fixes them, and retried like the rest.
 
 `Robin.proactive` in `egg.py` drops a message outside speaking hours, or queues it until the egg is idle: not listening, not thinking, past the estimated end of the last reply's playback, and not about to reopen its mic for a follow-up. Then it plays the proactive sound and the message as one announcement, with markdown stripped and sentences spoken one by one as in a reply. The wake word cancels it.
+
+## Urgent messages: `priority` on the speaker stream
+
+Added 2026-11-17. The egg server side is built and tested against the fake robin-assistant. The robin-assistant side below is proposed, not built, and was read against robin-assistant `9a5340df`.
+
+### What the egg server does
+
+A `message` event may carry `"priority": "urgent"`:
+
+```json
+{ "id": 131, "text": "Your taxi is outside.", "label": "Taxi", "priority": "urgent" }
+```
+
+`"urgent"` means time-critical. A missing `priority`, or any other value, is a normal message, so robin-assistant can leave the field out and add values later. For an urgent message the egg server:
+
+- speaks it outside speaking hours;
+- puts it ahead of the normal messages waiting in the proactive queue, keeping urgent messages in their own order;
+- plays the urgent cue (`sounds/urgent.flac`, or `--urgent-sound`) in place of the proactive chime.
+
+It still waits for the egg to be idle, as every proactive message does, and the wake word stops it. `POST /announce?priority=urgent` gives the same treatment to a message sent by hand.
+
+### robin-assistant changes
+
+Today a task's name reaches the stream like this, and `priority` would ride the same path:
+
+- A stored task becomes a `TaskJob` (`src/scheduler/task-jobs.ts:12`, `:58`).
+- The planner copies `job.label` onto the plan (`src/scheduler/planner.ts:154`, `:295`).
+- The executor passes `plan.label` to `delivery.executeDelivery` (`src/scheduler/executor.ts:372`).
+- `attemptOne` puts it in `response.metadata` (`src/scheduler/delivery.ts:37`).
+- `web.send` reads `response.metadata.label` and hands it to `speak` (`src/methods/web.ts:838-844`), which builds the `SpeakerMessage` (`web.ts:542-552`, type in `src/methods/web-types.ts:233`).
+
+The change:
+
+- **The task.** Add an optional `urgent?: boolean` to the stored task (`src/scheduler/task-store.ts`, beside `deliver`), kept through the hand-copied rebuild on update (`task-store.ts:334`, where `deliver` was once lost). Absent means not urgent.
+- **The tool.** Add an optional `urgent` boolean to ScheduleTask (`src/tools/schedule-task.ts`, beside `deliver`), and show it in ListScheduledTasks. The description should set a high bar: only when a person has to act within minutes, such as leaving for a flight, a taxi waiting or an alarm, because an urgent message is spoken aloud at any hour. An urgent task must be `deliver: "now"`; refuse `urgent` with `"later"`, since a held message is not time-critical.
+- **The path.** Carry `urgent` on `TaskJob` and the plan, and pass it to `executeDelivery` beside `label`. `attemptOne` sets `metadata.priority = "urgent"` only when it is set, so a Telegram send is called with exactly the arguments it gets today.
+- **The stream.** `speak` takes the priority from the metadata and adds `priority: "urgent"` to the `SpeakerMessage`, leaving the field out otherwise. `SpeakerMessage` gains `priority?: "urgent"`.
+- **Not in this change.** The stored row and the web page are untouched, so the chat shows an urgent message like any other. Held releases, broadcasts, subagent results and `app_opened` routines are never urgent. A person-facing fallback, such as a push notification when no speaker is connected, is separate work.
+
+### Preventing regressions
+
+- Without `urgent`, every task, delivery and speaker event is byte-for-byte what it is today. The existing suite must pass unchanged, the speaker stream's unit, route and e2e tests included.
+- New tests:
+  - A task with `urgent: true` reaches a speaker listener with `priority: "urgent"`; a task without it has no `priority` key at all.
+  - `urgent` survives a task update that does not mention it, and can be cleared.
+  - ScheduleTask refuses `urgent` with `deliver: "later"`.
+  - A Telegram delivery of an urgent task gets the metadata it gets today plus `priority`, and sends the same message.
+  - An urgent message with no words, or in a project chat, is still not sent to the stream.
+  - The e2e scenario for the speaker stream gains an urgent task.
+- On the egg server side, `tests/test_urgent_messages.py` already covers the field present, missing, unknown and not a string.
+- Document `priority` in `docs/configuration.md` beside the speaker stream, and on the admin Endpoints screen.
+
+### Complexity
+
+Small. One optional field carried along a path that already carries `label`, and one tool parameter. The care points are the task-store rebuild that copies fields by hand, keeping non-web sends unchanged, and the tool wording, since the model decides what is urgent and an over-eager mark wakes the house.
