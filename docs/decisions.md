@@ -92,3 +92,26 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | The urgent cue is the proactive phrase played twice, at the same level, pitch and pace | It insists by repeating. Louder, higher or faster would be sharp, and closer to a bird for the cat |
 | There are three cues in all: listening, proactive and urgent | Small enough to learn |
 | An urgent message skips the `--presence-minutes` check, but a muted microphone silences it | Presence is a guess from the last voice turn. Mute is someone's own choice to have quiet |
+
+## Message waiting, decided 2026-11-17
+
+| Decision | Why |
+| --- | --- |
+| A message Robin sends on its own outside speaking hours is held, not dropped. The ring breathes softly while any are held, and "what did I miss?" reads them out | A silent light that means "ask me" does not wake or startle anyone, and the message is not lost |
+| The egg answers "what did I miss?" itself, for anyone, with or without speaker recognition | The messages would have been spoken to the whole room, and Robin does not know which ones the egg held |
+| The newest 10 messages are kept, each for 24 hours | Enough for a night or a day out. Older ones are stale as speech and are still in the chat |
+| Held messages live in the server's memory only. A server restart loses them and clears the light. An egg reconnect keeps them and shows the light again | They are in the chat already, so a second store is not worth keeping in step |
+| Nothing is announced when speaking hours begin. The light is the only sign | A burst of old messages at 8 AM is the unprompted talking that gets a device unplugged |
+| The first reply from Robin once speaking hours have begun ends with one sentence saying how many messages are waiting and how to hear them, once per batch of held messages. The light stays the only unprompted sign | Someone who is already talking to Robin is not startled by one more sentence, and not everyone knows what the breathing ring means. Nothing is said to a room nobody spoke in |
+| The sentence follows only a reply from Robin, never the egg's own answers, never outside speaking hours or while quiet was asked for by voice, and never the same reply as the hint to enrol a voice | It is an aside, so it gives way to anything that asks for less talking, and one aside a reply is enough |
+| "Say that again" repeats the reply without the sentence | The same as the hint to enrol: the sentence is said once, and the repeat is for what was asked |
+| The light is the firmware's own "LED Ring" light with its "Breathe" effect at 35% brightness, in the ring's existing colour, set over the ESPHome API | No firmware change. The firmware already hides that light during a conversation and brings it back when idle |
+| The ring's own state is saved to `~/.robin-egg/ring-before-waiting.json` while the waiting light is on, and put back from it | The light's brightness is also the level of every ring animation, so it must go back even if the server restarts in between |
+
+## Mute sounds, decided 2026-11-17
+
+| Decision | Why |
+| --- | --- |
+| The egg plays its own mute and unmute sounds, made by `tools/egg-sounds/make_sounds.py`, in place of the formatBCE ones | Every sound the egg makes should be in the same soft bell voice |
+| Mute steps down three notes to a low, muffled note. Unmute takes the same path back up and ends on the listening cue's first note | Down and closed reads as off, up and open as on. Three notes avoid the two-note rise that sounded like Siri |
+| They are set by overriding the `mute_switch_on_sound_file` and `mute_switch_off_sound_file` substitutions, not by changing the packages | The formatBCE packages stay as released, so updating `respeaker_ref` stays simple |

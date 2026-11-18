@@ -92,7 +92,7 @@ def test_an_urgent_message_is_spoken_outside_speaking_hours_after_the_urgent_cue
     assert tts.said == ["The smoke alarm in the hall is going off."]
     assert starts_with(audio, robin.urgent_sound)
     assert not starts_with(audio, robin.proactive_sound)
-    assert "Dropped message 30 (Bedtime): outside speaking hours" in caplog.text
+    assert 'Held message 30 (Bedtime) for "what did I miss?": outside speaking hours' in caplog.text
     assert "Message 31 (Smoke alarm, urgent) is urgent, so it is spoken outside speaking hours" in caplog.text
 
 

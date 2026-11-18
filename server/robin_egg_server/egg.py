@@ -40,6 +40,7 @@ from .enrol_offer import ENROL_OFFER, EnrolOffer
 from .logs import tagged
 from .quiet import QuietMode
 from .mic_mute import MicMute
+from .morning_mention import MorningMention
 from .repeat import DEFAULT_WINDOW_S, NOTHING_TO_REPEAT, LastSaid
 from .presence import Presence, SpokenTo, absence
 from .room import RoomVolume
@@ -49,6 +50,8 @@ from .thinking import THINKING_CUE, ThinkingCue
 from .vad import ModelVad, make_vad
 from .turn_log import ANSWERED, ASKED_AGAIN, FAILED, LOCAL_COMMAND, NOBODY_SPOKE, NOTHING_RECOGNISED, QUIET, TurnLog, TurnRecord
 from .voices import SpeechToText, TextToSpeech
+from .waiting import MessageWaiting, is_missed_question
+from .volume import MIN_VOLUME, EggVolume
 from .web import AudioServer
 
 LOG = logging.getLogger("robin.egg")
@@ -57,6 +60,7 @@ ZERO_PSK = base64.b64encode(bytes(32)).decode()  # formatBCE: encryption on, no 
 PROACTIVE_CHIME = Path(__file__).parent / "sounds" / "proactive.flac"  # made by tools/egg-sounds
 URGENT_CHIME = Path(__file__).parent / "sounds" / "urgent.flac"  # the cue before an urgent message
 READY_CHIME = Path(__file__).parent / "sounds" / "ready.flac"  # played each time the server connects to the egg
+CLOSING_CUE = Path(__file__).parent / "sounds" / "closing.flac"  # played when the egg stops listening without a reply
 NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 # After a reply that asked for a follow-up, how long past its end to wait for the egg to reopen its mic.
@@ -95,9 +99,14 @@ class Options:
     match_voice: bool = False  # also speak more quietly to someone who spoke quietly
     thinking_cue: bool = True  # a soft sound while Robin is slow to start answering; needs stream
     thinking_delay_s: float = 2.0  # how long after the end of speech before it starts
+    closing_cue: bool = True  # a soft sound when the egg stops listening without a reply; needs stream
     recognition_light: bool = True  # with a ring, show a recognised speaker's colour while Robin thinks and replies
     turn_log: Path | None = None  # one line per turn and per message Robin sends, for stats; off if None
     turn_log_names: bool = False  # also record who spoke each turn
+    message_waiting: bool = True  # hold messages from outside speaking hours and show the waiting light
+    ring_file: Path | None = None  # where the ring's own state is kept while the waiting light is on
+    min_volume: float = MIN_VOLUME  # the quietest the egg can be set by voice, 0.0 to 1.0
+    morning_mention: bool = True  # once speaking hours begin, end one reply by saying that messages are waiting
 
 
 @dataclass
@@ -145,6 +154,7 @@ class Robin:
         self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
         self.ring, self.colours = ring, colours or PersonColours()
         self.enrol_offer = enrol_offer
+        self.volume = EggVolume(min_volume=self.opts.min_volume)  # the egg's speaker volume, while it is connected
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
         self.last_said = LastSaid(self.opts.repeat_window_s)  # text only, for "say that again"
         self._unsure_streak = 0  # how many turns in a row ended in asking for a repeat
@@ -175,7 +185,10 @@ class Robin:
         self.ready_sound = load_sound(self.opts.ready_sound) if self.opts.ready_sound else None
         self._ready_task: asyncio.Task | None = None  # the ready sound being sent after a connect
         self.thinking_sound = load_sound(THINKING_CUE)
+        self.closing_sound = load_sound(CLOSING_CUE)
         self.turn_log = TurnLog(self.opts.turn_log, names=self.opts.turn_log_names)
+        self.waiting = MessageWaiting(self.opts.ring_file) if self.opts.message_waiting else None
+        self.morning_mention = MorningMention() if self.waiting is not None and self.opts.morning_mention else None
         web.on_announce = self.announce
         web.on_quiet = self.quiet.http
 
@@ -287,6 +300,35 @@ class Robin:
         self._save_capture(t)
         t.task = asyncio.create_task(self._respond(t))
 
+    async def _close_without_reply(self, t: Turn) -> None:
+        """Ends a turn that has no reply, with the closing sound so the person knows the egg stopped listening.
+
+        The sound goes out as a reply with no words and no follow-up, so the egg plays it and
+        goes idle with its mic closed. Without streaming there is no reply to carry it.
+        """
+        if not (self.opts.closing_cue and self.opts.stream):
+            self._end_without_reply()
+            return
+        E = self.E
+        self._follow_up_pending = False
+        self._reset_commands()  # the mic will not reopen, so a voice conversation cannot go on
+        if not t.vad.speech_started:
+            t.reply.gain = self.room.for_announcement("Closing sound volume")  # there is no voice to match
+        before = t.reply.seconds
+        await t.reply.push(self.closing_sound, REPLY_RATE, gap_s=0)
+        if t.playing:  # the thinking sound already started the stream; the closing sound follows its fade
+            t.play_end = max(t.play_end, time.monotonic()) + t.reply.seconds - before
+        else:
+            t.playing = True
+            t.play_end = time.monotonic() + t.reply.seconds
+            self.send(E.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
+        LOG.info("Sending the closing sound to the egg")
+        self.send(E.VOICE_ASSISTANT_INTENT_END, {"continue_conversation": "0"})
+        await t.reply.close()
+        self.send(E.VOICE_ASSISTANT_TTS_END, {"url": t.url})
+        self._playback_until = max(self._playback_until, t.play_end)
+        self.send(E.VOICE_ASSISTANT_RUN_END)
+
     def _end_without_reply(self) -> None:
         # A bare RUN_END is ignored if it lands before the egg has finished stopping its mic,
         # which leaves it stuck "thinking". An error ends the run from any state, and the
@@ -301,9 +343,9 @@ class Robin:
         ended = "cancelled"  # for /status
         try:
             if not t.vad.speech_started:
-                LOG.info("Nobody spoke; closing quietly")
+                LOG.info("Nobody spoke; closing without a reply")
                 t.log.outcome = NOBODY_SPOKE
-                self._end_without_reply()
+                await self._close_without_reply(t)
                 ended = "no_speech"
                 return
             t.reply.gain = self.room.for_reply(bytes(t.audio))
@@ -316,9 +358,9 @@ class Robin:
             enrolling = self.commands is not None and self.commands.active
             # A cough mid-enrolment is a missed answer to ask again, not a reason to drop the enrolment.
             if not heard and not enrolling:
-                LOG.info("Nothing recognisable was said; closing quietly")
+                LOG.info("Nothing recognisable was said; closing without a reply")
                 t.log.outcome = NOTHING_RECOGNISED
-                self._end_without_reply()
+                await self._close_without_reply(t)
                 ended = "nothing_recognised"
                 return
             if heard and self.room_context is not None:
@@ -331,6 +373,12 @@ class Robin:
             if not enrolling and await self._ask_again_if_unsure(t, confidence, t0):
                 ended = "asked_again"
                 t.log.done(ASKED_AGAIN, t0)
+                return
+            if self.waiting is not None and not enrolling and is_missed_question(heard):
+                await self._read_waiting(t, t0)
+                t.log.done(LOCAL_COMMAND, t0)
+                self.last_match = match
+                ended = "voice_command"
                 return
             # Mid-enrolment every turn is an answer to the enrolment, whatever it sounds like.
             quiet_step = None if enrolling else self.quiet.handle(heard)
@@ -352,6 +400,9 @@ class Robin:
                 step = Step(whoami.SPEAKER_ID_OFF, False)
             else:
                 step = None
+            if step is None and (said := await self.volume.handle(heard)) is not None:
+                # Spoken once the egg has the new volume, so the reply itself shows how loud it is now.
+                step = Step(said, self.opts.follow_up == "always")
             if step is not None:
                 await self._speak(_once(step.say), t.reply, turn=t, t0=t0)
                 LOG.info('Robin: "%s"', step.say)
@@ -366,13 +417,15 @@ class Robin:
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
             cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))
-            if await self._enrol_offer_due(match):
-                await self._speak(_once(ENROL_OFFER), t.reply, turn=t)
-                LOG.info('Robin added: "%s"', ENROL_OFFER)
-                await self._finish_reply(t, f"{reply_text} {ENROL_OFFER}", cont)
+            # One hint a reply. The enrolment offer goes first, and the mention keeps for the next reply.
+            hint = ENROL_OFFER if await self._enrol_offer_due(match) else self._morning_mention_due()
+            if hint is not None:
+                await self._speak(_once(hint), t.reply, turn=t)
+                LOG.info('Robin added: "%s"', hint)
+                await self._finish_reply(t, f"{reply_text} {hint}", cont)
             else:
                 await self._finish_reply(t, reply_text, cont)
-            self.last_said.remember(reply_text)  # without the hint, which is offered once
+            self.last_said.remember(reply_text)  # without the hint, which is said once
             if self.speakers is not None:
                 self.speakers.learn(match)
             self.last_match = match
@@ -382,10 +435,10 @@ class Robin:
         except asyncio.CancelledError:
             raise
         except QuietTurn:
-            LOG.info("Robin chose to say nothing; closing quietly")
+            LOG.info("Robin chose to say nothing; closing without a reply")
             await self._stop_thinking(t)
             t.log.outcome = QUIET
-            self._end_without_reply()
+            await self._close_without_reply(t)
             ended = "quiet"
         except Exception as err:  # noqa: BLE001 - the person in the room must hear that it failed
             LOG.exception("The turn failed")
@@ -443,6 +496,25 @@ class Robin:
         if t.cue is not None and t.cue.playing:
             # A turn that ends with no reply still has the end of the sound to play.
             self._playback_until = max(self._playback_until, t.play_end)
+
+    async def _read_waiting(self, t: Turn, t0: float) -> None:
+        """Answers "what did I miss?" with the messages held from outside speaking hours."""
+        say, held = self.waiting.read_out()
+        LOG.info("Asked what was missed: %d message%s waiting", len(held), "" if len(held) == 1 else "s")
+        await self._speak(_once(say), t.reply, turn=t, t0=t0)
+        LOG.info('Robin: "%s"', say)
+        # Someone may want to answer a message they just heard, so the mic reopens as it does after a reply.
+        await self._finish_reply(t, say, cont=bool(held) and self.opts.follow_up == "always")
+        self.last_said.remember(say)
+        self.waiting.mark_read(held)
+
+    def _held(self, msg: SpeakerMessage, refusal: str) -> bool:
+        """Keeps a message that speaking hours stopped, for "what did I miss?". False when it is to be dropped.
+
+        Only speaking hours hold a message. Quiet asked for by voice, a muted microphone and
+        an empty room still drop it.
+        """
+        return self.waiting is not None and refusal != self.quiet.reason() and self.waiting.hold(msg)
 
     def _reset_commands(self) -> None:
         if self.commands is not None:
@@ -504,6 +576,22 @@ class Robin:
         except Exception as err:  # noqa: BLE001 - a hint is not worth an apology
             LOG.warning("Could not work out whether to offer enrolment, so it is not offered this turn (%s)", err)
             return False
+
+    def _morning_mention_due(self) -> str | None:
+        """The sentence saying that messages are waiting, when this reply should end with it.
+
+        Only in speaking hours, and not while quiet was asked for by voice: then Robin says
+        no more than it was asked. Never raises: the answer was already spoken.
+        """
+        if self.morning_mention is None or self.waiting is None:
+            return None
+        try:
+            if not self._in_speaking_hours() or self.quiet.reason() is not None:
+                return None
+            return self.morning_mention.due(self.waiting.waiting())
+        except Exception as err:  # noqa: BLE001 - a hint is not worth an apology
+            LOG.warning("Could not work out whether to mention the waiting messages, so they are not mentioned this turn (%s)", err)
+            return None
 
     async def _finish_reply(self, t: Turn, reply_text: str, cont: bool) -> None:
         E = self.E
@@ -703,9 +791,10 @@ class Robin:
     async def proactive(self, msg: SpeakerMessage) -> None:
         """A message Robin sent on its own: a chime, then the message, once the egg is idle.
 
-        Outside speaking hours, while someone has asked for quiet or the egg's microphone is
-        muted, or with nobody likely in the room when that is checked, it is dropped, not
-        saved for later, and so is one that waits too long for the egg. Messages that arrive
+        Outside speaking hours it is held for "what did I miss?" and the waiting light, or
+        dropped when message waiting is off. While someone has asked for quiet or the egg's
+        microphone is muted, or with nobody likely in the room when that is checked, it is
+        dropped, not saved for later, and so is one that waits too long for the egg. Messages that arrive
         together are spoken in order, one chime each. An urgent message is spoken at any
         hour, whoever is in the room, ahead of the messages already waiting, after the urgent
         cue. Quiet asked for by voice and a muted microphone still silence it: those are
@@ -713,6 +802,10 @@ class Robin:
         """
         with tagged(msg.tag):
             refusal = self._why_not_speak_first(msg.urgent)
+            if refusal and self._held(msg, refusal):
+                LOG.info('Held message %s for "what did I miss?": %s', msg.describe(), refusal)
+                self._message_outcome(msg, "held, outside speaking hours")
+                return
             if refusal:
                 LOG.info("Dropped message %s: %s", msg.describe(), refusal)
                 asked_for_quiet = refusal == self.quiet.reason()
@@ -776,6 +869,10 @@ class Robin:
                     self._message_outcome(msg, "dropped, it waited too long for the egg")
                     continue
                 refusal = self._why_not_speak_first(msg.urgent)
+                if refusal and self._held(msg, refusal):
+                    LOG.info('Held message %s for "what did I miss?" after it waited for the egg to be idle: %s', msg.describe(), refusal)
+                    self._message_outcome(msg, "held, speaking hours ended while it waited")
+                    continue
                 if refusal:
                     LOG.info("Dropped message %s after it waited for the egg to be idle: %s", msg.describe(), refusal)
                     asked_for_quiet = refusal == self.quiet.reason()
@@ -908,6 +1005,9 @@ class Robin:
                 self.egg_since = time.time()
                 self._state.set()
                 self._egg_connected(True)
+                if self.waiting is not None:
+                    await self.waiting.attach(client)
+                await self.volume.attach(client)
                 client.subscribe_voice_assistant(
                     handle_start=self.handle_start,
                     handle_stop=self.handle_stop,
@@ -933,6 +1033,9 @@ class Robin:
                     self.egg_since = time.time()
                 self.client = None
                 self.mic_mute.reset()
+                if self.waiting is not None:
+                    self.waiting.detach()
+                self.volume.detach()
                 self._state.set()
                 self._egg_connected(False)
                 self.last_match = None  # the next conversation starts fresh, whoever is in the room by then

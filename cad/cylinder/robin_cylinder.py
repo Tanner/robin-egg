@@ -43,7 +43,7 @@ LEDGE_W = 5.0
 CHASSIS_T = 3.0
 CHASSIS_SCREW_R, CHASSIS_SCREW_ANGLES = 52.5, (45, 165, 285)
 CHASSIS_PILOT_D, CHASSIS_CLEAR_D = 2.1, 2.8
-WIRE_HOLE = (-38.0, -14.0, 4.0)
+WIRE_HOLE = (-38.0, -14.0, 8.0)   # the JST-PH plug (6.0 x 4.5 mm) has to pass through
 
 # board (Seeed XVF3800 + XIAO)
 Z_PCB = 75.0            # PCB underside; 10 mm bay above the chassis
