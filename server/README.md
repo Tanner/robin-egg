@@ -18,7 +18,7 @@ This is the MVP, to prove egg to Mac mini end to end. It does not yet know who i
 | --- | --- | --- |
 | Speech-to-text | faster-whisper, `base.en`, on the CPU | Local, pip install, fast enough on Apple Silicon. The model downloads on first run. |
 | Reply | Robin, through robin-assistant's web chat API with `device=speaker` and `wait=1` | Robin keeps the conversation, memory and tools. `--echo` repeats what was heard, to test the audio chain with no robin-assistant. |
-| Text-to-speech | Piper with the `en_US-ryan-medium` voice, Robin's voice. macOS `say` with `--tts say` | Both local. Ryan was picked on the bench on 2026-11-16. |
+| Text-to-speech | Piper with the `en_US-ryan-medium` voice, Robin's voice. macOS `say` with `--tts say`. OpenAI's hosted voice with `--tts openai` | Piper and `say` are local. Ryan was picked on the bench on 2026-11-16. The hosted voice sends reply text off the Mac mini and falls back to Piper. |
 
 robin-assistant keeps the conversation. The egg server keeps no history of its own.
 
@@ -151,6 +151,25 @@ To choose between them from real clips, record captures with `--save-audio`, the
 
 For each WAV in the folder and its subfolders it prints where each detector would have ended the turn, why, and how much speech it counted, then how often the model ended earlier or later than the energy detector. A capture stops where the server stopped listening, so a detector that would have waited longer shows as "still listening at the end". Captures recorded with `--vad model` therefore show whether the energy detector would have cut in sooner, and the other way round. `--no-speech-timeout`, `--max-utterance` and `--threshold` (the model's speech probability, default 0.5) change what is compared.
 
+## A hosted voice
+
+Text-to-speech is a choice of engine behind one interface in `voices.py`. Piper is the default and stays Robin's voice. `--tts openai` speaks with OpenAI's speech API instead, using the model and voice robin-assistant uses for its voice replies (`gpt-4o-mini-tts`, `ash`).
+
+```sh
+export OPENAI_API_KEY=...   # in the shell or the service's environment, never on the command line or in the repo
+.venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin --tts openai
+```
+
+With a hosted voice the text of Robin's replies leaves the Mac mini: each sentence is sent to OpenAI to be spoken. The local setup avoids that. What is said to the egg still stays local, since speech-to-text does not change.
+
+Piper is always loaded as the fallback. If a sentence fails or takes longer than `--tts-time-limit`, Piper speaks that sentence and the rest of the reply, so the voice changes at most once in a reply, and the log says why:
+
+```
+The OpenAI voice took longer than 4 s for one sentence, so Piper speaks the rest of this reply
+```
+
+The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the server still starts, says so in the log, and Piper speaks every reply.
+
 ## Useful options
 
 | Option | Default | What it does |
@@ -168,9 +187,12 @@ For each WAV in the folder and its subfolders it prints where each detector woul
 | `--speaking-hours` | `8-20` | When Robin may speak first, its own messages and `/announce`. `0-24` for always. |
 | `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the turn failed. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
-| `--tts piper\|say` | `piper` | Which text-to-speech engine to use. |
+| `--tts piper\|say\|openai` | `piper` | Which text-to-speech engine to use. `openai` is the hosted voice described under "A hosted voice". |
 | `--piper-voice` | `voices/en_US-ryan-medium.onnx` | Another Piper voice, to audition. |
 | `--say-voice` | system voice | Any name from `say -v '?'`, with `--tts say`. |
+| `--openai-model` | `gpt-4o-mini-tts` | The OpenAI speech model, with `--tts openai`. |
+| `--openai-voice` | `ash` | The OpenAI voice name, with `--tts openai`. |
+| `--tts-time-limit` | 4 s | How long the hosted voice gets for one sentence before Piper speaks the rest of the reply. |
 | `--save-audio DIR` | off | Keep each mic capture as a WAV. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. |
 | `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice". Not used with `--echo`. |
@@ -186,6 +208,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
 - The speech-model detector, `--vad model`. It has heard macOS `say` voices and test tones, not the egg's mic, the room, or the egg's own reply leaking into a follow-up. Its 0.5 threshold is Silero's default. Compare it with the energy detector on real captures before making it the default.
+- The hosted voice. `--tts openai` has only been run against a fake speech endpoint in the tests, never against OpenAI itself, so the real latency per sentence, whether 4 s is the right limit, and how a change from the OpenAI voice to Piper mid-reply sounds on the egg's speaker are all unknown.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 
 ## Files
@@ -196,6 +219,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/audio.py` | The energy end-of-speech detector and the streamed FLAC reply |
 | `robin_egg_server/vad.py` | The speech-model end-of-speech detector, and the `compare` command |
 | `robin_egg_server/voices.py` | Whisper, `say` and Piper |
+| `robin_egg_server/hosted_tts.py` | The OpenAI voice, and the fallback to Piper when it fails or is slow |
 | `robin_egg_server/speaker_stream.py` | robin-assistant's speaker stream: Robin's own messages, with reconnects |
 | `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
 | `robin_egg_server/speakers.py` | Speaker embeddings, the voiceprint store, and matching a voice to a person |
