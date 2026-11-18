@@ -25,6 +25,7 @@ LOG = logging.getLogger("robin")
 # Robin's voice, chosen on the bench on 2026-11-16.
 DEFAULT_PIPER_VOICE = Path(__file__).resolve().parent.parent / "voices" / "en_US-ryan-medium.onnx"
 DEFAULT_VOICEPRINTS = Path("~/.robin-egg/voiceprints.json").expanduser()
+DEFAULT_QUIET_STATE = Path("~/.robin-egg/quiet.json").expanduser()
 # The same line as in server/README.md, run from server/.
 SPEAKER_MODEL_DOWNLOAD = (
     "mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx "
@@ -46,6 +47,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--default-speaker-name", help=argparse.SUPPRESS)
     p.add_argument("--robin-announcements", action=argparse.BooleanOptionalAction, default=True, help="Speak the messages Robin sends on its own, such as reminders and scheduled tasks, after a chime and within --speaking-hours (default on; not used with --echo)")
     p.add_argument("--proactive-sound", metavar="FILE", help="Sound to play before each message Robin sends on its own (wav, aiff or flac). Default: the egg's own proactive chime")
+    p.add_argument("--room-context", action=argparse.BooleanOptionalAction, default=True, help="Tell Robin facts about the room: whether the egg is connected, who last spoke to it and when, and what became of the last message Robin sent on its own. Never what anyone said (default on; not used with --echo)")
     p.add_argument("--urgent-sound", metavar="FILE", help="Sound to play before an urgent message instead (wav, aiff or flac). Default: the egg's own urgent cue")
     p.add_argument("--server-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
@@ -70,6 +72,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 20-8 runs past midnight; 0-24 for always")
+    p.add_argument("--quiet-state", default=str(DEFAULT_QUIET_STATE), help="Where a pause asked for by voice ('quiet for an hour') is kept, so a restart does not end it early (default ~/.robin-egg/quiet.json)")
     p.add_argument("--quiet-when-muted", action=argparse.BooleanOptionalAction, default=True, help="While the egg's microphone is muted, Robin does not speak first: its own messages and /announce are dropped (default on; --no-quiet-when-muted turns it off)")
     p.add_argument("--presence-minutes", type=float, metavar="N", help="Speak Robin's own messages only if someone spoke to the egg in the last N minutes, a stand-in for a presence sensor; otherwise drop them (default off; /announce is always spoken)")
     p.add_argument("--quiet-hours", default="21-7", help="Hours when Robin speaks more quietly, replies and announcements alike, e.g. 21-7; off for never")
@@ -185,6 +188,7 @@ def build(args: argparse.Namespace):
         presence_window_s=args.presence_minutes * 60 if args.presence_minutes is not None else None,
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
+        quiet_state=Path(args.quiet_state).expanduser(),
         urgent_sound=Path(args.urgent_sound).expanduser() if args.urgent_sound else None,
         unsure_retries=args.unsure_retries,
         confidence=ConfidenceLimits(args.min_logprob, args.max_no_speech, args.max_compression),
@@ -242,6 +246,14 @@ async def run(args: argparse.Namespace) -> None:
         ip = args.advertise_ip or await wait_for_local_ip(args.host)
         await web.start("0.0.0.0", args.http_port, ip)
         LOG.info("Proactive speech: curl -d 'Hello from Robin' %s/announce", web.base_url)
+        LOG.info("Quiet mode: curl %s/quiet shows it, and curl -X DELETE %s/quiet ends it", web.base_url, web.base_url)
+        if not args.echo and args.room_context:
+            from .room_context import ContextClient, RoomContext
+
+            robin.room_context = RoomContext(ContextClient(args.server, args.agent_name))
+            LOG.info("Telling Robin facts about the room at %s", robin.room_context.client.endpoint)
+        elif not args.echo:
+            LOG.info("Not telling Robin facts about the room (--no-room-context)")
         stop = asyncio.Event()
         listener = None
         if not args.echo and args.robin_announcements:
@@ -261,6 +273,8 @@ async def run(args: argparse.Namespace) -> None:
                 with contextlib.suppress(asyncio.CancelledError):
                     await listener
             await web.stop()
+            if robin.room_context is not None:
+                await robin.room_context.close()
     finally:
         if hasattr(robin.brain, "close"):
             await robin.brain.close()

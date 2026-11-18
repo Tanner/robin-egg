@@ -60,6 +60,8 @@ class FakeRobinAssistant:
         self.speaker_connects: list[float] = []  # when each speaker-stream request arrived
         self.users_reply: tuple[int, dict] = (200, {"users": []})
         self.users_hang = False  # accept GET /api/users and never answer it
+        self.context_posts: list[dict] = []  # each POST /api/context/:agent body: key, value and ttl
+        self.context_reply: tuple[int, dict] = (200, {"ok": True})
         self._release = asyncio.Event()
         self._server: asyncio.base_events.Server | None = None
         self.url = ""
@@ -94,6 +96,13 @@ class FakeRobinAssistant:
                 status, payload = self.users_reply if request_line.startswith("GET /api/users") else self.agent_lookup
                 body = json.dumps(payload).encode()
                 writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n{self.headers}Connection: close\r\n\r\n".encode() + body)
+                await writer.drain()
+                return
+            if request_line.startswith("POST /api/context/"):
+                self.context_posts.append(json.loads(body))
+                status, payload = self.context_reply
+                body = json.dumps(payload).encode()
+                writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode() + body)
                 await writer.drain()
                 return
             if self.status != 200:
