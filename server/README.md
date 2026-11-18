@@ -313,6 +313,26 @@ Only the hue is used; the ring's brightness stays as set on the egg. Anyone the 
 
 No firmware change is needed. The firmware's "LED Ring" light holds the accent colour of every voice animation, and a colour-only command to it repaints the phase that is showing without lighting the idle ring. The server sets the person's colour once the speaker is known and sets the old colour back when the reply should have finished playing, at the next wake word or follow-up, when the egg cancels the turn, and when the server stops. While a colour is borrowed, the old one is kept in `~/.robin-egg/led-ring-restore.json`, so if the connection drops mid-reply the next connection puts it back.
 
+## Volume by voice
+
+Say the wake word, then one of these. The server changes the egg's speaker volume itself, without asking Robin, and it works whether or not speaker recognition is on.
+
+| Say | What happens |
+| --- | --- |
+| "louder", "volume up", "turn it up" | One level up |
+| "quieter", "volume down", "turn it down" | One level down |
+| "set the volume to five", "volume five" | That level, from one to ten |
+
+Robin answers "Volume five." at the new volume, so the answer itself shows how loud the egg is now. At either end it says "That's as loud as I go." or "That's as quiet as I go." and changes nothing.
+
+Level ten is full volume. Level one is the quietest the egg can be set by voice, 30% of full unless `--min-volume` says otherwise, so nobody can talk the egg into silence. A volume set some other way, below that, is left alone: "quieter" will not raise it. A volume command also unmutes the egg.
+
+The egg keeps its volume across restarts and power cuts. Reflashing it over USB erases the saved volume, and it comes back at the firmware's 50%, which is level four.
+
+This is the egg's own volume. Quiet hours (`--quiet-hours`) make the reply audio quieter on top of it, so in the evening the same level sounds softer.
+
+The server finds the speaker by the firmware's entity name, "Media Player" (object id `media_player`). If the egg has no such entity, the log says so at connect and Robin answers "Sorry, I can't change the volume right now."
+
 ## Measuring accuracy
 
 To pick the accept threshold from real numbers, record clips with `--save-audio` and move them into folders, one per person, plus `unknown` for guests, the TV and anyone not enrolled:
@@ -440,6 +460,7 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 | `--offline-alert MINUTES` | 10 | Have Robin text the household once the egg has been unreachable this long, and again when it is back. `0` turns it off. Not used with `--echo`. |
 | `--save-audio DIR` | off | Keep each mic capture as a WAV, for 24 hours. |
 | `--save-audio-hours HOURS` | 24 | How long `--save-audio` keeps a capture before the server deletes it. `0` keeps captures until you delete them. |
+| `--min-volume` | 0.3 | The quietest the egg can be set by voice, from 0 to 1. "Set the volume to one" sets this. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. Without it, the server waits at startup until the egg's name resolves. |
 | `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice" and checking with "who am I?". Not used with `--echo`. |
 | `--offer-enrolment`, `--no-offer-enrolment` | on | After three questions from the same unrecognised voice, end the reply with a hint to say "learn my voice". Only while someone in the household has no voiceprint, and at most once a day. |
@@ -479,6 +500,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - The ring during a conversation while a message waits. From the firmware source, the voice animations take over and the breathing comes back when the egg is idle, at the dimmer level. Unseen.
 - Putting the ring back. The firmware ignores a brightness sent to a light that is off, so a ring that was off is turned on at its old level and then off, in two commands sent together. That may show as a brief flash. The level given back is the light's own brightness, which may differ from the level the animations used before the light was first turned on (the firmware starts at 80%).
 - "What did I miss?" has only been matched against canned transcripts, not real speech-to-text of the egg's mic.
+- Volume by voice. The fake egg's media player follows the firmware source, not the board. Untried: that the entity is listed as `media_player`, that a volume set in the middle of a run takes effect before the reply plays, that the egg reports the new volume back within a second, and that 30% is audible in the enclosure. On the bench the bare driver was quiet at 50%, so the floor may need raising with `--min-volume`. The firmware also lights the LED ring for 2 seconds on a volume change, which may cut into the "replying" light.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 - Presence. `--presence-minutes` has only been run against the fake egg. Whether "spoke in the last N minutes" is a fair guess at someone being in the room, and what N should be, needs living with the real egg.
 
@@ -510,6 +532,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/turn_log.py` | The turn log: one line per turn and per message Robin sends, with no audio or words |
 | `robin_egg_server/stats.py` | The `stats` command that summarises the turn log |
 | `robin_egg_server/waiting.py` | Message waiting: the held messages, the ring's waiting light, and "what did I miss?" |
+| `robin_egg_server/volume.py` | The egg's speaker volume: finding the media player, following and setting its volume, and the volume commands |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/sounds/urgent.flac` | The cue before an urgent message, made the same way |
 | `robin_egg_server/thinking.py` | The thinking sound: writes the loop into a reply until the first sentence is ready |
@@ -524,6 +547,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_room.py` | Quiet hours and voice matching, alone and through the fake egg |
 | `tests/conftest.py` | Runs every test at noon, so quiet hours do not depend on when the tests run |
 | `tests/test_enrol_offer.py` | The enrolment offer, its rules alone and through the fake egg |
+| `tests/test_volume.py` | Volume by voice: the phrases, the levels, and whole turns against the fake egg's media player |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
 | `tests/test_quiet.py` | Quiet by voice: the phrases, the pause and its file, and the pause through the fake egg |
 | `tests/test_room_context.py` | The room facts, alone and through the fake egg, against the fake robin-assistant |

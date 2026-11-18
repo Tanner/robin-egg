@@ -21,6 +21,7 @@ from .room import FLOOR_GAIN, parse_hours
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .vad import VAD_KINDS
 from .turn_log import DEFAULT_TURN_LOG
+from .volume import MIN_VOLUME
 from .web import AudioServer
 
 LOG = logging.getLogger("robin")
@@ -94,6 +95,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-turn-log", action="store_true", help="Do not record turns")
     p.add_argument("--turn-log-names", action="store_true", help="Also record who spoke each turn, not only whether they were recognised")
     p.add_argument("--message-waiting", action=argparse.BooleanOptionalAction, default=True, help="Hold the messages Robin sends on its own outside --speaking-hours, breathe the egg's ring while any wait, and read them out to 'what did I miss?' (default on; off drops them)")
+    p.add_argument("--min-volume", type=float, default=MIN_VOLUME, help=f"The quietest the egg can be set by voice, from 0 to 1 (default {MIN_VOLUME}). 'Set the volume to one' sets this")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
@@ -119,6 +121,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error(f"--quiet-hours {err}")
     if not FLOOR_GAIN * 100 <= args.quiet_volume <= 100:
         p.error(f"--quiet-volume {args.quiet_volume} is outside {FLOOR_GAIN * 100:.0f} to 100; lower than that and speech is hard to follow")
+    if not 0.0 <= args.min_volume < 1.0:
+        p.error("--min-volume must be at least 0 and below 1")
     if not args.host and not args.demo:
         p.error("give the egg's address, or --demo AUDIO to test without hardware")
     if not args.echo:
@@ -222,6 +226,7 @@ def build(args: argparse.Namespace):
         turn_log_names=args.turn_log_names,
         message_waiting=args.message_waiting,
         ring_file=RING_FILE,
+        min_volume=args.min_volume,
     )
     if opts.thinking_cue and not opts.stream:
         LOG.info("The thinking sound is off, because it is carried in the streamed reply and --no-stream turns streaming off")
