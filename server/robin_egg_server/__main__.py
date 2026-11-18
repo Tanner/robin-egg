@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .brain import server_url
 from .egg import Options, Robin
-from .health import OfflineAlert, status
+from .health import OfflineAlert, keep_captures_trimmed, status
 from .logs import setup as setup_logging
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .web import AudioServer
@@ -58,12 +58,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 0-24 for always")
     p.add_argument("--offline-alert", type=float, default=10.0, metavar="MINUTES", help="Have Robin text the household once the egg has been unreachable this long, and again when it is back (default 10; 0 turns it off; not used with --echo)")
-    p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here")
+    p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here, for --save-audio-hours")
+    p.add_argument("--save-audio-hours", type=float, default=24.0, metavar="HOURS", help="How long --save-audio keeps a capture before deleting it (default 24; 0 keeps them until you delete them)")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
     if args.default_speaker_name is not None:
         p.error('--default-speaker-name is gone: a voice the server cannot identify is now sent as "Unknown Speaker". Remove the flag.')
+    if args.save_audio_hours < 0:
+        p.error("--save-audio-hours is a number of hours, or 0 to keep captures until you delete them")
     if args.offline_alert < 0:
         p.error("--offline-alert is a number of minutes, or 0 to turn it off")
     if not args.host and not args.demo:
@@ -160,6 +163,12 @@ def log_enrolment(people: list[Person] | None, store: VoiceprintStore) -> None:
 
 async def run(args: argparse.Namespace) -> None:
     robin, web = build(args)
+    trimmer = None
+    trimming = asyncio.Event()
+    if robin.opts.save_audio is not None and args.save_audio_hours > 0:
+        trimmer = asyncio.create_task(keep_captures_trimmed(robin.opts.save_audio, args.save_audio_hours * 3600, trimming))
+    elif robin.opts.save_audio is not None:
+        LOG.warning("Mic captures in %s are kept until you delete them (--save-audio-hours 0)", robin.opts.save_audio)
     try:
         if hasattr(robin.brain, "check"):
             await robin.brain.check()
@@ -195,6 +204,9 @@ async def run(args: argparse.Namespace) -> None:
                         await task
             await web.stop()
     finally:
+        trimming.set()
+        if trimmer is not None:
+            await trimmer
         if hasattr(robin.brain, "close"):
             await robin.brain.close()
 

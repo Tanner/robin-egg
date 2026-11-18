@@ -163,7 +163,7 @@ Voiceprints are kept in `~/.robin-egg/voiceprints.json`. They hold no audio.
 
 ## Measuring accuracy
 
-To pick the accept threshold from real numbers, record clips with `--save-audio` and sort them into folders, one per person, plus `unknown` for guests, the TV and anyone not enrolled:
+To pick the accept threshold from real numbers, record clips with `--save-audio` and move them into folders, one per person, plus `unknown` for guests, the TV and anyone not enrolled:
 
 ```
 clips/
@@ -179,6 +179,8 @@ Then run, from `server/`:
 ```
 
 It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json` (`--voiceprints` and `--speaker-model` change that). For each threshold from 0.30 to 0.70 it counts clips judged right, given to the wrong person, and sent as Unknown Speaker, with clips under 2 s apart from longer ones. The last line suggests the lowest threshold that gave no clip to the wrong person. With no clips there is no suggestion, and if the clips lack an `unknown/` folder or cover only one person, the report says what the suggestion does not show. Only 16 kHz mono 16-bit WAV files are read; others are skipped with a warning. These clips are audio the server otherwise never keeps, so delete the folder when you are done.
+
+The server deletes its own captures after 24 hours: files named `capture-*.wav` directly in the `--save-audio` folder, checked at startup and every hour, with a log line saying how many went. Clips moved into the per-person folders, or anywhere else, are left alone, so sort them within a day. To collect clips over a longer stretch, start with `--save-audio-hours 0`, which keeps every capture until you delete it, or give it a longer limit in hours.
 
 ## Useful options
 
@@ -200,7 +202,8 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 | `--piper-voice` | `voices/en_US-ryan-medium.onnx` | Another Piper voice, to audition. |
 | `--say-voice` | system voice | Any name from `say -v '?'`, with `--tts say`. |
 | `--offline-alert MINUTES` | 10 | Have Robin text the household once the egg has been unreachable this long, and again when it is back. `0` turns it off. Not used with `--echo`. |
-| `--save-audio DIR` | off | Keep each mic capture as a WAV. |
+| `--save-audio DIR` | off | Keep each mic capture as a WAV, for 24 hours. |
+| `--save-audio-hours HOURS` | 24 | How long `--save-audio` keeps a capture before the server deletes it. `0` keeps captures until you delete them. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. |
 | `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice". Not used with `--echo`. |
 | `--voiceprints` | `~/.robin-egg/voiceprints.json` | Where the enrolled voiceprints are kept. |
@@ -229,10 +232,10 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/speakers.py` | Speaker embeddings, the voiceprint store, and matching a voice to a person |
 | `robin_egg_server/commands.py` | The "learn my voice" and "forget my voice" conversations |
 | `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce` and `/status` |
-| `robin_egg_server/health.py` | What `/status` reports, and the text when the egg goes missing |
+| `robin_egg_server/health.py` | What `/status` reports, the text when the egg goes missing, and clearing old mic captures |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
-| `tests/test_health.py` | `/status` and the offline alert, against the fake egg and the fake robin-assistant |
+| `tests/test_health.py` | `/status`, the offline alert and clearing old mic captures, against the fake egg and the fake robin-assistant |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |

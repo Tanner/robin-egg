@@ -1,4 +1,4 @@
-"""GET /status and the offline alert, against the fake egg and the fake robin-assistant.
+"""GET /status, the offline alert and clearing old mic captures, against the fake egg and the fake robin-assistant.
 
 Run from server/:  python -m pytest -q
 """
@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import time
 import types
 import urllib.error
@@ -20,12 +21,12 @@ from aioesphomeapi import VoiceAssistantEventType
 from robin_egg_server.egg import Options, Robin
 from robin_egg_server.fake_egg import FakeEgg, silence
 from robin_egg_server.__main__ import parse_args
-from robin_egg_server.health import OfflineAlert, status
+from robin_egg_server.health import OfflineAlert, keep_captures_trimmed, remove_old_captures, status
 from robin_egg_server.speaker_stream import SpeakerMessage, SpeakerStream
 from robin_egg_server.speakers import Match
 from robin_egg_server.web import AudioServer
 from test_robin_brain import FakeRobinAssistant
-from test_server import BrokenBrain, FakeSTT, SlowBrain, ToneTTS, speech
+from test_server import BrokenBrain, FakeSTT, SlowBrain, ToneTTS, converse, speech
 from test_speaker_stream import eventually
 
 
@@ -367,5 +368,89 @@ def test_offline_alert_defaults_to_ten_minutes_and_zero_turns_it_off(capsys):
         parse_args(base + ["--offline-alert", "-5"])
     except SystemExit:
         assert "--offline-alert" in capsys.readouterr().err
+    else:
+        raise AssertionError("a negative limit was accepted")
+
+
+# ---- old mic captures ----
+
+HOUR = 3600.0
+
+
+def aged(path, hours: float):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"RIFF")
+    then = time.time() - hours * HOUR
+    os.utime(path, (then, then))
+    return path
+
+
+def test_only_the_servers_own_old_captures_are_removed(tmp_path):
+    old = aged(tmp_path / "capture-20261115-090000.wav", 25)
+    recent = aged(tmp_path / "capture-20261117-090000.wav", 23)
+    kept = [
+        recent,
+        aged(tmp_path / "notes.txt", 100),
+        aged(tmp_path / "tanner-reading.wav", 100),
+        aged(tmp_path / "capture-20261115-090000.flac", 100),
+        aged(tmp_path / "tanner" / "capture-20261115-090500.wav", 100),  # sorted for the accuracy workflow
+    ]
+    (tmp_path / "capture-folder.wav").mkdir()
+    elsewhere = aged(tmp_path.parent / f"{tmp_path.name}-elsewhere.wav", 100)
+    link = tmp_path / "capture-link.wav"
+    link.symlink_to(elsewhere)
+
+    assert remove_old_captures(tmp_path, 24 * HOUR) == 1
+    assert not old.exists()
+    assert all(p.exists() for p in kept)
+    assert (tmp_path / "capture-folder.wav").is_dir() and link.is_symlink() and elsewhere.exists()
+    assert remove_old_captures(tmp_path, 24 * HOUR) == 0
+    assert remove_old_captures(tmp_path / "never-made", 24 * HOUR) == 0
+
+
+def test_a_capture_saved_by_a_turn_is_one_the_cleanup_owns(tmp_path):
+    opts = Options(follow_up="off", save_audio=tmp_path)
+    asyncio.run(converse([speech()], FakeSTT(["hello"]), SlowBrain([["Hello."]]), ToneTTS(), opts))
+    (saved,) = tmp_path.iterdir()
+    assert remove_old_captures(tmp_path, 24 * HOUR) == 0 and saved.exists()
+    then = time.time() - 25 * HOUR
+    os.utime(saved, (then, then))
+    assert remove_old_captures(tmp_path, 24 * HOUR) == 1 and not saved.exists()
+
+
+def test_captures_are_cleared_at_startup_and_again_later_with_a_count_in_the_log(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    aged(tmp_path / "capture-20261115-090000.wav", 30)
+    aged(tmp_path / "capture-20261115-090100.wav", 30)
+    fresh = aged(tmp_path / "capture-20261117-120000.wav", 1)
+
+    async def scenario():
+        stop = asyncio.Event()
+        task = asyncio.create_task(keep_captures_trimmed(tmp_path, 24 * HOUR, stop, every_s=0.05))
+        await eventually(lambda: sorted(tmp_path.iterdir()) == [fresh])
+        late = aged(tmp_path / "capture-20261116-080000.wav", 26)
+        await eventually(lambda: not late.exists())
+        await asyncio.sleep(0.2)  # passes that remove nothing say nothing
+        stop.set()
+        await task
+
+    asyncio.run(scenario())
+    assert fresh.exists()
+    lines = [r.getMessage() for r in caplog.records if r.name == "robin.health"]
+    assert lines == [
+        f"Mic captures in {tmp_path} are kept for 24 hours; removed 2 older than that at startup",
+        f"Removed 1 mic capture older than 24 hours from {tmp_path}",
+    ]
+
+
+def test_save_audio_hours_defaults_to_a_day_and_zero_keeps_everything(capsys):
+    base = ["egg.local", "--echo", "--save-audio", "clips"]
+    assert parse_args(base).save_audio_hours == 24.0
+    assert parse_args(base + ["--save-audio-hours", "0"]).save_audio_hours == 0
+    assert parse_args(base + ["--save-audio-hours", "0.5"]).save_audio_hours == 0.5
+    try:
+        parse_args(base + ["--save-audio-hours", "-1"])
+    except SystemExit:
+        assert "--save-audio-hours" in capsys.readouterr().err
     else:
         raise AssertionError("a negative limit was accepted")

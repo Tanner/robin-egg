@@ -1,4 +1,5 @@
-"""Health and housekeeping: what GET /status reports, and the text when the egg goes missing."""
+"""Health and housekeeping: what GET /status reports, the text when the egg goes missing,
+and clearing out old mic captures."""
 
 from __future__ import annotations
 
@@ -7,6 +8,7 @@ import contextlib
 import logging
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from .egg import Robin
@@ -133,3 +135,43 @@ class OfflineAlert:
             return False
         LOG.warning("robin-assistant answered %d for the alert, trying again in %.0f s: %s", resp.status_code, self.retry_s, reason)
         return None
+
+
+CAPTURES = "capture-*.wav"  # the names Robin._save_capture gives its files
+
+
+def _hours(seconds: float) -> str:
+    return f"{seconds / 3600:g} hour{'' if seconds == 3600 else 's'}"
+
+
+def remove_old_captures(folder: Path, max_age_s: float) -> int:
+    """Deletes the server's own mic captures in `folder` that are older than the limit. Returns how many.
+
+    Only regular files named like the server's captures, directly in the folder: clips
+    sorted into subfolders for the accuracy workflow, and anything else kept there, stay.
+    """
+    cutoff = time.time() - max_age_s
+    removed = 0
+    for path in folder.glob(CAPTURES):
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_mtime >= cutoff:
+                continue
+            path.unlink()
+            removed += 1
+        except OSError as err:
+            LOG.warning("Could not remove the old mic capture %s: %s", path, err)
+    return removed
+
+
+async def keep_captures_trimmed(folder: Path, max_age_s: float, stop: asyncio.Event, every_s: float = 3600.0) -> None:
+    """Clears old captures now and then every hour, for the life of the server."""
+    first = True
+    while not stop.is_set():
+        removed = await asyncio.to_thread(remove_old_captures, folder, max_age_s)
+        if first:
+            LOG.info("Mic captures in %s are kept for %s; removed %d older than that at startup", folder, _hours(max_age_s), removed)
+            first = False
+        elif removed:
+            LOG.info("Removed %d mic capture%s older than %s from %s", removed, "" if removed == 1 else "s", _hours(max_age_s), folder)
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(stop.wait(), every_s)
