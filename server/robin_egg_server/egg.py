@@ -56,6 +56,7 @@ LOG = logging.getLogger("robin.egg")
 ZERO_PSK = base64.b64encode(bytes(32)).decode()  # formatBCE: encryption on, no key set yet
 PROACTIVE_CHIME = Path(__file__).parent / "sounds" / "proactive.flac"  # made by tools/egg-sounds
 URGENT_CHIME = Path(__file__).parent / "sounds" / "urgent.flac"  # the cue before an urgent message
+READY_CHIME = Path(__file__).parent / "sounds" / "ready.flac"  # played each time the server connects to the egg
 NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 # After a reply that asked for a follow-up, how long past its end to wait for the egg to reopen its mic.
@@ -86,6 +87,7 @@ class Options:
     quiet_state: Path | None = None  # where a "quiet for an hour" pause is kept across restarts; in memory only if None
     repeat_window_s: float = DEFAULT_WINDOW_S  # how long "say that again" can bring back the last thing said; 0 turns it off
     urgent_sound: Path | None = None  # played before an urgent message instead; URGENT_CHIME if None
+    ready_sound: Path | None = None  # played each time the server connects to the egg, at any hour; off if None
     unsure_retries: int = 1  # times in a row to ask for a repeat when speech-to-text is unsure; 0 never asks
     confidence: ConfidenceLimits = field(default_factory=ConfidenceLimits)
     quiet_hours: tuple[int, int] | None = (21, 7)  # replies and announcements are quieter in this window
@@ -170,6 +172,8 @@ class Robin:
         self.proactive_sound = load_sound(self.opts.proactive_sound or PROACTIVE_CHIME)
         self.quiet = QuietMode(self.opts.quiet_state, morning_hour=self.opts.speaking_hours[0])
         self.urgent_sound = load_sound(self.opts.urgent_sound or URGENT_CHIME)
+        self.ready_sound = load_sound(self.opts.ready_sound) if self.opts.ready_sound else None
+        self._ready_task: asyncio.Task | None = None  # the ready sound being sent after a connect
         self.thinking_sound = load_sound(THINKING_CUE)
         self.turn_log = TurnLog(self.opts.turn_log, names=self.opts.turn_log_names)
         web.on_announce = self.announce
@@ -911,6 +915,8 @@ class Robin:
                     handle_announcement_finished=self.handle_announcement_finished,
                 )
                 LOG.info("Ready. Say the wake word, then a question.")
+                if self.ready_sound is not None:
+                    self._ready_task = asyncio.create_task(self._play_ready_sound(client))
                 set_up = True
                 delay = RECONNECT_DELAY_S
                 waiter = asyncio.create_task(stop.wait())
@@ -943,6 +949,9 @@ class Robin:
                     self._proactive_stopped_by = "the egg disconnected"
                     self._proactive_task.cancel()
                 self._reset_commands()  # half an enrolment must not resume with whoever speaks after a reconnect
+                if self._ready_task is not None and not self._ready_task.done():
+                    self._ready_task.cancel()
+                self._ready_task = None
                 if self.ring is not None:
                     self.ring.detach()
                 with contextlib.suppress(Exception):
@@ -952,6 +961,26 @@ class Robin:
                     await asyncio.wait_for(stop.wait(), delay)
                 delay = min(delay * 2, 30)
         await self._stop_proactive()
+
+    async def _play_ready_sound(self, client: Any) -> None:
+        """The chord that says the egg is up and the server is talking to it.
+
+        Played on every connect, whatever the hour, quiet or mute, and never counted as
+        something Robin said. A chime that does not play is only logged: the egg stays connected.
+        """
+        try:
+            async with self._speaker_lock:
+                reply = ReplyAudio()
+                reply.gain = self.room.for_announcement()
+                await reply.push(self.ready_sound, REPLY_RATE)
+                await reply.close()
+                url = self.web.add(reply)
+                LOG.info("Playing the ready sound")
+                await client.send_voice_assistant_announcement_await_response(url, timeout=10 + reply.seconds, text="")
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001 - a missed chime must never cost the connection
+            LOG.warning("The egg did not play the ready sound (%s)", str(err) or type(err).__name__)
 
     def _egg_connected(self, connected: bool) -> None:
         if self.room_context is not None:

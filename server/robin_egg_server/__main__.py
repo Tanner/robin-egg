@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from .brain import server_url
-from .egg import Options, Robin
+from .egg import READY_CHIME, Options, Robin
 from .health import OfflineAlert, keep_captures_trimmed, status
 from .hosted_tts import DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_VOICE, DEFAULT_TIME_LIMIT_S
 from .leds import DEFAULT_COLOURS_FILE, LedRing, PersonColours
@@ -52,6 +52,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--proactive-sound", metavar="FILE", help="Sound to play before each message Robin sends on its own (wav, aiff or flac). Default: the egg's own proactive chime")
     p.add_argument("--room-context", action=argparse.BooleanOptionalAction, default=True, help="Tell Robin facts about the room: whether the egg is connected, who last spoke to it and when, and what became of the last message Robin sent on its own. Never what anyone said (default on; not used with --echo)")
     p.add_argument("--urgent-sound", metavar="FILE", help="Sound to play before an urgent message instead (wav, aiff or flac). Default: the egg's own urgent cue")
+    p.add_argument("--ready-sound", metavar="FILE", default=str(READY_CHIME), help="Sound to play each time the server connects to the egg (wav, aiff or flac), or off. Default: the egg's own ready chime")
     p.add_argument("--server-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
     p.add_argument("--tts", choices=["piper", "say", "openai"], default="piper", help="Text-to-speech engine: piper (Robin's voice), macOS say, or openai (hosted; needs OPENAI_API_KEY in the environment and falls back to Piper)")
@@ -207,6 +208,7 @@ def build(args: argparse.Namespace):
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
         quiet_state=Path(args.quiet_state).expanduser(),
         urgent_sound=Path(args.urgent_sound).expanduser() if args.urgent_sound else None,
+        ready_sound=None if args.ready_sound == "off" else Path(args.ready_sound).expanduser(),
         unsure_retries=args.unsure_retries,
         confidence=ConfidenceLimits(args.min_logprob, args.max_no_speech, args.max_compression),
         quiet_hours=args.quiet_hours,
@@ -225,6 +227,8 @@ def build(args: argparse.Namespace):
         raise SystemExit(f"Proactive sound not found at {opts.proactive_sound}")
     if opts.urgent_sound and not opts.urgent_sound.exists():
         raise SystemExit(f"Urgent sound not found at {opts.urgent_sound}")
+    if opts.ready_sound and not opts.ready_sound.exists():
+        raise SystemExit(f"Ready sound not found at {opts.ready_sound}")
     speakers = people = commands = ring = colours = enrol_offer = None
     if recognise:
         from .commands import VoiceCommands
