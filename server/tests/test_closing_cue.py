@@ -129,3 +129,11 @@ def test_closing_cue_flags():
     base = ["egg.local", "--echo"]
     assert parse_args(base).closing_cue is True and Options().closing_cue is True
     assert parse_args(base + ["--no-closing-cue"]).closing_cue is False
+
+
+def test_a_turn_nobody_spoke_in_says_how_loud_the_audio_was(caplog):
+    with caplog.at_level(logging.INFO, logger="robin"):
+        asyncio.run(converse([speech()], FakeSTT(["hello"]), SlowBrain([["Anything else?"]], pause=0), ToneTTS()))
+    assert "The loudest 30 ms of audio reached RMS" in caplog.text
+    # Only the turn nobody spoke in reports its level.
+    assert sum("The loudest 30 ms" in r.getMessage() for r in caplog.records) == 1

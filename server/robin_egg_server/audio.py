@@ -86,6 +86,25 @@ class EnergyVad:
         return started_now
 
 
+LEVEL_FRAME_MS = 30
+
+
+def describe_level(pcm16: bytes, threshold: float | None) -> str:
+    """How loud a turn's mic audio got, for a turn where no speech was found.
+
+    Tells apart an egg that sent nothing but zeros from a room that was only quiet.
+    `threshold` is the energy detector's speech level, or None for the speech model.
+    """
+    samples = np.frombuffer(pcm16[: len(pcm16) - len(pcm16) % 2], dtype="<i2").astype(np.float32)
+    if not samples.any():
+        return "Every sample was zero: the egg sent digital silence, so its microphone stream may be stuck"
+    n = MIC_RATE * LEVEL_FRAME_MS // 1000
+    frames = [samples[i : i + n] for i in range(0, len(samples), n)]
+    loudest = max(float(np.sqrt(np.mean(f * f))) for f in frames)
+    said = f"The loudest {LEVEL_FRAME_MS} ms of audio reached RMS {loudest:.0f}"
+    return said if threshold is None else f"{said}; speech starts at RMS {threshold:.0f}"
+
+
 def load_sound(path: str | Path) -> np.ndarray:
     """Any file soundfile reads (wav, aiff, flac) as mono float samples at REPLY_RATE."""
     data, rate = sf.read(str(path), dtype="float32", always_2d=True)

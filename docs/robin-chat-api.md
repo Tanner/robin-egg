@@ -234,3 +234,46 @@ The change:
 ### Complexity
 
 Small. One optional field carried along a path that already carries `label`, and one tool parameter. The care points are the task-store rebuild that copies fields by hand, keeping non-web sends unchanged, and the tool wording, since the model decides what is urgent and an over-eager mark wakes the house.
+
+### Low priority: chime-only nudges
+
+Added 2026-11-17. The egg server side is built and tested against the fake robin-assistant. The robin-assistant side is proposed, not built. robin-assistant was read again at `9a5340df`: the urgent change above has not landed there, so there is no `priority` anywhere on the delivery path yet, and this proposal is shaped to land with it or after it.
+
+#### What the egg server does
+
+A `message` event may carry `"priority": "low"`:
+
+```json
+{ "id": 140, "text": "The washing machine has finished.", "label": "Laundry", "priority": "low" }
+```
+
+`"low"` means a nudge: worth a sound, not worth interrupting the room with words. The egg server does not speak it. Once the egg is idle it plays the proactive chime alone, holds the message for "what did I miss?", and shows the waiting light. It passes the same checks as a normal message, with no chime where a normal message would not be spoken: outside speaking hours it is held silently, and during quiet asked for by voice, with the mic muted, or with nobody recently present it is dropped. With message waiting off it is spoken as a normal message. `server/README.md` has the full table. `POST /announce?priority=low` does the same for a message sent by hand.
+
+A robin-assistant that never sends `"low"` changes nothing, and an egg server from before this change speaks a low message as a normal one, since it treats an unknown priority as normal.
+
+#### robin-assistant changes
+
+The urgent proposal carries a boolean, `urgent`, from the task to `metadata.priority`. With a second level that should become one field, so a task cannot be both:
+
+- **The task.** In place of `urgent?: boolean`, store an optional `priority?: "urgent" | "low"` on the task (`src/scheduler/task-store.ts`, beside `deliver`), kept through the hand-copied rebuild on update (`task-store.ts:334`). Absent means normal. If the urgent change has already landed with a boolean, keep reading a stored `urgent: true` as `priority: "urgent"` and write only `priority` from then on.
+- **The tool.** ScheduleTask (`src/tools/schedule-task.ts`, beside `deliver`) takes an optional `priority` of `"urgent"` or `"low"`, shown in ListScheduledTasks. The description for `"low"`: for something worth knowing but not worth saying aloud, such as a finished chore or a routine status; a speaker plays a short sound and keeps the words until someone asks, and everywhere else it is delivered as usual. Like `"urgent"`, a priority needs `deliver: "now"`; refuse either with `"later"`. A `"later"` result does not go through `executeDelivery`: the executor hands it to the held store (`src/scheduler/executor.ts:353-368`), which keeps the label but would need its own field and a rule for a release that mixes priorities.
+- **The path.** Carry `priority` on `TaskJob` and the plan, and pass it to `executeDelivery` beside `label` (`src/scheduler/task-jobs.ts`, `planner.ts`, `executor.ts:372`). `attemptOne` (`src/scheduler/delivery.ts:37`) sets `metadata.priority` only when the task has one, so a send for a task without it is called with exactly the arguments it gets today.
+- **The stream.** `speak` (`src/methods/web.ts:542-552`) copies `metadata.priority` onto the `SpeakerMessage` when it is `"urgent"` or `"low"`, and leaves the field out otherwise. `SpeakerMessage` (`src/methods/web-types.ts:233`) gains `priority?: "urgent" | "low"`.
+- **Not in this change.** The stored row and the web page are untouched, so the chat shows a low message like any other, and Telegram sends it like any other. Held releases, broadcasts, subagent results and `app_opened` routines are never low. Carrying `"low"` through the held store, so a `"later"` digest can be a nudge on the speaker, is separate work, and so is Robin choosing `"low"` for a message outside a scheduled task.
+
+#### Preventing regressions
+
+- Without `priority`, every task, delivery and speaker event is byte-for-byte what it is today. The existing suite must pass unchanged, the speaker stream's unit, route and e2e tests included.
+- New tests:
+  - A task with `priority: "low"` reaches a speaker listener with `priority: "low"`; a task without one has no `priority` key at all.
+  - `priority` survives a task update that does not mention it, can be changed between the two values, and can be cleared.
+  - ScheduleTask refuses a `priority` that is neither value, and refuses either value with `deliver: "later"`.
+  - A Telegram delivery of a low task gets the metadata it gets today plus `priority`, and sends the same message.
+  - A stored task with the boolean `urgent: true`, if that shape ever shipped, is still delivered as urgent.
+  - The e2e scenario for the speaker stream gains a low task.
+- On the egg server side, `tests/test_low_messages.py` covers the field, the chime alone, each check, and `/announce?priority=low`; `tests/test_urgent_messages.py` still covers a missing, unknown or non-string priority.
+- Document both values in `docs/configuration.md` beside the speaker stream, and on the admin Endpoints screen.
+
+#### Complexity
+
+Small, and smaller still if it lands together with urgent: the same optional field on the same path, with a second value. The care points are settling on one `priority` field before a boolean `urgent` is stored anywhere, and the tool wording. The cost of a wrong mark is the reverse of urgent's: a message marked low that mattered is only a chime and a light until someone asks, so the description should tell the model to leave reminders a person asked to be told about at normal priority.

@@ -147,7 +147,8 @@ def test_a_message_that_lands_mid_turn_waits_to_see_whether_anyone_spoke(caplog,
         await eventually(lambda: handled)
         stt.release.set()
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._proactive_queue.empty() and robin._busy_reason() is None and (bool(egg.announcements) or not spoken))
+        # The queue is empty while the worker holds the message and waits for the egg, so that alone is not the end.
+        await eventually(lambda: robin._proactive_queue.empty() and robin._busy_reason() is None and (bool(egg.announcements) or (not spoken and "Dropped message 36" in caplog.text)))
 
     brain = SlowStartBrain("It is ten o'clock.", pause_s=0)
     with caplog.at_level(logging.INFO, logger="robin"):

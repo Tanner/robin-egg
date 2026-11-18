@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Protocol
 
-from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_sound
+from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, describe_level, load_sound
 from . import whoami
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .confidence import UNSURE, Confidence, ConfidenceLimits
@@ -297,6 +297,8 @@ class Robin:
         self.send(self.E.VOICE_ASSISTANT_STT_VAD_END)  # the egg stops its mic and shows "thinking"
         secs = len(t.audio) / 2 / MIC_RATE
         LOG.info("Heard %.1f s of audio (%s)", secs, t.vad.reason)
+        if not t.vad.speech_started:
+            LOG.info(describe_level(bytes(t.audio), t.vad.threshold if isinstance(t.vad, EnergyVad) else None))
         self._save_capture(t)
         t.task = asyncio.create_task(self._respond(t))
 
@@ -731,7 +733,19 @@ class Robin:
         await reply.close()
         return reply
 
-    async def announce(self, text: str, urgent: bool = False) -> tuple[int, str]:
+    async def _cue_alone(self) -> ReplyAudio:
+        """The proactive cue with no words after it, for a low-priority message."""
+        reply = ReplyAudio()
+        reply.gain = self.room.for_announcement()
+        await reply.push(self.proactive_sound, REPLY_RATE, gap_s=0.2)
+        await reply.close()
+        return reply
+
+    def _nudges(self, low: bool) -> bool:
+        """Whether a low-priority message gets the cue alone. With nowhere to hold the words, it is spoken."""
+        return low and self.waiting is not None
+
+    async def announce(self, text: str, urgent: bool = False, low: bool = False) -> tuple[int, str]:
         if self.client is None:
             return 503, "the egg is not connected"
         refusal = self._why_not_speak_first(urgent)
@@ -751,6 +765,10 @@ class Robin:
                 LOG.info('Not announcing "%s": after %.0f s, %s', text, ANNOUNCE_WAIT_S, reason)
                 return (503 if self.client is None else 409), f"{reason}; not spoken"
             async with self._speaker_lock:
+                if self._nudges(low):
+                    return await self._announce_nudge(text, f"a{self._announce_count}")
+                if low:
+                    LOG.info('The announcement "%s" is low priority, but message waiting is off, so it is spoken', text)
                 reply = await self._announcement(text, chime=True, urgent=urgent)
                 client = self.client
                 if client is None:
@@ -767,6 +785,24 @@ class Robin:
                     return 502, f"the egg did not play it ({why})"
             LOG.info("Announcement finished (%s)", "spoken" if getattr(result, "success", True) else "the egg reported a failure")
         return 200, f"spoken ({getattr(result, 'success', result)})"
+
+    async def _announce_nudge(self, text: str, tag: str) -> tuple[int, str]:
+        """A low-priority /announce: the cue alone, and the words held for "what did I miss?"."""
+        reply = await self._cue_alone()
+        client = self.client
+        if client is None:
+            LOG.info('Not holding the low-priority announcement "%s": the egg disconnected before its chime could play', text)
+            return 503, "the egg is not connected"
+        if not self.waiting.hold(SpeakerMessage(tag, text, "announce", low=True)):
+            return 400, "nothing to say once markdown is stripped; not held"
+        LOG.info('Holding the low-priority announcement "%s" for "what did I miss?" and playing only the chime', text)
+        try:
+            await client.send_voice_assistant_announcement_await_response(self.web.add(reply), timeout=60 + reply.seconds, text="")
+        except Exception as err:  # noqa: BLE001 - the words are held either way, and whoever asked hears the chime was missed
+            why = str(err) or type(err).__name__
+            LOG.warning('The egg did not play the chime for the low-priority announcement "%s" (%s); it is still held', text, why)
+            return 200, f'held for "what did I miss?"; the egg did not play the chime ({why})'
+        return 200, 'held for "what did I miss?" after the chime; not spoken'
 
     @property
     def proactive_waiting(self) -> int:
@@ -798,7 +834,9 @@ class Robin:
         together are spoken in order, one chime each. An urgent message is spoken at any
         hour, whoever is in the room, ahead of the messages already waiting, after the urgent
         cue. Quiet asked for by voice and a muted microphone still silence it: those are
-        someone's own choice.
+        someone's own choice. A low-priority message passes the same checks as a normal
+        one, and where that one would be spoken it gets the chime alone and is held for
+        "what did I miss?". With message waiting off it is spoken.
         """
         with tagged(msg.tag):
             refusal = self._why_not_speak_first(msg.urgent)
@@ -831,6 +869,8 @@ class Robin:
             self.turn_log.message_arrived(msg, busy)
             if busy:
                 LOG.info("Queued message %s until the egg is idle: %s", msg.describe(), busy)
+            elif self._nudges(msg.low):
+                LOG.info("Playing only the chime for message %s now: it is low priority", msg.describe())
             else:
                 LOG.info("Speaking message %s now", msg.describe())
         self._proactive_count += 1
@@ -887,6 +927,11 @@ class Robin:
                     self._message_outcome(msg, f"dropped, {nobody}")
                     continue
                 self._proactive_stopped_by = ""
+                if self._nudges(msg.low):
+                    await self._nudge(msg)
+                    continue
+                if msg.low:
+                    LOG.info("Message %s is low priority, but message waiting is off, so it is spoken", msg.describe())
                 self._proactive_task = task = asyncio.create_task(self._say_proactive(msg))
                 await asyncio.wait({task})
                 if task.cancelled():
@@ -923,6 +968,37 @@ class Robin:
                 self._expect_answer(msg)
         LOG.info("Spoke message %s (%s)", msg.describe(), "finished" if spoken else "the egg reported a failure")
         self._message_outcome(msg, "spoken" if spoken else "failed, the egg reported a failure")
+
+    async def _nudge(self, msg: SpeakerMessage) -> None:
+        """A low-priority message: it is held for "what did I miss?", and only the cue plays.
+
+        It is held before the cue starts, so the wake word during the cue can already ask for it.
+        """
+        if not self.waiting.hold(msg):
+            LOG.info("Dropped message %s: nothing to say once markdown is stripped", msg.describe())
+            self._message_outcome(msg, "dropped, it had nothing to say")
+            return
+        self._proactive_task = task = asyncio.create_task(self._play_cue_alone())
+        await asyncio.wait({task})
+        if task.cancelled():
+            LOG.info('Stopped the chime for message %s partway: %s. It is held for "what did I miss?"', msg.describe(), self._proactive_stopped_by or "the server is stopping")
+            self._message_outcome(msg, "held, low priority, the chime was cut short")
+        elif task.exception() is not None or not task.result():
+            LOG.warning('The egg did not play the chime for message %s; it is held for "what did I miss?"', msg.describe(), exc_info=task.exception())
+            self._message_outcome(msg, "held, low priority, the chime did not play")
+        else:
+            LOG.info('Played the chime for message %s; it is held for "what did I miss?"', msg.describe())
+            self._message_outcome(msg, "held, low priority, after the chime")
+
+    async def _play_cue_alone(self) -> bool:
+        """Plays the proactive cue with no words. False when the egg was gone or reported a failure."""
+        async with self._speaker_lock:
+            reply = await self._cue_alone()
+            client = self.client
+            if client is None:
+                return False
+            result = await client.send_voice_assistant_announcement_await_response(self.web.add(reply), timeout=60 + reply.seconds, text="")
+            return bool(getattr(result, "success", True))
 
     def _message_outcome(self, msg: SpeakerMessage, outcome: str) -> None:
         if self.room_context is not None:

@@ -3,6 +3,7 @@
 GET  /audio/<id>.flac  the egg's media player fetches replies here, while they are still being written
 POST /announce         body is text; Robin speaks it on the egg (proactive speech).
                        ?priority=urgent speaks it outside speaking hours, after the urgent cue
+                       ?priority=low plays only the proactive cue and holds the words for "what did I miss?"
 GET  /quiet            whether someone has asked Robin by voice not to speak first, and until when
 DELETE /quiet          ends that, so Robin may speak first again
 GET  /status           JSON health for monitoring: connections, the last turn, who is enrolled
@@ -35,7 +36,7 @@ class AudioServer:
         self._audio: OrderedDict[str, tuple[ReplyAudio, str]] = OrderedDict()  # with the log tag of the turn it belongs to
         self._keep = keep
         self._server: asyncio.base_events.Server | None = None
-        self.on_announce: Callable[..., Awaitable[tuple[int, str]]] | None = None  # (text, urgent=False)
+        self.on_announce: Callable[..., Awaitable[tuple[int, str]]] | None = None  # (text, urgent=False, low=False)
         self.on_quiet: Callable[[str], Awaitable[tuple[int, str]]] | None = None  # called with GET or DELETE
         # Anyone on the LAN can read this, so it must never carry what was said or to whom.
         self.on_status: Callable[[], dict[str, Any]] | None = None
@@ -102,10 +103,10 @@ class AudioServer:
                     await self._reply(w, 400, "send the words to speak as the request body\n")
                     return
                 priority = parse_qs(query).get("priority", ["normal"])[-1]
-                if priority not in ("normal", "urgent"):
-                    await self._reply(w, 400, "priority is normal or urgent\n")
+                if priority not in ("normal", "urgent", "low"):
+                    await self._reply(w, 400, "priority is normal, urgent or low\n")
                     return
-                status, msg = await self.on_announce(text, urgent=priority == "urgent")
+                status, msg = await self.on_announce(text, urgent=priority == "urgent", **({"low": True} if priority == "low" else {}))
                 await self._reply(w, status, msg + "\n")
             elif method in ("GET", "DELETE") and path == "/quiet" and self.on_quiet is not None:
                 status, msg = await self.on_quiet(method)
