@@ -84,6 +84,7 @@ If there is no audio, the formatBCE README says to check the codec appears at 0x
 | Sound out | Yes, through the formatBCE firmware. Quiet bare at 50% volume, loud at 85%. Hand-held leads gave no sound, soldered leads did | 2026-11-16 |
 | Mics working | Yes. "Okay Nabu" at ~1 m, capture peak -6 dBFS, Whisper transcribed it exactly | 2026-11-16 |
 | DSP Status after ESPHome install | OK. XMOS reflashed to 1.0.9 in 43 s on first boot | 2026-11-16 |
+| Ready sound when the server connects | Yes. The E-flat chord plays from the DMA70-4 after the server restarts | 2026-11-17 |
 | Current draw, idle and speaking | | |
 | Wake word distance | | |
 | Wake word during playback | | |
