@@ -273,6 +273,19 @@ Each number is checked on its own. Over a long request, `logprob` and `no-speech
 It asks once. If the next try is unsure too, the words go to Robin as heard, so nobody is kept in a loop; `--unsure-retries` changes how many times it asks in a row, and `0` turns the check off. The check is skipped while enrolling or forgetting a voice, where the sentence matching already asks again on a miss.
 
 The defaults are cautious: they are Whisper's own limits for a failed transcript, so a fluent mishearing still passes. To tune them, compare the numbers on the "Heard" lines of turns that went wrong with those that went right, then set `--min-logprob`, `--max-no-speech` and `--max-compression`.
+## Showing who is talking
+
+When the server recognises the speaker, the egg's LED ring takes that person's colour while Robin thinks and replies. Listening stays in the ring's own colour, because nobody is recognised until the request has been heard. A voice it cannot place keeps the ring's own colour throughout. `--no-recognition-light` turns this off.
+
+Colours are in `~/.robin-egg/led-colours.json`, keyed by robin-assistant user key. Each is a name (blue, orange, green, pink, cyan, yellow, purple, white), `#RRGGBB`, or `[red, green, blue]` out of 255:
+
+```json
+{"tanner": "orange", "ryan": "#2F7BFF"}
+```
+
+Only the hue is used; the ring's brightness stays as set on the egg. Anyone the file leaves out, or everyone if there is no file, gets blue, orange, green, pink, cyan or yellow by their place in the household list in key order. Red is not a default, because the firmware uses it for errors and a lost connection.
+
+No firmware change is needed. The firmware's "LED Ring" light holds the accent colour of every voice animation, and a colour-only command to it repaints the phase that is showing without lighting the idle ring. The server sets the person's colour once the speaker is known and sets the old colour back when the reply should have finished playing, at the next wake word or follow-up, when the egg cancels the turn, and when the server stops. While a colour is borrowed, the old one is kept in `~/.robin-egg/led-ring-restore.json`, so if the connection drops mid-reply the next connection puts it back.
 
 ## Measuring accuracy
 
@@ -374,6 +387,8 @@ The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the
 | `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice" and checking with "who am I?". Not used with `--echo`. |
 | `--voiceprints` | `~/.robin-egg/voiceprints.json` | Where the enrolled voiceprints are kept. |
 | `--speaker-model` | `models/wespeaker_en_voxceleb_resnet34_LM.onnx` | Another speaker embedding model. Changing it means everyone enrols again. |
+| `--recognition-light`, `--no-recognition-light` | on | Show a recognised speaker's colour on the LED ring while Robin thinks and replies. Needs speaker recognition. |
+| `--led-colours` | `~/.robin-egg/led-colours.json` | The ring colour for each person, by robin-assistant user key. |
 
 ## Not yet tried on the real egg
 
@@ -396,6 +411,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - The hosted voice. `--tts openai` has only been run against a fake speech endpoint in the tests, never against OpenAI itself, so the real latency per sentence, whether 4 s is the right limit, and how a change from the OpenAI voice to Piper mid-reply sounds on the egg's speaker are all unknown.
 - Matching the room. Whether 60% is the right amount for the evening has only been judged from numbers, not heard through the egg's speaker at its volume setting. For `--match-voice`, nobody has measured how much of the difference between a quiet voice and a normal one survives the XVF3800's automatic gain. Read the "the voice measured" log lines for a few quiet and normal turns before turning it on.
 - The offline alert. The fake egg goes missing by closing its connection, which the server notices at once. How quickly the server notices a real egg that loses power or Wi-Fi depends on the ESPHome connection's keepalive, and an egg that reboots and reconnects within the limit should cause no text. The text itself has only been sent to the fake robin-assistant.
+- The recognition light. The fake egg only records the colour commands. Not yet seen on the ring: that a colour-only command to the "LED Ring" light repaints the thinking and replying animations partway through, that it leaves an unlit idle ring unlit, and how the default colours look. The colour is given back on the server's estimate of when the reply ends, so it may change a moment before or after the animation stops. The firmware saves the light's colour to flash, so an egg that loses power mid-reply starts in the person's colour until the server reconnects.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 - Presence. `--presence-minutes` has only been run against the fake egg. Whether "spoke in the last N minutes" is a fair guess at someone being in the room, and what N should be, needs living with the real egg.
 
@@ -420,6 +436,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/repeat.py` | The "say that again" command and the text of the last thing said |
 | `robin_egg_server/whoami.py` | The answer to "who am I?", from the turn's speaker match |
 | `robin_egg_server/mic_mute.py` | The egg's microphone mute switch, followed so that muting also stops Robin speaking first |
+| `robin_egg_server/leds.py` | The LED ring over the ESPHome connection: borrowing a colour and giving it back, and each person's colour |
 | `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce`, `/quiet` and `/status` |
 | `robin_egg_server/health.py` | What `/status` reports, the text when the egg goes missing, and clearing old mic captures |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
@@ -441,6 +458,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_mic_mute.py` | Muting the fake egg's microphone: dropped messages, `/announce`, the option, a missing switch, reconnects |
 | `tests/test_thinking_cue.py` | The thinking sound against the fake egg: when it plays, how it ends, and when it must not play |
 | `tests/test_health.py` | `/status`, the offline alert and clearing old mic captures, against the fake egg and the fake robin-assistant |
+| `tests/test_leds.py` | The recognition light against the fake egg's ring |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |
 | `tests/test_repeat.py` | "Say that again", alone and through the fake egg |
 | `tests/test_urgent_messages.py` | Urgent messages: the cue, the speaking hours, the queue order and `/announce?priority=urgent` |

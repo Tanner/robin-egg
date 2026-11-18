@@ -15,6 +15,7 @@ from .brain import server_url
 from .egg import Options, Robin
 from .health import OfflineAlert, keep_captures_trimmed, status
 from .hosted_tts import DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_VOICE, DEFAULT_TIME_LIMIT_S
+from .leds import DEFAULT_COLOURS_FILE, LedRing, PersonColours
 from .logs import setup as setup_logging
 from .room import FLOOR_GAIN, parse_hours
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
@@ -74,6 +75,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--speaker-recognition", action=argparse.BooleanOptionalAction, default=True, help="Tell household members apart by voice and let them enrol by saying 'learn my voice' (default on; --no-speaker-recognition turns it off; not used with --echo)")
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
+    p.add_argument("--recognition-light", action=argparse.BooleanOptionalAction, default=True, help="Show a recognised speaker's colour on the LED ring while Robin thinks and replies (default on; needs speaker recognition)")
+    p.add_argument("--led-colours", default=str(DEFAULT_COLOURS_FILE), help="JSON file of ring colours by robin-assistant user key, e.g. {\"tanner\": \"orange\"} (default ~/.robin-egg/led-colours.json; people it leaves out get a default colour)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 20-8 runs past midnight; 0-24 for always")
     p.add_argument("--quiet-state", default=str(DEFAULT_QUIET_STATE), help="Where a pause asked for by voice ('quiet for an hour') is kept, so a restart does not end it early (default ~/.robin-egg/quiet.json)")
     p.add_argument("--quiet-when-muted", action=argparse.BooleanOptionalAction, default=True, help="While the egg's microphone is muted, Robin does not speak first: its own messages and /announce are dropped (default on; --no-quiet-when-muted turns it off)")
@@ -206,6 +209,7 @@ def build(args: argparse.Namespace):
         match_voice=args.match_voice,
         thinking_cue=args.thinking_cue,
         thinking_delay_s=args.thinking_delay,
+        recognition_light=args.recognition_light,
     )
     if opts.thinking_cue and not opts.stream:
         LOG.info("The thinking sound is off, because it is carried in the streamed reply and --no-stream turns streaming off")
@@ -213,7 +217,7 @@ def build(args: argparse.Namespace):
         raise SystemExit(f"Proactive sound not found at {opts.proactive_sound}")
     if opts.urgent_sound and not opts.urgent_sound.exists():
         raise SystemExit(f"Urgent sound not found at {opts.urgent_sound}")
-    speakers = people = commands = None
+    speakers = people = commands = ring = colours = None
     if recognise:
         from .commands import VoiceCommands
         from .speakers import People, SherpaEmbedder, SpeakerId
@@ -224,10 +228,13 @@ def build(args: argparse.Namespace):
         speakers = SpeakerId(embedder, store)
         people = People(brain.people)
         commands = VoiceCommands(people, store, speakers.thresholds)
+        if args.recognition_light:
+            ring = LedRing()
+            colours = PersonColours.load(Path(args.led_colours).expanduser())
     else:
         LOG.info("Speaker recognition is off, so every voice is sent as Unknown Speaker")
     web = AudioServer()
-    return Robin(stt, brain, tts, web, VoiceAssistantEventType, opts, speakers=speakers, people=people, commands=commands), web
+    return Robin(stt, brain, tts, web, VoiceAssistantEventType, opts, speakers=speakers, people=people, commands=commands, ring=ring, colours=colours), web
 
 
 def log_enrolment(people: list[Person] | None, store: VoiceprintStore) -> None:
