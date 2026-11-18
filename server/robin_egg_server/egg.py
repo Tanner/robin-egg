@@ -35,6 +35,7 @@ from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
 from .quiet import QuietMode
 from .mic_mute import MicMute
+from .repeat import DEFAULT_WINDOW_S, NOTHING_TO_REPEAT, LastSaid
 from .presence import Presence, SpokenTo, absence
 from .room import RoomVolume
 from .speaker_stream import SpeakerMessage
@@ -73,6 +74,7 @@ class Options:
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
     quiet_state: Path | None = None  # where a "quiet for an hour" pause is kept across restarts; in memory only if None
+    repeat_window_s: float = DEFAULT_WINDOW_S  # how long "say that again" can bring back the last thing said; 0 turns it off
     urgent_sound: Path | None = None  # played before an urgent message instead; URGENT_CHIME if None
     unsure_retries: int = 1  # times in a row to ask for a repeat when speech-to-text is unsure; 0 never asks
     confidence: ConfidenceLimits = field(default_factory=ConfidenceLimits)
@@ -120,6 +122,7 @@ class Robin:
         self.presence: Presence = presence or SpokenTo()
         self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
+        self.last_said = LastSaid(self.opts.repeat_window_s)  # text only, for "say that again"
         self._unsure_streak = 0  # how many turns in a row ended in asking for a repeat
         self._turn_count = 0  # numbers the turns in the log
         self._announce_count = 0  # numbers the /announce calls in the log
@@ -282,8 +285,13 @@ class Robin:
                 return
             # Mid-enrolment every turn is an answer to the enrolment, whatever it sounds like.
             quiet_step = None if enrolling else self.quiet.handle(heard)
+            again = None if enrolling or quiet_step is not None else self.last_said.answer(heard)
             if quiet_step is not None:
                 step = quiet_step
+            elif again is not None:
+                step = Step(again, self._reopens_after(again))
+                if again != NOTHING_TO_REPEAT:
+                    self.last_said.remember(again)  # said again just now, so it stays repeatable
             elif self.commands is not None:
                 step = await self.commands.handle(heard, match)
             elif is_voice_command(heard):
@@ -307,6 +315,7 @@ class Robin:
             LOG.info('Robin: "%s"', reply_text)
             cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))
             await self._finish_reply(t, reply_text, cont)
+            self.last_said.remember(reply_text)
             if self.speakers is not None:
                 self.speakers.learn(match)
             self.last_match = match
@@ -323,6 +332,9 @@ class Robin:
         finally:
             await t.reply.close()
             self._state.set()
+
+    def _reopens_after(self, text: str) -> bool:
+        return self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and text.rstrip().endswith("?"))
 
     def _reset_commands(self) -> None:
         if self.commands is not None:
@@ -518,6 +530,7 @@ class Robin:
                 reply = await self._announcement(text, chime=True, urgent=urgent)
                 url = self.web.add(reply)
                 LOG.info('Announcing%s: "%s"', " as urgent" if urgent else "", text)
+                self.last_said.remember(text)
                 result = await self.client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
             LOG.info("Announcement finished (%s)", "spoken" if getattr(result, "success", True) else "the egg reported a failure")
         return 200, f"spoken ({getattr(result, 'success', result)})"
@@ -631,6 +644,7 @@ class Robin:
                 return
             url = self.web.add(reply)
             LOG.info('Speaking message %s: "%s"', msg.describe(), text)
+            self.last_said.remember(text)
             listen = self.opts.answer_messages == "always" or (self.opts.answer_messages == "questions" and text.rstrip().endswith("?"))
             self._answer_wanted = listen
             try:
