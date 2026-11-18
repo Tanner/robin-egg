@@ -31,8 +31,11 @@ from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
+from .presence import Presence, SpokenTo, absence
+from .room import RoomVolume
 from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
+from .vad import ModelVad, make_vad
 from .voices import SpeechToText, TextToSpeech
 from .web import AudioServer
 
@@ -57,15 +60,20 @@ class Options:
     follow_up_window_s: float = 5.0
     answer_messages: str = "questions"  # reopen the mic after a message Robin sent on its own: questions | always | off
     max_utterance_s: float = 30.0  # longest request before the mic closes mid-sentence
+    vad: str = "energy"  # what finds the end of speech: energy | model
     enrol_window_s: float = 10.0  # people need a moment to repeat an enrolment sentence
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
+    presence_window_s: float | None = None  # Robin's own messages need someone in the room this recently; None = no check
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
+    quiet_hours: tuple[int, int] | None = (21, 7)  # replies and announcements are quieter in this window
+    quiet_volume: float = 0.6  # the gain in quiet hours and for a quiet voice
+    match_voice: bool = False  # also speak more quietly to someone who spoke quietly
 
 
 @dataclass
 class Turn:
-    vad: EnergyVad
+    vad: EnergyVad | ModelVad
     reply: ReplyAudio
     url: str
     wake_word: str | None
@@ -93,11 +101,14 @@ class Robin:
         speakers: SpeakerId | None = None,
         people: People | None = None,
         commands: VoiceCommands | None = None,
+        presence: Presence | None = None,
     ) -> None:
         self.stt, self.brain, self.tts, self.web = stt, brain, tts, web
         self.E = events  # aioesphomeapi.VoiceAssistantEventType
         self.opts = opts or Options()
         self.speakers, self.people, self.commands = speakers, people, commands
+        self.presence: Presence = presence or SpokenTo()
+        self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
         self._turn_count = 0  # numbers the turns in the log
         self._announce_count = 0  # numbers the /announce calls in the log
@@ -166,7 +177,7 @@ class Robin:
         tag = f"t{self._turn_count}"
         reply = ReplyAudio()
         url = self.web.add(reply, tag)
-        self.turn = Turn(EnergyVad(cfg), reply, url, wake_word_phrase, follow_up, tag=tag)
+        self.turn = Turn(make_vad(self.opts.vad, cfg), reply, url, wake_word_phrase, follow_up, tag=tag)
         with tagged(self.turn.tag):
             if answering:
                 LOG.info("Answer to message %s: listening for %.0f s", answering, cfg.no_speech_timeout_s)
@@ -233,6 +244,7 @@ class Robin:
                 LOG.info("Nobody spoke; closing quietly")
                 self._end_without_reply()
                 return
+            t.reply.gain = self.room.for_reply(bytes(t.audio))
             t0 = time.monotonic()
             (heard, stt_s), (match, id_s) = await asyncio.gather(self._transcribe(t), self._identify(t))
             LOG.info('Heard: "%s" (STT %.2f s, speaker %.2f s)', heard, stt_s, id_s)
@@ -242,6 +254,8 @@ class Robin:
                 LOG.info("Nothing recognisable was said; closing quietly")
                 self._end_without_reply()
                 return
+            if heard:
+                self.presence.spoke()
             self.send(E.VOICE_ASSISTANT_STT_END, {"text": heard})
             self.send(E.VOICE_ASSISTANT_INTENT_START)
             if self.commands is not None:
@@ -340,6 +354,8 @@ class Robin:
         """
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         spoken: list[str] = []
+        if (begin_reply := getattr(self.tts, "begin_reply", None)) is not None:
+            begin_reply(reply)
 
         async def voice() -> None:
             first = True
@@ -390,6 +406,14 @@ class Robin:
         start, end = self.opts.speaking_hours
         return start <= time.localtime().tm_hour < end
 
+    def _nobody_here(self) -> str | None:
+        """Why Robin's own messages should stay unspoken for want of a listener, or None."""
+        return absence(self.presence, self.opts.presence_window_s)
+
+    def _in_conversation(self) -> bool:
+        t = self.turn
+        return t is not None and (t.listening or (t.task is not None and not t.task.done()))
+
     def _hours(self) -> str:
         start, end = self.opts.speaking_hours
         return f"{start}:00 to {end}:00"
@@ -400,6 +424,7 @@ class Robin:
         A chime first, so Robin speaking unprompted does not startle anyone.
         """
         reply = ReplyAudio()
+        reply.gain = self.room.for_announcement()
         if chime:
             await reply.push(self.proactive_sound, REPLY_RATE, gap_s=0.2)
         await self._speak(_once(text), reply)
@@ -426,8 +451,7 @@ class Robin:
         """Why Robin should not speak first right now, or None when the egg is idle."""
         if self.client is None:
             return "the egg is not connected"
-        t = self.turn
-        if t is not None and (t.listening or (t.task is not None and not t.task.done())):
+        if self._in_conversation():
             return "the egg is in a conversation"
         now = time.monotonic()
         if now < self._playback_until:
@@ -441,12 +465,17 @@ class Robin:
     async def proactive(self, msg: SpeakerMessage) -> None:
         """A message Robin sent on its own: a chime, then the message, once the egg is idle.
 
-        Outside speaking hours it is dropped, not saved for later. Messages that arrive
+        Outside speaking hours, or with nobody likely in the room when that is checked, it
+        is dropped, not saved for later. Messages that arrive
         together are spoken in order, one chime each.
         """
         with tagged(msg.tag):
             if not self._in_speaking_hours():
                 LOG.info("Dropped message %s: outside speaking hours (%s)", msg.describe(), self._hours())
+                return
+            # A turn under way may be the first sign of someone, so the check waits for it to end.
+            if not self._in_conversation() and (nobody := self._nobody_here()):
+                LOG.info("Dropped message %s: %s", msg.describe(), nobody)
                 return
             if self._proactive_task is not None and not self._proactive_task.done():
                 busy: str | None = "another message is being spoken"
@@ -477,6 +506,9 @@ class Robin:
                 await self._until_idle()
                 if not self._in_speaking_hours():
                     LOG.info("Dropped message %s: speaking hours (%s) ended while it waited", msg.describe(), self._hours())
+                    continue
+                if nobody := self._nobody_here():
+                    LOG.info("Dropped message %s: %s once the egg was idle", msg.describe(), nobody)
                     continue
                 self._proactive_stopped_by = ""
                 self._proactive_task = task = asyncio.create_task(self._say_proactive(msg))
