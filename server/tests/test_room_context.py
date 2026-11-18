@@ -87,7 +87,7 @@ def test_a_refused_fact_is_logged_and_does_not_raise(caplog):
     async def scenario(room, fake):
         assert await room.client.post("egg_connection", "connected", 900) is False
 
-    with caplog.at_level(logging.WARNING, logger="robin.room"):
+    with caplog.at_level(logging.WARNING, logger="robin.context"):
         asyncio.run(with_room(scenario, reply=(409, {"error": 'Agent "robin" is not running'})))
     assert "robin-assistant answered 409 when told that egg_connection is connected" in caplog.text
     assert "is not running" in caplog.text
@@ -104,7 +104,7 @@ def test_an_unreachable_robin_assistant_is_logged_and_does_not_raise(caplog):
         finally:
             await client.close()
 
-    with caplog.at_level(logging.WARNING, logger="robin.room"):
+    with caplog.at_level(logging.WARNING, logger="robin.context"):
         assert asyncio.run(scenario()) is False
     assert "Could not tell Robin that egg_connection is connected" in caplog.text
 
@@ -198,7 +198,7 @@ async def egg_with_room(utterances, texts, who, brain, opts, scenario=None, url=
     await web.start("127.0.0.1", 0, "127.0.0.1")
     robin = Named(FakeSTT(texts), brain, ToneTTS(), web, VoiceAssistantEventType, opts)
     robin.who = list(who)
-    robin.room = RoomContext(ContextClient(url or fake_url, "robin", timeout_s=2))
+    robin.room_context = RoomContext(ContextClient(url or fake_url, "robin", timeout_s=2))
     stop = asyncio.Event()
     server = asyncio.create_task(robin.run_forever("127.0.0.1", port, stop=stop))
     try:
@@ -209,7 +209,7 @@ async def egg_with_room(utterances, texts, who, brain, opts, scenario=None, url=
         stop.set()
         await server
         with contextlib.suppress(asyncio.CancelledError):
-            await robin.room.close()
+            await robin.room_context.close()
         await web.stop()
         await egg.stop()
         await fake.stop()

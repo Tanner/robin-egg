@@ -27,6 +27,7 @@ from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, load_
 from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
+from .room import RoomVolume
 from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
 from .voices import SpeechToText, TextToSpeech
@@ -56,6 +57,9 @@ class Options:
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
+    quiet_hours: tuple[int, int] | None = (21, 7)  # replies and announcements are quieter in this window
+    quiet_volume: float = 0.6  # the gain in quiet hours and for a quiet voice
+    match_voice: bool = False  # also speak more quietly to someone who spoke quietly
 
 
 @dataclass
@@ -93,11 +97,12 @@ class Robin:
         self.E = events  # aioesphomeapi.VoiceAssistantEventType
         self.opts = opts or Options()
         self.speakers, self.people, self.commands = speakers, people, commands
+        self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
         self._turn_count = 0  # numbers the turns in the log
         self._announce_count = 0  # numbers the /announce calls in the log
         self.client: Any = None  # an APIClient while the egg is connected
-        self.room: Any = None  # a RoomContext when Robin is told facts about the room
+        self.room_context: Any = None  # a RoomContext when Robin is told facts about the room
         self.turn: Turn | None = None
         self._follow_up_pending = False
         self._playback_until = 0.0  # when the egg should finish playing the last reply
@@ -219,6 +224,7 @@ class Robin:
                 LOG.info("Nobody spoke; closing quietly")
                 self._end_without_reply()
                 return
+            t.reply.gain = self.room.for_reply(bytes(t.audio))
             t0 = time.monotonic()
             (heard, stt_s), (match, id_s) = await asyncio.gather(self._transcribe(t), self._identify(t))
             LOG.info('Heard: "%s" (STT %.2f s, speaker %.2f s)', heard, stt_s, id_s)
@@ -228,8 +234,8 @@ class Robin:
                 LOG.info("Nothing recognisable was said; closing quietly")
                 self._end_without_reply()
                 return
-            if heard and self.room is not None:
-                self.room.spoken_to(match.user, t.follow_up)
+            if heard and self.room_context is not None:
+                self.room_context.spoken_to(match.user, t.follow_up)
             self.send(E.VOICE_ASSISTANT_STT_END, {"text": heard})
             self.send(E.VOICE_ASSISTANT_INTENT_START)
             if self.commands is not None:
@@ -328,6 +334,8 @@ class Robin:
         """
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         spoken: list[str] = []
+        if (begin_reply := getattr(self.tts, "begin_reply", None)) is not None:
+            begin_reply(reply)
 
         async def voice() -> None:
             first = True
@@ -388,6 +396,7 @@ class Robin:
         A chime first, so Robin speaking unprompted does not startle anyone.
         """
         reply = ReplyAudio()
+        reply.gain = self.room.for_announcement()
         if chime:
             await reply.push(self.proactive_sound, REPLY_RATE, gap_s=0.2)
         await self._speak(_once(text), reply)
@@ -499,8 +508,8 @@ class Robin:
         self._message_outcome(msg, "spoken" if spoken else "failed, the egg reported a failure")
 
     def _message_outcome(self, msg: SpeakerMessage, outcome: str) -> None:
-        if self.room is not None:
-            self.room.message_outcome(msg.describe(), outcome)
+        if self.room_context is not None:
+            self.room_context.message_outcome(msg.describe(), outcome)
 
     async def _stop_proactive(self) -> None:
         for task in (self._proactive_task, self._proactive_worker):
@@ -586,8 +595,8 @@ class Robin:
         await self._stop_proactive()
 
     def _egg_connected(self, connected: bool) -> None:
-        if self.room is not None:
-            self.room.egg_connected(connected)
+        if self.room_context is not None:
+            self.room_context.egg_connected(connected)
 
 
 async def _once(text: str) -> AsyncIterator[str]:

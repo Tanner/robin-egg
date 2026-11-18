@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from .brain import server_url
 
-LOG = logging.getLogger("robin.room")
+LOG = logging.getLogger("robin.context")
 
 MAX_VALUE_CHARS = 200  # robin-assistant refuses longer values
 
