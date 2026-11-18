@@ -142,6 +142,24 @@ curl http://localhost:8765/quiet             # "quiet was asked for until 3:30 P
 curl -X DELETE http://localhost:8765/quiet   # Robin may speak first again
 ```
 
+## Telling Robin about the room
+
+The server posts a few facts about the egg to robin-assistant's ambient context (`POST /api/context/:agent`). That stores a fact without waking Robin. Robin sees the live facts, each with the time it was posted, the next time it runs or answers.
+
+| Key | Value | Expires after |
+| --- | --- | --- |
+| `egg_connection` | `connected` or `disconnected` | 6 hours, posted again after about 5 while it still holds |
+| `egg_last_speaker` | Who last spoke to the egg: their robin-assistant name, or `Unknown Speaker`. The fact's own time says when. | 2 hours |
+| `egg_last_message` | What became of the last message Robin sent on its own, by id and task label: `message 124 (Dentist reminder) spoken`, `dropped, outside speaking hours`, `interrupted, the wake word interrupted it` and so on. | 1 hour |
+
+- Facts about the egg only. Nothing anyone said and none of Robin's words are posted.
+- A fact is posted only when it changes, because every change adds a block to the next turn of each chat on the robin-assistant side. A follow-up by the same person is the same conversation and is not posted again. A new conversation is, so the time moves on.
+- If the server dies without saying so, `egg_connection` can read `connected` for up to 6 hours before it expires. Its time shows how old it is.
+- Posting happens in the background. A robin-assistant that is down, slow or refusing only logs a warning. A failed `egg_connection` post is tried again every minute. The other two are not retried, since a late post would carry the wrong time.
+- robin-assistant keeps at most 20 facts per agent and refuses new keys beyond that. These are three of them.
+- `/announce` messages are not reported, only the ones Robin sent.
+- `--no-room-context` turns all of this off. It is not used with `--echo` or `--demo`.
+
 ## Saying it again
 
 Say the wake word, then "say that again", or just say it in the follow-up window. The egg repeats the last thing Robin said without asking robin-assistant, so it is quick and works while robin-assistant is down. "Repeat that", "what did you say", "what was that", "come again", "pardon" and "one more time" do the same, with or without "Robin", "please", "sorry" or "for me" around them. The phrase has to be the whole request: "repeat that song" still goes to Robin.
@@ -269,6 +287,7 @@ The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the
 | `--agent-name` | required | The robin-assistant agent to ask: its folder name under `~/.robin/agents/`. Not needed with `--echo`. |
 | `--robin-announcements`, `--no-robin-announcements` | on | Speak the messages Robin sends on its own. Not used with `--echo`. |
 | `--proactive-sound FILE` | `sounds/proactive.flac` | The sound before Robin speaks first: wav, aiff or flac. |
+| `--room-context`, `--no-room-context` | on | Tell Robin facts about the room: whether the egg is connected, who last spoke to it, and what became of Robin's last own message. Never what anyone said. Not used with `--echo` or `--demo`. |
 | `--urgent-sound FILE` | `sounds/urgent.flac` | The sound before an urgent message, in place of the proactive sound: wav, aiff or flac. |
 | `--speaking-hours` | `8-20` | When Robin may speak first, its own messages and `/announce`. `0-24` for always. Urgent messages are spoken at any hour. |
 | `--quiet-state` | `~/.robin-egg/quiet.json` | Where a pause asked for by voice ("quiet for an hour") is kept, so a restart does not end it early. |
@@ -305,6 +324,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
 - Quiet by voice. The phrases have only been matched against typed transcripts, not what Whisper writes for real speech from the egg's mic, such as how it spells times ("7 p.m.", "7:30", "seven thirty").
+- Room facts. The posts have only met the fake robin-assistant, not the real `/api/context` route, and nobody has yet read how Robin uses them in a real answer. Whether a Wi-Fi blip on the real egg makes `egg_connection` flap between `disconnected` and `connected` is unknown.
 - "Say that again". The phrases were chosen by guess, not from what Whisper hears through the egg's mic, so a short one such as "pardon" may be transcribed as something else and go to Robin. Whether a repeated long reply plays cleanly on the egg is also untested.
 - Urgent messages. The urgent cue has not been heard on the egg's speaker, or by the cat. Nothing sends `"priority": "urgent"` yet except `/announce?priority=urgent`, so the speaker stream path has only met the fake robin-assistant.
 - Asking again. The limits are Whisper's own, not chosen from speech recorded on the egg. On the Mac, clear synthetic speech scored `logprob` −0.31, and noise that Whisper turned into "You" scored `no-speech` 0.90 and was caught, but reversed speech scored `logprob` −0.54 and passed. Check the "Heard" lines from real use before trusting the defaults.
@@ -328,6 +348,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/confidence.py` | How sure speech-to-text was, and the limits for asking again |
 | `robin_egg_server/hosted_tts.py` | The OpenAI voice, and the fallback to Piper when it fails or is slow |
 | `robin_egg_server/speaker_stream.py` | robin-assistant's speaker stream: Robin's own messages, with reconnects |
+| `robin_egg_server/room_context.py` | The facts about the room posted to robin-assistant's ambient context |
 | `robin_egg_server/presence.py` | Whether anyone is likely in the room: the last voice turn, until there is a sensor |
 | `robin_egg_server/brain.py` | Robin through robin-assistant, the echo brain, markdown stripping and sentence splitting |
 | `robin_egg_server/speakers.py` | Speaker embeddings, the voiceprint store, and matching a voice to a person |
@@ -347,6 +368,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/conftest.py` | Runs every test at noon, so quiet hours do not depend on when the tests run |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
 | `tests/test_quiet.py` | Quiet by voice: the phrases, the pause and its file, and the pause through the fake egg |
+| `tests/test_room_context.py` | The room facts, alone and through the fake egg, against the fake robin-assistant |
 | `tests/test_mic_mute.py` | Muting the fake egg's microphone: dropped messages, `/announce`, the option, a missing switch, reconnects |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |
 | `tests/test_repeat.py` | "Say that again", alone and through the fake egg |

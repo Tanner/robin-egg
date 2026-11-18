@@ -47,6 +47,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--default-speaker-name", help=argparse.SUPPRESS)
     p.add_argument("--robin-announcements", action=argparse.BooleanOptionalAction, default=True, help="Speak the messages Robin sends on its own, such as reminders and scheduled tasks, after a chime and within --speaking-hours (default on; not used with --echo)")
     p.add_argument("--proactive-sound", metavar="FILE", help="Sound to play before each message Robin sends on its own (wav, aiff or flac). Default: the egg's own proactive chime")
+    p.add_argument("--room-context", action=argparse.BooleanOptionalAction, default=True, help="Tell Robin facts about the room: whether the egg is connected, who last spoke to it and when, and what became of the last message Robin sent on its own. Never what anyone said (default on; not used with --echo)")
     p.add_argument("--urgent-sound", metavar="FILE", help="Sound to play before an urgent message instead (wav, aiff or flac). Default: the egg's own urgent cue")
     p.add_argument("--server-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
@@ -226,6 +227,13 @@ async def run(args: argparse.Namespace) -> None:
         await web.start("0.0.0.0", args.http_port, ip)
         LOG.info("Proactive speech: curl -d 'Hello from Robin' %s/announce", web.base_url)
         LOG.info("Quiet mode: curl %s/quiet shows it, and curl -X DELETE %s/quiet ends it", web.base_url, web.base_url)
+        if not args.echo and args.room_context:
+            from .room_context import ContextClient, RoomContext
+
+            robin.room_context = RoomContext(ContextClient(args.server, args.agent_name))
+            LOG.info("Telling Robin facts about the room at %s", robin.room_context.client.endpoint)
+        elif not args.echo:
+            LOG.info("Not telling Robin facts about the room (--no-room-context)")
         stop = asyncio.Event()
         listener = None
         if not args.echo and args.robin_announcements:
@@ -245,6 +253,8 @@ async def run(args: argparse.Namespace) -> None:
                 with contextlib.suppress(asyncio.CancelledError):
                     await listener
             await web.stop()
+            if robin.room_context is not None:
+                await robin.room_context.close()
     finally:
         if hasattr(robin.brain, "close"):
             await robin.brain.close()
