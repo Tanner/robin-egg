@@ -66,7 +66,7 @@ def test_a_question_from_robin_can_be_answered_without_the_wake_word(caplog):
     assert "Spoke message 124" in caplog.text
 
 
-def test_silence_after_a_question_closes_quietly(caplog):
+def test_silence_after_a_question_closes_with_the_silent_error_when_the_closing_sound_is_off(caplog):
     brain = SlowBrain([], pause=0)
 
     async def nobody_has_spoken(egg, robin, tts, handled):
@@ -76,7 +76,7 @@ def test_silence_after_a_question_closes_quietly(caplog):
     go = asyncio.Event()
     scenario = after_the_opening_run(go, runs=2)
     with caplog.at_level(logging.INFO, logger="robin"):
-        egg, robin, tts = asyncio.run(egg_with_speaker([[until(go), message(5, QUESTION)]], [], [], brain, Options(speaking_hours=(0, 24)), nobody_has_spoken))
+        egg, robin, tts = asyncio.run(egg_with_speaker([[until(go), message(5, QUESTION)]], [], [], brain, Options(speaking_hours=(0, 24), closing_cue=False), nobody_has_spoken))
     answer = egg.runs[1]
     # The firmware shows no error LED for this code, and nothing is spoken.
     assert [d["code"] for t, d in answer.events if t == pb.VOICE_ASSISTANT_ERROR] == ["stt-no-text-recognized"]
@@ -84,7 +84,7 @@ def test_silence_after_a_question_closes_quietly(caplog):
     assert pb.VOICE_ASSISTANT_TTS_START not in answer.types() and pb.VOICE_ASSISTANT_INTENT_PROGRESS not in answer.types()
     assert FAILED_TURN not in tts.said and len(tts.said) == 2  # only the message's two sentences
     assert brain.heard == []
-    assert "Nobody spoke; closing quietly" in caplog.text
+    assert "Nobody spoke; closing without a reply" in caplog.text
     assert robin.last_match is None  # an answer never inherits an earlier conversation's speaker
     assert not [r for r in caplog.records if r.name.startswith("robin") and r.levelno >= logging.WARNING]
 
