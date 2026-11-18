@@ -53,8 +53,7 @@ Tanner listed this without a fixed meaning. The working definition is any way to
 - **What counts as urgent.** Robin's judgement per task, guided by the tool description. Needs real use to see whether it over-marks, since an urgent message can wake the house.
 - **Presence gating.** Only chime when someone is in the room. If nobody is there, text. A stand-in exists until there is a sensor: with `--presence-minutes N` the server speaks Robin's own messages only if someone spoke to the egg in the last N minutes, and drops them otherwise (`server/robin_egg_server/presence.py`). It is off by default. Still open: what N should be, whether a dropped message should light the ring or go out as a text instead, and replacing the guess with the mmWave sensor or the firmware's voice-direction sensor behind the same `Presence` interface. An urgent message skips this check.
 - **Quiet hours** and a do-not-disturb state. Speaking hours are the quiet hours today, and an urgent message is spoken through them. Whether a do-not-disturb state should also hold back urgent messages is open.
-- **LED language.** What listening, thinking, speaking, muted and "message waiting" look like on the ring.
-- **Message waiting.** A silent light that means "ask me what's new" may beat a chime.
+- **LED language.** What listening, thinking, speaking and muted look like on the ring. Message waiting is decided: see [decisions.md](decisions.md). Its look on the real ring is still unseen.
 
 ## Presence detection
 

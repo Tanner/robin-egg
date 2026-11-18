@@ -24,6 +24,9 @@ from .audio import MIC_RATE, resample
 from .mic_mute import MUTE_OBJECT_ID
 
 PROTO_TO_TYPE = {v: k for k, v in MESSAGE_TYPE_TO_PROTO.items()}
+RING_KEY = 77
+RING_EFFECTS = ["Breathe", "Twinkle", "Comet CW", "Comet CCW"]
+RING_AT_BOOT = {"on": False, "brightness": 1.0, "effect": "None"}  # restore_mode RESTORE_DEFAULT_OFF
 CHUNK = 1024  # bytes of mic audio per message, 32 ms
 MUTE_KEY = 0x4D555445  # the fake's entity key for the mute switch; the server must not depend on it
 
@@ -89,6 +92,8 @@ class FakeEgg:
         self.announce_seconds = announce_seconds  # how long each announcement "plays" before it is reported finished
         self.announcing = asyncio.Event()  # set while an announcement plays
         self._announce_cut = asyncio.Event()
+        self.ring = dict(RING_AT_BOOT)  # the "LED Ring" light: on, brightness, effect
+        self.ring_commands: list[dict] = []  # every light command received, as the fields it set
         self.done = asyncio.Event()
         self.mute_switch = mute_switch  # False for firmware with no "Microphone Mute" switch
         self.muted = muted
@@ -147,11 +152,13 @@ class FakeEgg:
         elif isinstance(msg, pb.ListEntitiesRequest):
             if self.mute_switch:
                 self.send(pb.ListEntitiesSwitchResponse(object_id=MUTE_OBJECT_ID, key=MUTE_KEY, name="Microphone Mute"))
+            self.send(pb.ListEntitiesLightResponse(object_id="led_ring", key=RING_KEY, name="LED Ring", effects=RING_EFFECTS))
             self.send(pb.ListEntitiesDoneResponse())
         elif isinstance(msg, pb.SubscribeStatesRequest):
             self._states_subscribed = True
             if self.mute_switch:
                 self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=self.muted))
+            self._send_ring()
         elif isinstance(msg, pb.SubscribeVoiceAssistantRequest) and msg.subscribe:
             await asyncio.sleep(0.05)
             first = self.wake_words[0] if self.wake_words else None
@@ -163,6 +170,8 @@ class FakeEgg:
             await self._on_event(msg.event_type, {d.name: d.value for d in msg.data})
         elif isinstance(msg, pb.VoiceAssistantAnnounceRequest):
             asyncio.create_task(self._announce(msg))
+        elif isinstance(msg, pb.LightCommandRequest) and msg.key == RING_KEY:
+            self._on_ring_command(msg)
 
     async def _announce(self, msg) -> None:
         body = await asyncio.to_thread(self._get, msg.media_id)
@@ -190,6 +199,22 @@ class FakeEgg:
         self.muted = muted
         if self.mute_switch and self._states_subscribed and self._w is not None:
             self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=muted))
+
+    def _send_ring(self) -> None:
+        self.send(pb.LightStateResponse(key=RING_KEY, state=self.ring["on"], brightness=self.ring["brightness"], effect=self.ring["effect"]))
+
+    def _on_ring_command(self, msg) -> None:
+        """Like an ESPHome light: only the fields a command sets change, and the new state is reported back."""
+        change: dict = {}
+        if msg.has_state:
+            change["on"] = msg.state
+        if msg.has_brightness:
+            change["brightness"] = round(msg.brightness, 4)
+        if msg.has_effect:
+            change["effect"] = msg.effect
+        self.ring_commands.append(change)
+        self.ring.update(change)
+        self._send_ring()
 
     def wake(self) -> None:
         """Hear the wake word now, cutting off any announcement that is playing."""

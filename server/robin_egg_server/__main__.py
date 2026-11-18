@@ -26,6 +26,7 @@ LOG = logging.getLogger("robin")
 DEFAULT_PIPER_VOICE = Path(__file__).resolve().parent.parent / "voices" / "en_US-ryan-medium.onnx"
 DEFAULT_VOICEPRINTS = Path("~/.robin-egg/voiceprints.json").expanduser()
 DEFAULT_QUIET_STATE = Path("~/.robin-egg/quiet.json").expanduser()
+RING_FILE = Path("~/.robin-egg/ring-before-waiting.json").expanduser()
 # The same line as in server/README.md, run from server/.
 SPEAKER_MODEL_DOWNLOAD = (
     "mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx "
@@ -80,6 +81,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--quiet-hours", default="21-7", help="Hours when Robin speaks more quietly, replies and announcements alike, e.g. 21-7; off for never")
     p.add_argument("--quiet-volume", type=int, default=60, metavar="PERCENT", help="How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100 (default 60)")
     p.add_argument("--match-voice", action=argparse.BooleanOptionalAction, default=False, help="Also speak more quietly to someone who spoke quietly (default off until it is tried on the real egg)")
+    p.add_argument("--message-waiting", action=argparse.BooleanOptionalAction, default=True, help="Hold the messages Robin sends on its own outside --speaking-hours, breathe the egg's ring while any wait, and read them out to 'what did I miss?' (default on; off drops them)")
     p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -199,6 +201,8 @@ def build(args: argparse.Namespace):
         match_voice=args.match_voice,
         thinking_cue=args.thinking_cue,
         thinking_delay_s=args.thinking_delay,
+        message_waiting=args.message_waiting,
+        ring_file=RING_FILE,
     )
     if opts.thinking_cue and not opts.stream:
         LOG.info("The thinking sound is off, because it is carried in the streamed reply and --no-stream turns streaming off")

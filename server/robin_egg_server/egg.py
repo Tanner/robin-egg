@@ -46,6 +46,7 @@ from .speakers import Match, People, SpeakerId
 from .thinking import THINKING_CUE, ThinkingCue
 from .vad import ModelVad, make_vad
 from .voices import SpeechToText, TextToSpeech
+from .waiting import MessageWaiting, is_missed_question
 from .web import AudioServer
 
 LOG = logging.getLogger("robin.egg")
@@ -90,6 +91,8 @@ class Options:
     match_voice: bool = False  # also speak more quietly to someone who spoke quietly
     thinking_cue: bool = True  # a soft sound while Robin is slow to start answering; needs stream
     thinking_delay_s: float = 2.0  # how long after the end of speech before it starts
+    message_waiting: bool = True  # hold messages from outside speaking hours and show the waiting light
+    ring_file: Path | None = None  # where the ring's own state is kept while the waiting light is on
 
 
 @dataclass
@@ -156,6 +159,7 @@ class Robin:
         self.quiet = QuietMode(self.opts.quiet_state, morning_hour=self.opts.speaking_hours[0])
         self.urgent_sound = load_sound(self.opts.urgent_sound or URGENT_CHIME)
         self.thinking_sound = load_sound(THINKING_CUE)
+        self.waiting = MessageWaiting(self.opts.ring_file) if self.opts.message_waiting else None
         web.on_announce = self.announce
         web.on_quiet = self.quiet.http
 
@@ -297,6 +301,10 @@ class Robin:
             # Enrolment matches each sentence itself and asks again on a miss.
             if not enrolling and await self._ask_again_if_unsure(t, confidence, t0):
                 return
+            if self.waiting is not None and not enrolling and is_missed_question(heard):
+                await self._read_waiting(t, t0)
+                self.last_match = match
+                return
             # Mid-enrolment every turn is an answer to the enrolment, whatever it sounds like.
             quiet_step = None if enrolling else self.quiet.handle(heard)
             again = None if enrolling or quiet_step is not None else self.last_said.answer(heard)
@@ -384,6 +392,25 @@ class Robin:
         if t.cue is not None and t.cue.playing:
             # A turn that ends with no reply still has the end of the sound to play.
             self._playback_until = max(self._playback_until, t.play_end)
+
+    async def _read_waiting(self, t: Turn, t0: float) -> None:
+        """Answers "what did I miss?" with the messages held from outside speaking hours."""
+        say, held = self.waiting.read_out()
+        LOG.info("Asked what was missed: %d message%s waiting", len(held), "" if len(held) == 1 else "s")
+        await self._speak(_once(say), t.reply, turn=t, t0=t0)
+        LOG.info('Robin: "%s"', say)
+        # Someone may want to answer a message they just heard, so the mic reopens as it does after a reply.
+        await self._finish_reply(t, say, cont=bool(held) and self.opts.follow_up == "always")
+        self.last_said.remember(say)
+        self.waiting.mark_read(held)
+
+    def _held(self, msg: SpeakerMessage, refusal: str) -> bool:
+        """Keeps a message that speaking hours stopped, for "what did I miss?". False when it is to be dropped.
+
+        Only speaking hours hold a message. Quiet asked for by voice, a muted microphone and
+        an empty room still drop it.
+        """
+        return self.waiting is not None and refusal != self.quiet.reason() and self.waiting.hold(msg)
 
     def _reset_commands(self) -> None:
         if self.commands is not None:
@@ -627,9 +654,10 @@ class Robin:
     async def proactive(self, msg: SpeakerMessage) -> None:
         """A message Robin sent on its own: a chime, then the message, once the egg is idle.
 
-        Outside speaking hours, while someone has asked for quiet or the egg's microphone is
-        muted, or with nobody likely in the room when that is checked, it is dropped, not
-        saved for later, and so is one that waits too long for the egg. Messages that arrive
+        Outside speaking hours it is held for "what did I miss?" and the waiting light, or
+        dropped when message waiting is off. While someone has asked for quiet or the egg's
+        microphone is muted, or with nobody likely in the room when that is checked, it is
+        dropped, not saved for later, and so is one that waits too long for the egg. Messages that arrive
         together are spoken in order, one chime each. An urgent message is spoken at any
         hour, whoever is in the room, ahead of the messages already waiting, after the urgent
         cue. Quiet asked for by voice and a muted microphone still silence it: those are
@@ -637,6 +665,10 @@ class Robin:
         """
         with tagged(msg.tag):
             refusal = self._why_not_speak_first(msg.urgent)
+            if refusal and self._held(msg, refusal):
+                LOG.info('Held message %s for "what did I miss?": %s', msg.describe(), refusal)
+                self._message_outcome(msg, "held, outside speaking hours")
+                return
             if refusal:
                 LOG.info("Dropped message %s: %s", msg.describe(), refusal)
                 asked_for_quiet = refusal == self.quiet.reason()
@@ -699,6 +731,10 @@ class Robin:
                     self._message_outcome(msg, "dropped, it waited too long for the egg")
                     continue
                 refusal = self._why_not_speak_first(msg.urgent)
+                if refusal and self._held(msg, refusal):
+                    LOG.info('Held message %s for "what did I miss?" after it waited for the egg to be idle: %s', msg.describe(), refusal)
+                    self._message_outcome(msg, "held, speaking hours ended while it waited")
+                    continue
                 if refusal:
                     LOG.info("Dropped message %s after it waited for the egg to be idle: %s", msg.describe(), refusal)
                     asked_for_quiet = refusal == self.quiet.reason()
@@ -825,6 +861,8 @@ class Robin:
                 self.client = client
                 self._state.set()
                 self._egg_connected(True)
+                if self.waiting is not None:
+                    await self.waiting.attach(client)
                 client.subscribe_voice_assistant(
                     handle_start=self.handle_start,
                     handle_stop=self.handle_stop,
@@ -846,6 +884,8 @@ class Robin:
             finally:
                 self.client = None
                 self.mic_mute.reset()
+                if self.waiting is not None:
+                    self.waiting.detach()
                 self._state.set()
                 self._egg_connected(False)
                 self.last_match = None  # the next conversation starts fresh, whoever is in the room by then
