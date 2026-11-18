@@ -224,9 +224,10 @@ async def sse_events(lines: AsyncIterator[str]) -> AsyncIterator[tuple[str, dict
 _FENCE = re.compile(r"```.*?(?:```|$)", re.S)
 _IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
-_URL = re.compile(r"<?https?://\S+>?")
+# The space before a link goes with it, and the punctuation after it stays, so a sentence still ends.
+_URL = re.compile(r"[ \t]*<?https?://\S+?>?(?=[.,;:!?)]*(?:\s|$))")
 _LINE_MARK = re.compile(r"^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)", re.M)
-_EMPHASIS = re.compile(r"(\*\*|__|\*|~~)(?=\S)(.+?)(?<=\S)\1")
+_EMPHASIS = re.compile(r"(?<!\d)(\*\*|__|\*|~~)(?=\S)(.+?)(?<=\S)\1")  # *this*, but not 5*3*2
 _UNDERSCORE = re.compile(r"(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)")  # _this_, but not snake_case
 _TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}.*$", re.M)
 
@@ -247,6 +248,7 @@ def strip_markdown(text: str) -> str:
 
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])[\"')\]]*\s+|\n+")
+_TITLE = re.compile(r"\b(?:Mr|Mrs|Ms|Dr|Prof|St|vs)\.$")  # "Dr. Smith" is one sentence
 
 
 async def sentences(deltas: AsyncIterator[str], min_chars: int = 16) -> AsyncIterator[str]:
@@ -261,7 +263,7 @@ async def sentences(deltas: AsyncIterator[str], min_chars: int = 16) -> AsyncIte
         while True:
             cut = None
             for m in _SENTENCE_END.finditer(buf):
-                if m.end() >= min_chars:
+                if m.end() >= min_chars and not _TITLE.search(buf[: m.start()]):
                     cut = m.end()
                     break
             if cut is None:

@@ -17,6 +17,7 @@ import numpy as np
 import soundfile as sf
 
 from .audio import MIC_RATE
+from .confidence import Confidence, from_segments
 
 LOG = logging.getLogger("robin.voices")
 
@@ -45,11 +46,15 @@ class WhisperSTT:
             self._model = WhisperModel(self.model_name, device="cpu", compute_type="int8")
 
     def transcribe(self, pcm16: bytes) -> str:
+        return self.transcribe_with_confidence(pcm16)[0]
+
+    def transcribe_with_confidence(self, pcm16: bytes) -> tuple[str, Confidence | None]:
         self.load()
         audio = np.frombuffer(pcm16, dtype="<i2").astype(np.float32) / 32768.0
         assert MIC_RATE == 16000  # faster-whisper expects 16 kHz when given an array
         segments, _ = self._model.transcribe(audio, language=self.language, beam_size=1, vad_filter=True)
-        return " ".join(s.text.strip() for s in segments).strip()
+        segments = list(segments)
+        return " ".join(s.text.strip() for s in segments).strip(), from_segments(segments)
 
 
 class SayTTS:

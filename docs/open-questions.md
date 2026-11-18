@@ -48,10 +48,11 @@ Tanner listed this without a fixed meaning. The working definition is any way to
 
 ## Proactive pings
 
-- **Sound design.** Bird calls as chimes, with a robin's song as the signature. Do different calls mean different things, for example a reply ready, a reminder, something urgent? Keep the set small enough to learn.
-- **Speak or text.** The rule is text by default and speak when time-critical. Who decides per message, Robin or the egg server?
-- **Presence gating.** Only chime when someone is in the room. If nobody is there, text.
-- **Quiet hours** and a do-not-disturb state.
+- **Sound design.** Urgent messages have their own cue, the proactive phrase played twice; see [decisions.md](decisions.md). Still open: whether it reads as urgent on the real speaker without bothering the cat, and whether any other kind of message, such as a reply ready, deserves its own cue.
+- **Speak or text.** The rule is text by default and speak when time-critical. Robin marks a message urgent and the egg server acts on the mark. Still open: robin-assistant does not send the mark yet (proposed in [robin-chat-api.md](robin-chat-api.md)), and normal messages are all still spoken within speaking hours, not texted.
+- **What counts as urgent.** Robin's judgement per task, guided by the tool description. Needs real use to see whether it over-marks, since an urgent message can wake the house.
+- **Presence gating.** Only chime when someone is in the room. If nobody is there, text. A stand-in exists until there is a sensor: with `--presence-minutes N` the server speaks Robin's own messages only if someone spoke to the egg in the last N minutes, and drops them otherwise (`server/robin_egg_server/presence.py`). It is off by default. Still open: what N should be, whether a dropped message should light the ring or go out as a text instead, and replacing the guess with the mmWave sensor or the firmware's voice-direction sensor behind the same `Presence` interface. An urgent message skips this check.
+- **Quiet hours** and a do-not-disturb state. Speaking hours are the quiet hours today, and an urgent message is spoken through them. Whether a do-not-disturb state should also hold back urgent messages is open.
 - **LED language.** What listening, thinking, speaking, muted and "message waiting" look like on the ring.
 - **Message waiting.** A silent light that means "ask me what's new" may beat a chime.
 
@@ -59,7 +60,7 @@ Tanner listed this without a fixed meaning. The working definition is any way to
 
 - **Sensor.** LD2410-type mmWave is the candidate. Does it see through the printed shell, and does it disturb the mics or Wi-Fi?
 - **Wiring.** Which free XIAO pins. Not mapped yet.
-- **Where readings go.** robin-assistant's `/api/context` endpoint stores ambient facts with a TTL and fits this well.
+- **Where readings go.** robin-assistant's `/api/context` endpoint. The Robin Egg Server already posts there: `server/robin_egg_server/room_context.py` sends `egg_connection`, `egg_last_speaker` and `egg_last_message`, so a presence or sensor reading is one more key through the same client. Still open: each agent holds at most 20 facts and every changed value adds a block to the next chat turn, so a reading that moves often (temperature, presence flicker) needs rounding or a minimum interval before it is posted. Untried against the real robin-assistant.
 - **What presence is for.** Gating chimes, greeting, knowing who is home. Agree the uses before adding the part.
 - **Is the HomeView or HomeKit already a presence source** we can read instead?
 - **Temperature and light.** SHT4x and VEML7700. The speaker amp and ESP32 warm the shell, so a temperature sensor inside may read high.

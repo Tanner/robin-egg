@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import whoami
 from .speakers import Match, People, Person, Thresholds, VoiceprintStore, scores
 
 LOG = logging.getLogger("robin.commands")
@@ -132,6 +133,8 @@ class VoiceCommands:
                 return await self._start_enrolment(match)
             if is_command(heard, FORGET_PHRASE):
                 return await self._start_forget(match)
+            if whoami.asked(heard):
+                return Step(whoami.answer(match, await self.people.current(), set(self.store.prints), self.thresholds), False)
             return None
         if flow.kind == "forget":
             return self._answer_forget(flow, heard)
@@ -264,6 +267,10 @@ class VoiceCommands:
         if match.key is None:
             LOG.info("Forget requested but the speaker is not recognised; nothing to forget")
             return Step("I don't know whose voice this is, so there's nothing to forget.", False)
+        if match.inherited:
+            # Carried over from the last turn, so it may be someone else answering. Enrolment ignores these too.
+            LOG.info("Forget requested in a follow-up too short to tell who is speaking; asking them to start again")
+            return Step("I'm not sure whose voice this is. Say the wake word, then 'forget my voice'.", False)
         name = _name_of(match.key, await self.people.current() or [])
         self._flow = _Flow("forget", person=Person(match.key, name))
         LOG.info("Forget requested by %s; asking for confirmation", match.key)

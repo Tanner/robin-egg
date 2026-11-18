@@ -18,7 +18,7 @@ import pytest
 from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.__main__ import build, log_enrolment, parse_args
-from robin_egg_server.brain import QuietTurn, RobinBrain, RobinUnavailable, server_url, strip_markdown
+from robin_egg_server.brain import QuietTurn, RobinBrain, RobinUnavailable, sentences, server_url, strip_markdown
 from robin_egg_server.speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from robin_egg_server.egg import FAILED_TURN, NO_REPLY, Options
 from test_server import FakeSTT, ToneTTS, converse, speech
@@ -60,6 +60,8 @@ class FakeRobinAssistant:
         self.speaker_connects: list[float] = []  # when each speaker-stream request arrived
         self.users_reply: tuple[int, dict] = (200, {"users": []})
         self.users_hang = False  # accept GET /api/users and never answer it
+        self.context_posts: list[dict] = []  # each POST /api/context/:agent body: key, value and ttl
+        self.context_reply: tuple[int, dict] = (200, {"ok": True})
         self.triggers: list[dict] = []  # every POST /api/trigger/:agent: the agent, the JSON body, and the status answered
         self.trigger_reply: tuple[int, dict] = (202, {"ok": True})
         self._release = asyncio.Event()
@@ -103,6 +105,13 @@ class FakeRobinAssistant:
                 self.triggers.append({"agent": request_line.split()[1].rsplit("/", 1)[1], "body": json.loads(body), "status": status})
                 answer = json.dumps(payload).encode()
                 writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(answer)}\r\nConnection: close\r\n\r\n".encode() + answer)
+                await writer.drain()
+                return
+            if request_line.startswith("POST /api/context/"):
+                self.context_posts.append(json.loads(body))
+                status, payload = self.context_reply
+                body = json.dumps(payload).encode()
+                writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode() + body)
                 await writer.drain()
                 return
             if self.status != 200:
@@ -337,7 +346,7 @@ def test_strip_markdown_leaves_plain_spoken_words():
         "Bring the forms",
         "Time, What",
         "3 PM, Gym",
-        "More at",
+        "More at.",
     ]
     assert strip_markdown("It's 3*4 = 12, a snake_case name.") == "It's 3*4 = 12, a snake_case name."
 
@@ -531,3 +540,24 @@ def test_startup_names_who_is_enrolled(tmp_path, caplog):
     assert "Voiceprints loaded for tanner; not enrolled: ryan" in caplog.text
     assert "No voiceprints loaded yet; not enrolled: ryan" in caplog.text
     assert "No people list from robin-assistant yet, so nobody is identified until it arrives" in caplog.text
+
+
+def test_a_link_at_the_end_of_a_sentence_leaves_its_full_stop():
+    assert strip_markdown("The form is at https://example.com/form. Fill it in today.") == "The form is at. Fill it in today."
+    assert strip_markdown("See <https://example.com>, then call me.") == "See, then call me."
+    assert strip_markdown("Read https://example.com/a?b=1 first") == "Read first"
+
+
+def test_multiplication_is_not_taken_for_emphasis():
+    assert strip_markdown("That is 5*3*2 in all, and *that* is a lot.") == "That is 5*3*2 in all, and that is a lot."
+
+
+def test_a_title_does_not_end_a_sentence():
+    async def collect(text: str) -> list[str]:
+        async def gen():
+            yield text
+        return [s async for s in sentences(gen())]
+
+    assert asyncio.run(collect("I spoke to Dr. Smith about it today. She agreed with Mrs. Jones.")) == [
+        "I spoke to Dr. Smith about it today.", "She agreed with Mrs. Jones.",
+    ]

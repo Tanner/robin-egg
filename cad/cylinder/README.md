@@ -30,6 +30,41 @@ Same as the egg ([hardware table](../egg/README.md#hardware)), except there is n
 - 3 × M2 × 6 self-tapping screws, board to standoffs
 - 3 rubber feet
 
+## Assembly
+
+Directions: the **front** is the side with the small key tab on the body's top lip. The **back** is the side with the USB-C notch, opposite it. **Right** (+x) is the right-hand side when you face the front.
+
+Also on hand: foam tape or silicone for the ledge, hot glue, and a loose handful of polyester fill.
+
+1. **Inserts.** Turn the body upside down. Press the 4 M3 heat-set inserts into the 4 holes around the big speaker hole, using a soldering iron.
+2. **Speaker.**
+   - Solder the JST pigtail to the speaker, red to +.
+   - With the body still upside down, set the speaker over the big hole, cone facing you and magnet down into the body.
+   - Line its 4 corner holes up with the 4 small holes and fix it with the 4 M3 × 8 screws.
+3. **Fill.** Turn the body upright. Loosely fill the chamber with polyester fill through the open top. Keep it loose.
+4. **Chassis.**
+   - Put foam tape or a bead of silicone on the ledge inside the body.
+   - Thread the speaker pigtail up through the chassis's wire hole.
+   - Drop the chassis onto the ledge, standoffs up. Turn it so the **single standoff points to the front and the pair to the back**. Only one of the three ways its screw holes line up is right, so check this.
+   - Fix it with the 3 M2.5 × 8 screws.
+   - Seal the wire hole with hot glue. The speaker box only works if it is airtight.
+5. **Base.**
+   - Set the body on the base so the 4 posts meet the 4 inserts. The cone sits under the speaker.
+   - Screw them together from underneath with the 4 M3 × 25 screws.
+   - Stick the 3 rubber feet in their recesses.
+6. **Board.**
+   - Plug the speaker into the board's JST socket first. The bay under the board is only 10 mm deep, so it is hard to reach afterwards.
+   - Set the board on the standoffs, LED side up, with the XIAO's USB-C port facing the USB-C notch at the back.
+   - Fix it with the 3 M2 × 6 screws.
+7. **Top.**
+   - Line up the slot inside the top's rim with the key tab at the front, and push it straight down.
+   - That puts the mic holes over the mics, the mute tab on the right and the USB-C pocket at the back.
+8. **USB-C.** Plug the cable into the port at the back.
+
+To open it: unplug the USB-C cable, then pull the top straight up.
+
+**Check the mute tab.** Press the flexing tab on the right side. The mute LED should go red. If the board resets instead, mute is the other button. Set `MUTE_SIDE = -1` in `robin_cylinder.py`, run it, and reprint only the top.
+
 ## Fit checks run
 
 `check_cylinder.py` checks the parts against Seeed's board model and a DMA70-4 envelope.
