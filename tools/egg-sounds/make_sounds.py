@@ -1,5 +1,5 @@
-"""Make the egg's four cues: the listening sound, the sound before a proactive message,
-the sound before an urgent one, and the thinking sound.
+"""Make the egg's five cues: the listening sound, the sound before a proactive message,
+the sound before an urgent one, the thinking sound, and the ready sound.
 
 All are the robin's "cheer-up" phrase played on a soft struck bell, like a celesta,
 at about a third of a robin's pitch. Listening is the falling step. A proactive message
@@ -8,13 +8,14 @@ An urgent message is the proactive phrase played twice. It insists by repeating,
 being louder, higher or faster: the same notes, level and pace.
 Thinking is the listening notes an octave lower, rocking slowly upward and never settling.
 It is a loop, and quieter than the others because it repeats for as long as Robin takes.
+Ready is the home chord, E-flat, G and B-flat struck together, played when the server connects to the egg.
 
 Usage, from the repository root (needs ffmpeg for the FLAC files):
 
     python3 tools/egg-sounds/make_sounds.py
 
-Writes firmware/sounds/wake_word_triggered.flac, and proactive.flac, urgent.flac and thinking.flac in
-server/robin_egg_server/sounds/.
+Writes firmware/sounds/wake_word_triggered.flac, and proactive.flac, urgent.flac, thinking.flac and ready.flac
+in server/robin_egg_server/sounds/.
 """
 
 import math
@@ -35,6 +36,7 @@ OUTPUTS = {
     "proactive": REPO / "server/robin_egg_server/sounds/proactive.flac",
     "urgent": REPO / "server/robin_egg_server/sounds/urgent.flac",
     "thinking": REPO / "server/robin_egg_server/sounds/thinking.flac",
+    "ready": REPO / "server/robin_egg_server/sounds/ready.flac",
 }
 
 # (frequency ratio, level, how long it rings relative to the fundamental)
@@ -42,11 +44,13 @@ CELESTA = [(1.0, 1.0, 1.0), (2.0, 0.22, 0.45), (3.0, 0.06, 0.25), (4.07, 0.05, 0
 
 C6, AS5, DS6 = 1046.5, 932.3, 1244.5
 AS4, C5 = AS5 / 2, C6 / 2
+EB5, G5, BB5 = 622.25, 783.99, 932.33
 CUES = {
     "listening": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.8, 1.0)],
     "proactive": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.4, 1.0), (0.33, DS6, 0.9, 1.0)],
     "urgent": [(0.00, C6, 0.35, 0.9), (0.15, AS5, 0.4, 1.0), (0.33, DS6, 0.6, 1.0),
                (0.80, C6, 0.35, 0.9), (0.95, AS5, 0.4, 1.0), (1.13, DS6, 0.9, 1.0)],
+    "ready": [(0.00, EB5, 1.3, 0.8), (0.00, G5, 1.2, 0.7), (0.00, BB5, 1.1, 0.65)],
 }
 THINKING = [(0.00, AS4, 0.9, 1.0), (1.00, C5, 0.9, 0.85)]
 
