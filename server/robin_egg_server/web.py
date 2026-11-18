@@ -1,7 +1,8 @@
 """A tiny HTTP server on the Mac mini, with no dependencies.
 
 GET  /audio/<id>.flac  the egg's media player fetches replies here, while they are still being written
-POST /announce         body is text; Robin speaks it on the egg (proactive speech)
+POST /announce         body is text; Robin speaks it on the egg (proactive speech).
+                       ?priority=urgent speaks it outside speaking hours, after the urgent cue
 GET  /quiet            whether someone has asked Robin by voice not to speak first, and until when
 DELETE /quiet          ends that, so Robin may speak first again
 GET  /                 a one-line health check
@@ -15,6 +16,7 @@ import logging
 import uuid
 from collections import OrderedDict
 from typing import Awaitable, Callable
+from urllib.parse import parse_qs
 
 from .audio import ReplyAudio
 from .logs import current_tag, tagged
@@ -29,7 +31,7 @@ class AudioServer:
         self._audio: OrderedDict[str, tuple[ReplyAudio, str]] = OrderedDict()  # with the log tag of the turn it belongs to
         self._keep = keep
         self._server: asyncio.base_events.Server | None = None
-        self.on_announce: Callable[[str], Awaitable[tuple[int, str]]] | None = None
+        self.on_announce: Callable[..., Awaitable[tuple[int, str]]] | None = None  # (text, urgent=False)
         self.on_quiet: Callable[[str], Awaitable[tuple[int, str]]] | None = None  # called with GET or DELETE
 
     def add(self, audio: ReplyAudio, tag: str | None = None) -> str:
@@ -65,7 +67,7 @@ class AudioServer:
                 headers[k.strip().lower()] = v.strip()
             if len(request) < 2:
                 return
-            method, path = request[0], request[1].split("?")[0]
+            method, (path, _, query) = request[0], request[1].partition("?")
             is_audio = method in ("GET", "HEAD") and path.startswith("/audio/") and path.endswith(".flac")
             audio, tag = self._audio.get(path[len("/audio/") : -len(".flac")], (None, "")) if is_audio else (None, "")
             with tagged(tag):
@@ -87,7 +89,11 @@ class AudioServer:
                 if not text or self.on_announce is None:
                     await self._reply(w, 400, "send the words to speak as the request body\n")
                     return
-                status, msg = await self.on_announce(text)
+                priority = parse_qs(query).get("priority", ["normal"])[-1]
+                if priority not in ("normal", "urgent"):
+                    await self._reply(w, 400, "priority is normal or urgent\n")
+                    return
+                status, msg = await self.on_announce(text, urgent=priority == "urgent")
                 await self._reply(w, status, msg + "\n")
             elif method in ("GET", "DELETE") and path == "/quiet" and self.on_quiet is not None:
                 status, msg = await self.on_quiet(method)

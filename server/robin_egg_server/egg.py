@@ -47,6 +47,7 @@ LOG = logging.getLogger("robin.egg")
 
 ZERO_PSK = base64.b64encode(bytes(32)).decode()  # formatBCE: encryption on, no key set yet
 PROACTIVE_CHIME = Path(__file__).parent / "sounds" / "proactive.flac"  # made by tools/egg-sounds
+URGENT_CHIME = Path(__file__).parent / "sounds" / "urgent.flac"  # the cue before an urgent message
 NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 # After a reply that asked for a follow-up, how long past its end to wait for the egg to reopen its mic.
@@ -72,6 +73,7 @@ class Options:
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
     quiet_state: Path | None = None  # where a "quiet for an hour" pause is kept across restarts; in memory only if None
+    urgent_sound: Path | None = None  # played before an urgent message instead; URGENT_CHIME if None
     unsure_retries: int = 1  # times in a row to ask for a repeat when speech-to-text is unsure; 0 never asks
     confidence: ConfidenceLimits = field(default_factory=ConfidenceLimits)
     quiet_hours: tuple[int, int] | None = (21, 7)  # replies and announcements are quieter in this window
@@ -128,7 +130,9 @@ class Robin:
         self._playback_until = 0.0  # when the egg should finish playing the last reply
         self._state = asyncio.Event()  # set whenever the egg may have become idle
         self._speaker_lock = asyncio.Lock()  # one announcement at a time
-        self._proactive_queue: asyncio.Queue[SpeakerMessage] = asyncio.Queue()
+        # Urgent messages first, then arrival order: (0 if urgent else 1, arrival number, message).
+        self._proactive_queue: asyncio.PriorityQueue[tuple[int, int, SpeakerMessage]] = asyncio.PriorityQueue()
+        self._proactive_count = 0
         self._proactive_worker: asyncio.Task | None = None
         self._proactive_task: asyncio.Task | None = None  # the message being spoken now
         self._proactive_stopped_by = ""  # why the message being spoken was cut short
@@ -136,6 +140,7 @@ class Robin:
         self._answering: str | None = None  # the message the egg's next run answers, as the log names it
         self.proactive_sound = load_sound(self.opts.proactive_sound or PROACTIVE_CHIME)
         self.quiet = QuietMode(self.opts.quiet_state, morning_hour=self.opts.speaking_hours[0])
+        self.urgent_sound = load_sound(self.opts.urgent_sound or URGENT_CHIME)
         web.on_announce = self.announce
         web.on_quiet = self.quiet.http
 
@@ -470,33 +475,36 @@ class Robin:
         start, end = self.opts.speaking_hours
         return f"{start}:00 to {end}:00"
 
-    def _why_not_speak_first(self) -> str | None:
+    def _why_not_speak_first(self, urgent: bool = False) -> str | None:
         """Why Robin may not speak first right now, or None when it may.
 
         The one place that decides it, for Robin's own messages and /announce alike. Whether
         the egg is free to play something this second is a separate question: _busy_reason.
+        An urgent message is not held to speaking hours. Quiet asked for by voice still
+        silences it, as a muted microphone does: that is someone's own choice.
         """
-        if not self._in_speaking_hours():
+        if not urgent and not self._in_speaking_hours():
             return f"outside speaking hours ({self._hours()})"
         return self.quiet.reason()
 
-    async def _announcement(self, text: str, chime: bool = False) -> ReplyAudio:
+    async def _announcement(self, text: str, chime: bool = False, urgent: bool = False) -> ReplyAudio:
         """The whole announcement as one finished file, spoken sentence by sentence.
 
-        A chime first, so Robin speaking unprompted does not startle anyone.
+        A chime first, so Robin speaking unprompted does not startle anyone. An urgent
+        announcement gets the urgent cue in its place.
         """
         reply = ReplyAudio()
         reply.gain = self.room.for_announcement()
         if chime:
-            await reply.push(self.proactive_sound, REPLY_RATE, gap_s=0.2)
+            await reply.push(self.urgent_sound if urgent else self.proactive_sound, REPLY_RATE, gap_s=0.2)
         await self._speak(_once(text), reply)
         await reply.close()
         return reply
 
-    async def announce(self, text: str) -> tuple[int, str]:
+    async def announce(self, text: str, urgent: bool = False) -> tuple[int, str]:
         if self.client is None:
             return 503, "the egg is not connected"
-        refusal = self._why_not_speak_first()
+        refusal = self._why_not_speak_first(urgent)
         if refusal:
             LOG.info('Not announcing "%s": %s', text, refusal)
             return 409, f"{refusal}; not spoken"
@@ -507,9 +515,9 @@ class Robin:
         self._announce_count += 1
         with tagged(f"a{self._announce_count}"):
             async with self._speaker_lock:
-                reply = await self._announcement(text, chime=True)
+                reply = await self._announcement(text, chime=True, urgent=urgent)
                 url = self.web.add(reply)
-                LOG.info('Announcing: "%s"', text)
+                LOG.info('Announcing%s: "%s"', " as urgent" if urgent else "", text)
                 result = await self.client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480])
             LOG.info("Announcement finished (%s)", "spoken" if getattr(result, "success", True) else "the egg reported a failure")
         return 200, f"spoken ({getattr(result, 'success', result)})"
@@ -535,18 +543,23 @@ class Robin:
         Outside speaking hours, while someone has asked for quiet or the egg's microphone is
         muted, or with nobody likely in the room when that is checked, it is dropped, not
         saved for later. Messages that arrive
-        together are spoken in order, one chime each.
+        together are spoken in order, one chime each. An urgent message is spoken at any
+        hour, whoever is in the room, ahead of the messages already waiting, after the urgent
+        cue. Quiet asked for by voice and a muted microphone still silence it: those are
+        someone's own choice.
         """
         with tagged(msg.tag):
-            refusal = self._why_not_speak_first()
+            refusal = self._why_not_speak_first(msg.urgent)
             if refusal:
                 LOG.info("Dropped message %s: %s", msg.describe(), refusal)
                 return
+            if msg.urgent and not self._in_speaking_hours():
+                LOG.info("Message %s is urgent, so it is spoken outside speaking hours (%s)", msg.describe(), self._hours())
             if self._mic_muted():
                 LOG.info("Dropped message %s: the egg's microphone is muted", msg.describe())
                 return
             # A turn under way may be the first sign of someone, so the check waits for it to end.
-            if not self._in_conversation() and (nobody := self._nobody_here()):
+            if not msg.urgent and not self._in_conversation() and (nobody := self._nobody_here()):
                 LOG.info("Dropped message %s: %s", msg.describe(), nobody)
                 return
             if self._proactive_task is not None and not self._proactive_task.done():
@@ -559,7 +572,8 @@ class Robin:
                 LOG.info("Queued message %s until the egg is idle: %s", msg.describe(), busy)
             else:
                 LOG.info("Speaking message %s now", msg.describe())
-        self._proactive_queue.put_nowait(msg)
+        self._proactive_count += 1
+        self._proactive_queue.put_nowait((0 if msg.urgent else 1, self._proactive_count, msg))
         if self._proactive_worker is None or self._proactive_worker.done():
             self._proactive_worker = asyncio.create_task(self._speak_proactive_messages())
 
@@ -571,19 +585,29 @@ class Robin:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(self._state.wait(), 0.25)  # playback ends on a clock, not an event
 
+    async def _next_proactive(self) -> SpeakerMessage:
+        """The message to speak next, once the egg is idle.
+
+        The choice is made after the wait, so an urgent message that arrives while the
+        egg is busy goes ahead of the one that was waiting for it.
+        """
+        entry = await self._proactive_queue.get()
+        await self._until_idle()
+        self._proactive_queue.put_nowait(entry)
+        return self._proactive_queue.get_nowait()[2]
+
     async def _speak_proactive_messages(self) -> None:
         while True:
-            msg = await self._proactive_queue.get()
+            msg = await self._next_proactive()
             with tagged(msg.tag):  # the speaking task started here keeps the tag
-                await self._until_idle()
-                refusal = self._why_not_speak_first()
+                refusal = self._why_not_speak_first(msg.urgent)
                 if refusal:
                     LOG.info("Dropped message %s after it waited for the egg to be idle: %s", msg.describe(), refusal)
                     continue
                 if self._mic_muted():
                     LOG.info("Dropped message %s: the egg's microphone was muted while it waited", msg.describe())
                     continue
-                if nobody := self._nobody_here():
+                if not msg.urgent and (nobody := self._nobody_here()):
                     LOG.info("Dropped message %s: %s once the egg was idle", msg.describe(), nobody)
                     continue
                 self._proactive_stopped_by = ""
@@ -600,7 +624,7 @@ class Robin:
             LOG.info("Dropped message %s: nothing to say once markdown is stripped", msg.describe())
             return
         async with self._speaker_lock:
-            reply = await self._announcement(text, chime=True)
+            reply = await self._announcement(text, chime=True, urgent=msg.urgent)
             client = self.client
             if client is None:
                 LOG.info("Dropped message %s: the egg disconnected before it could be spoken", msg.describe())
