@@ -113,6 +113,7 @@ class ReplyAudio:
         self.live = bytearray()  # bytes as streamed, header left as first written
         self.final: bytes | None = None  # the complete file, header filled in
         self.seconds = self.LEAD_S
+        self.gain = 1.0  # scales everything pushed from now on; see room.py
         self._cond = asyncio.Condition()
 
     @property
@@ -126,7 +127,7 @@ class ReplyAudio:
         del buf
 
     async def push(self, samples: np.ndarray, rate: int, gap_s: float = 0.12) -> None:
-        out = np.clip(resample(samples, rate, REPLY_RATE), -1.0, 1.0)
+        out = np.clip(resample(samples, rate, REPLY_RATE), -1.0, 1.0) * np.float32(self.gain)
         out = np.concatenate([out, np.zeros(int(gap_s * REPLY_RATE), dtype=np.float32)])
         self._sf.write(out)
         self.seconds += len(out) / REPLY_RATE

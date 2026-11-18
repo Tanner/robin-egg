@@ -28,8 +28,10 @@ from .brain import Brain, QuietTurn, sentences, strip_markdown
 from .commands import SPEAKER_ID_OFF, Step, VoiceCommands, is_voice_command
 from .logs import tagged
 from .presence import Presence, SpokenTo, absence
+from .room import RoomVolume
 from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
+from .vad import ModelVad, make_vad
 from .voices import SpeechToText, TextToSpeech
 from .web import AudioServer
 
@@ -53,16 +55,20 @@ class Options:
     follow_up: str = "always"  # always | questions | off
     follow_up_window_s: float = 5.0
     max_utterance_s: float = 30.0  # longest request before the mic closes mid-sentence
+    vad: str = "energy"  # what finds the end of speech: energy | model
     enrol_window_s: float = 10.0  # people need a moment to repeat an enrolment sentence
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
     presence_window_s: float | None = None  # Robin's own messages need someone in the room this recently; None = no check
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
+    quiet_hours: tuple[int, int] | None = (21, 7)  # replies and announcements are quieter in this window
+    quiet_volume: float = 0.6  # the gain in quiet hours and for a quiet voice
+    match_voice: bool = False  # also speak more quietly to someone who spoke quietly
 
 
 @dataclass
 class Turn:
-    vad: EnergyVad
+    vad: EnergyVad | ModelVad
     reply: ReplyAudio
     url: str
     wake_word: str | None
@@ -97,6 +103,7 @@ class Robin:
         self.opts = opts or Options()
         self.speakers, self.people, self.commands = speakers, people, commands
         self.presence: Presence = presence or SpokenTo()
+        self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
         self._turn_count = 0  # numbers the turns in the log
         self._announce_count = 0  # numbers the /announce calls in the log
@@ -157,7 +164,7 @@ class Robin:
         tag = f"t{self._turn_count}"
         reply = ReplyAudio()
         url = self.web.add(reply, tag)
-        self.turn = Turn(EnergyVad(cfg), reply, url, wake_word_phrase, follow_up, tag=tag)
+        self.turn = Turn(make_vad(self.opts.vad, cfg), reply, url, wake_word_phrase, follow_up, tag=tag)
         with tagged(self.turn.tag):
             if follow_up:
                 LOG.info("Follow-up to %s: listening for %.0f s", previous_turn.tag if previous_turn else "the last turn", cfg.no_speech_timeout_s)
@@ -222,6 +229,7 @@ class Robin:
                 LOG.info("Nobody spoke; closing quietly")
                 self._end_without_reply()
                 return
+            t.reply.gain = self.room.for_reply(bytes(t.audio))
             t0 = time.monotonic()
             (heard, stt_s), (match, id_s) = await asyncio.gather(self._transcribe(t), self._identify(t))
             LOG.info('Heard: "%s" (STT %.2f s, speaker %.2f s)', heard, stt_s, id_s)
@@ -331,6 +339,8 @@ class Robin:
         """
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         spoken: list[str] = []
+        if (begin_reply := getattr(self.tts, "begin_reply", None)) is not None:
+            begin_reply(reply)
 
         async def voice() -> None:
             first = True
@@ -399,6 +409,7 @@ class Robin:
         A chime first, so Robin speaking unprompted does not startle anyone.
         """
         reply = ReplyAudio()
+        reply.gain = self.room.for_announcement()
         if chime:
             await reply.push(self.proactive_sound, REPLY_RATE, gap_s=0.2)
         await self._speak(_once(text), reply)
