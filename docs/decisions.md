@@ -104,3 +104,11 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | Nothing is announced when speaking hours begin. The light is the only sign | A burst of old messages at 8 AM is the unprompted talking that gets a device unplugged |
 | The light is the firmware's own "LED Ring" light with its "Breathe" effect at 35% brightness, in the ring's existing colour, set over the ESPHome API | No firmware change. The firmware already hides that light during a conversation and brings it back when idle |
 | The ring's own state is saved to `~/.robin-egg/ring-before-waiting.json` while the waiting light is on, and put back from it | The light's brightness is also the level of every ring animation, so it must go back even if the server restarts in between |
+
+## Mute sounds, decided 2026-11-17
+
+| Decision | Why |
+| --- | --- |
+| The egg plays its own mute and unmute sounds, made by `tools/egg-sounds/make_sounds.py`, in place of the formatBCE ones | Every sound the egg makes should be in the same soft bell voice |
+| Mute steps down three notes to a low, muffled note. Unmute takes the same path back up and ends on the listening cue's first note | Down and closed reads as off, up and open as on. Three notes avoid the two-note rise that sounded like Siri |
+| They are set by overriding the `mute_switch_on_sound_file` and `mute_switch_off_sound_file` substitutions, not by changing the packages | The formatBCE packages stay as released, so updating `respeaker_ref` stays simple |
