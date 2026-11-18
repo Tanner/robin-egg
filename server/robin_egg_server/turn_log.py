@@ -18,7 +18,7 @@ A turn's line:
 A message's line:
 
   {"event": "message", "time": "...", "message": "m124", "fate": "spoken",
-   "urgent": false, "why": "", "queued_because": "the egg is in a conversation", "waited_s": 4.2}
+   "urgent": false, "low": false, "why": "", "queued_because": "the egg is in a conversation", "waited_s": 4.2}
 """
 
 from __future__ import annotations
@@ -157,6 +157,7 @@ class TurnLog:
                 "time": datetime.now().astimezone().isoformat(timespec="seconds"),
                 "message": msg.tag,
                 "urgent": bool(getattr(msg, "urgent", False)),
+                "low": bool(getattr(msg, "low", False)),
                 "fate": fate,
                 "why": why,
                 "queued_because": queued_because,
