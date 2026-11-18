@@ -64,6 +64,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 0-24 for always")
+    p.add_argument("--presence-minutes", type=float, metavar="N", help="Speak Robin's own messages only if someone spoke to the egg in the last N minutes, a stand-in for a presence sensor; otherwise drop them (default off; /announce is always spoken)")
     p.add_argument("--quiet-hours", default="21-7", help="Hours when Robin speaks more quietly, replies and announcements alike, e.g. 21-7; off for never")
     p.add_argument("--quiet-volume", type=int, default=60, metavar="PERCENT", help="How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100 (default 60)")
     p.add_argument("--match-voice", action=argparse.BooleanOptionalAction, default=False, help="Also speak more quietly to someone who spoke quietly (default off until it is tried on the real egg)")
@@ -73,6 +74,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = p.parse_args(argv)
     if args.default_speaker_name is not None:
         p.error('--default-speaker-name is gone: a voice the server cannot identify is now sent as "Unknown Speaker". Remove the flag.')
+    if args.presence_minutes is not None and args.presence_minutes <= 0:
+        p.error("--presence-minutes must be more than 0; leave it out to speak Robin's messages whether or not anyone is around")
     if args.tts_time_limit <= 0:
         p.error("--tts-time-limit must be more than 0 seconds")
     try:
@@ -148,6 +151,7 @@ def build(args: argparse.Namespace):
         max_utterance_s=args.max_utterance,
         vad=args.vad,
         speaking_hours=(start, end),
+        presence_window_s=args.presence_minutes * 60 if args.presence_minutes is not None else None,
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
         urgent_sound=Path(args.urgent_sound).expanduser() if args.urgent_sound else None,
@@ -211,6 +215,8 @@ async def run(args: argparse.Namespace) -> None:
             from .speaker_stream import SpeakerStream
 
             listener = asyncio.create_task(SpeakerStream(args.server, args.agent_name, robin.proactive).run(stop))
+            if args.presence_minutes is not None:
+                LOG.info("Robin's own messages are spoken only if someone spoke to the egg in the last %g minutes (--presence-minutes)", args.presence_minutes)
         elif not args.echo:
             LOG.info("Not listening for messages Robin sends on its own (--no-robin-announcements)")
         try:
