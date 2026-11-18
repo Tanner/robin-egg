@@ -412,7 +412,7 @@ A turn ends as one of:
 | Outcome | Meaning |
 | --- | --- |
 | `answered` | Robin replied. |
-| `nobody spoke` | The mic closed with no speech. After a wake word this is a likely false wake-up; after a follow-up it is only the window closing. |
+| `nobody spoke` | The mic closed with no speech. After a wake word this is a likely false wake-up; after a follow-up it is only the window closing. The console log says how loud the turn's audio got against the level speech starts at, or that every sample was zero, which means the egg sent digital silence. |
 | `nothing recognised` | There was sound, but speech-to-text found no words. |
 | `asked again` | Speech-to-text was unsure, so the egg asked for a repeat. |
 | `quiet` | Robin chose to say nothing. |

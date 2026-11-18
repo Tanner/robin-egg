@@ -57,3 +57,23 @@ def test_ordinary_speech_and_silence_end_as_before():
     assert listen(VadConfig(), 30).reason == "end of speech"
     assert listen(VadConfig(no_speech_timeout_s=5.0), 0).reason == "no speech heard"
     assert listen(VadConfig(no_speech_timeout_s=5.0), 2).reason == "no speech heard"
+
+
+def test_a_silent_turn_says_the_egg_sent_digital_silence():
+    from robin_egg_server.audio import describe_level
+
+    assert describe_level(bytes(MIC_RATE * 2 * 6), 300.0) == "Every sample was zero: the egg sent digital silence, so its microphone stream may be stuck"
+
+
+def test_a_quiet_turn_says_how_loud_it_got_against_the_speech_threshold():
+    from robin_egg_server.audio import describe_level
+
+    quiet = np.zeros(MIC_RATE, dtype="<i2")
+    quiet[9600:10080] = 120  # the 21st 30 ms frame, at RMS 120
+    assert describe_level(quiet.tobytes(), 300.0) == "The loudest 30 ms of audio reached RMS 120; speech starts at RMS 300"
+
+
+def test_without_an_energy_threshold_the_level_is_given_alone():
+    from robin_egg_server.audio import describe_level
+
+    assert describe_level(np.full(MIC_RATE, 50, dtype="<i2").tobytes(), None) == "The loudest 30 ms of audio reached RMS 50"
