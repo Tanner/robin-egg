@@ -45,6 +45,7 @@ from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
 from .thinking import THINKING_CUE, ThinkingCue
 from .vad import ModelVad, make_vad
+from .turn_log import ANSWERED, ASKED_AGAIN, FAILED, LOCAL_COMMAND, NOBODY_SPOKE, NOTHING_RECOGNISED, QUIET, TurnLog, TurnRecord
 from .voices import SpeechToText, TextToSpeech
 from .web import AudioServer
 
@@ -90,6 +91,8 @@ class Options:
     match_voice: bool = False  # also speak more quietly to someone who spoke quietly
     thinking_cue: bool = True  # a soft sound while Robin is slow to start answering; needs stream
     thinking_delay_s: float = 2.0  # how long after the end of speech before it starts
+    turn_log: Path | None = None  # one line per turn and per message Robin sends, for stats; off if None
+    turn_log_names: bool = False  # also record who spoke each turn
 
 
 @dataclass
@@ -107,6 +110,7 @@ class Turn:
     play_end: float = 0.0  # when the egg should run out of the audio made so far, once it is playing
     task: asyncio.Task | None = None
     cue: ThinkingCue | None = None  # the thinking sound, on turns that ask Robin
+    log: TurnRecord = field(default_factory=TurnRecord)  # what the turn log will say about this turn
 
 
 class Robin:
@@ -156,6 +160,7 @@ class Robin:
         self.quiet = QuietMode(self.opts.quiet_state, morning_hour=self.opts.speaking_hours[0])
         self.urgent_sound = load_sound(self.opts.urgent_sound or URGENT_CHIME)
         self.thinking_sound = load_sound(THINKING_CUE)
+        self.turn_log = TurnLog(self.opts.turn_log, names=self.opts.turn_log_names)
         web.on_announce = self.announce
         web.on_quiet = self.quiet.http
 
@@ -191,6 +196,7 @@ class Robin:
                     if previous_turn.listening:
                         LOG.info("The egg started a new run while this turn was still listening; dropping this turn")
                     await previous_turn.reply.close()  # it never got to answer
+                    self.turn_log.turn(previous_turn)
         # The firmware reports the last wake word on every run, follow-ups included, so the
         # phrase alone cannot say whether someone just woke the egg. A follow-up starts as
         # soon as the reply finishes playing; a wake word heard later is a new conversation.
@@ -244,6 +250,8 @@ class Robin:
                 t.listening = False
                 if t.task is not None:
                     t.task.cancel()
+                else:
+                    self.turn_log.turn(t)
             elif t.listening:
                 t.vad.reason = "the egg ended the audio stream"
                 self._end_listening(t)
@@ -275,6 +283,7 @@ class Robin:
         try:
             if not t.vad.speech_started:
                 LOG.info("Nobody spoke; closing quietly")
+                t.log.outcome = NOBODY_SPOKE
                 self._end_without_reply()
                 return
             t.reply.gain = self.room.for_reply(bytes(t.audio))
@@ -282,10 +291,12 @@ class Robin:
             (heard, confidence, stt_s), (match, id_s) = await asyncio.gather(self._transcribe(t), self._identify(t))
             sure = f", {confidence.describe()}" if confidence is not None else ""
             LOG.info('Heard: "%s" (STT %.2f s, speaker %.2f s%s)', heard, stt_s, id_s, sure)
+            t.log.heard(stt_s, id_s, match if self.speakers is not None else None)
             enrolling = self.commands is not None and self.commands.active
             # A cough mid-enrolment is a missed answer to ask again, not a reason to drop the enrolment.
             if not heard and not enrolling:
                 LOG.info("Nothing recognisable was said; closing quietly")
+                t.log.outcome = NOTHING_RECOGNISED
                 self._end_without_reply()
                 return
             if heard and self.room_context is not None:
@@ -296,6 +307,7 @@ class Robin:
             self.send(E.VOICE_ASSISTANT_INTENT_START)
             # Enrolment matches each sentence itself and asks again on a miss.
             if not enrolling and await self._ask_again_if_unsure(t, confidence, t0):
+                t.log.done(ASKED_AGAIN, t0)
                 return
             # Mid-enrolment every turn is an answer to the enrolment, whatever it sounds like.
             quiet_step = None if enrolling else self.quiet.handle(heard)
@@ -321,6 +333,7 @@ class Robin:
                 await self._speak(_once(step.say), t.reply, turn=t, t0=t0)
                 LOG.info('Robin: "%s"', step.say)
                 await self._finish_reply(t, step.say, cont=step.listen)
+                t.log.done(LOCAL_COMMAND, t0)
                 # No learning: these turns decide whose voice this is, so they must not quietly reshape a voiceprint.
                 self.last_match = match
                 return
@@ -335,20 +348,24 @@ class Robin:
                 self.speakers.learn(match)
             self.last_match = match
             LOG.info("Reply %.1f s long, finished %.2f s after end of speech", t.reply.seconds, time.monotonic() - t0)
+            t.log.done(ANSWERED, t0)
         except asyncio.CancelledError:
             raise
         except QuietTurn:
             LOG.info("Robin chose to say nothing; closing quietly")
             await self._stop_thinking(t)
+            t.log.outcome = QUIET
             self._end_without_reply()
         except Exception as err:  # noqa: BLE001 - the person in the room must hear that it failed
             LOG.exception("The turn failed")
+            t.log.outcome = FAILED
             self._reset_commands()  # the apology ends the conversation
             await self._apologise(t, err)
         finally:
             await self._end_thinking(t)
             await t.reply.close()
             self._state.set()
+            self.turn_log.turn(t)
 
     def _reopens_after(self, text: str) -> bool:
         return self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and text.rstrip().endswith("?"))
@@ -487,6 +504,8 @@ class Robin:
                     first = False
                     if t0 is not None:
                         LOG.info("First audio ready %.2f s after end of speech", time.monotonic() - t0)
+                        if turn is not None:
+                            turn.log.first_audio_s = time.monotonic() - t0
                     # A second tts_start_streaming would make the egg fetch the stream again from the start.
                     if turn is not None and self.opts.stream and not turn.playing:
                         turn.playing = True
@@ -659,6 +678,7 @@ class Robin:
                 busy = "other messages are waiting"
             else:
                 busy = self._busy_reason()
+            self.turn_log.message_arrived(msg, busy)
             if busy:
                 LOG.info("Queued message %s until the egg is idle: %s", msg.describe(), busy)
             else:
@@ -753,6 +773,8 @@ class Robin:
     def _message_outcome(self, msg: SpeakerMessage, outcome: str) -> None:
         if self.room_context is not None:
             self.room_context.message_outcome(msg.describe(), outcome)
+        fate, _, why = outcome.partition(", ")
+        self.turn_log.message(msg, fate, why)
 
     def _expect_answer(self, msg: SpeakerMessage) -> None:
         """The egg reopens its mic now, so the run that follows is an answer to this message.

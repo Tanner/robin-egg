@@ -18,6 +18,7 @@ from .logs import setup as setup_logging
 from .room import FLOOR_GAIN, parse_hours
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .vad import VAD_KINDS
+from .turn_log import DEFAULT_TURN_LOG
 from .web import AudioServer
 
 LOG = logging.getLogger("robin")
@@ -81,6 +82,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--quiet-volume", type=int, default=60, metavar="PERCENT", help="How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100 (default 60)")
     p.add_argument("--match-voice", action=argparse.BooleanOptionalAction, default=False, help="Also speak more quietly to someone who spoke quietly (default off until it is tried on the real egg)")
     p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here")
+    p.add_argument("--turn-log", metavar="FILE", default=str(DEFAULT_TURN_LOG), help="Where to record each turn's outcome and timings, for `python -m robin_egg_server.stats` (default ~/.robin-egg/turns.jsonl). No audio or words are recorded. Not used with --demo or --echo")
+    p.add_argument("--no-turn-log", action="store_true", help="Do not record turns")
+    p.add_argument("--turn-log-names", action="store_true", help="Also record who spoke each turn, not only whether they were recognised")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
@@ -199,6 +203,9 @@ def build(args: argparse.Namespace):
         match_voice=args.match_voice,
         thinking_cue=args.thinking_cue,
         thinking_delay_s=args.thinking_delay,
+        # A test run's timings would skew the numbers from real use.
+        turn_log=None if args.no_turn_log or args.demo or args.echo else Path(args.turn_log).expanduser(),
+        turn_log_names=args.turn_log_names,
     )
     if opts.thinking_cue and not opts.stream:
         LOG.info("The thinking sound is off, because it is carried in the streamed reply and --no-stream turns streaming off")
@@ -219,6 +226,8 @@ def build(args: argparse.Namespace):
         commands = VoiceCommands(people, store, speakers.thresholds)
     else:
         LOG.info("Speaker recognition is off, so every voice is sent as Unknown Speaker")
+    if opts.turn_log is not None:
+        LOG.info("Recording each turn's outcome and timings, but no audio or words, in %s", opts.turn_log)
     web = AudioServer()
     return Robin(stt, brain, tts, web, VoiceAssistantEventType, opts, speakers=speakers, people=people, commands=commands), web
 
