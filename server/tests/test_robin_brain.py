@@ -62,6 +62,8 @@ class FakeRobinAssistant:
         self.users_hang = False  # accept GET /api/users and never answer it
         self.context_posts: list[dict] = []  # each POST /api/context/:agent body: key, value and ttl
         self.context_reply: tuple[int, dict] = (200, {"ok": True})
+        self.triggers: list[dict] = []  # every POST /api/trigger/:agent: the agent, the JSON body, and the status answered
+        self.trigger_reply: tuple[int, dict] = (202, {"ok": True})
         self._release = asyncio.Event()
         self._server: asyncio.base_events.Server | None = None
         self.url = ""
@@ -96,6 +98,13 @@ class FakeRobinAssistant:
                 status, payload = self.users_reply if request_line.startswith("GET /api/users") else self.agent_lookup
                 body = json.dumps(payload).encode()
                 writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n{self.headers}Connection: close\r\n\r\n".encode() + body)
+                await writer.drain()
+                return
+            if request_line.startswith("POST /api/trigger/"):
+                status, payload = self.trigger_reply
+                self.triggers.append({"agent": request_line.split()[1].rsplit("/", 1)[1], "body": json.loads(body), "status": status})
+                answer = json.dumps(payload).encode()
+                writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(answer)}\r\nConnection: close\r\n\r\n".encode() + answer)
                 await writer.drain()
                 return
             if request_line.startswith("POST /api/context/"):

@@ -197,6 +197,49 @@ When Robin has not produced a first sentence 2 s after the end of speech, the eg
 - If the turn fails, the sound fades out and the apology follows.
 - It does not play with `--no-stream`, because then the egg is given nothing to play until the reply is complete.
 
+## Checking on it
+
+`GET /status` on the same port answers with JSON, for a monitor or a quick look:
+
+```sh
+curl http://localhost:8765/status
+```
+
+```json
+{
+  "egg": {
+    "connected": true,
+    "since": "2026-11-17T09:14:02-08:00",
+    "name": "respeaker-xvf3800-a1b2c3",
+    "esphome_version": "2026.10.2",
+    "firmware": "formatbce.Respeaker XVF3800 Satellite",
+    "firmware_version": "2026.11.0"
+  },
+  "speaker_stream": {"enabled": true, "connected": true},
+  "last_turn": {"at": "2026-11-17T09:20:41-08:00", "ended": "answered"},
+  "proactive_waiting": 0,
+  "enrolled": ["tanner"]
+}
+```
+
+- `egg.since` is when the egg connected or, while `connected` is false, when it was lost (the server's start, if it has not connected yet). The name and versions are from its last connection, and `null` until it has connected once.
+- `speaker_stream` is robin-assistant's stream of the messages Robin sends on its own. `enabled` is false with `--no-robin-announcements` or `--echo`.
+- `last_turn.ended` is one of `answered`, `voice_command`, `asked_again` (the server was unsure what it heard and asked for a repeat), `quiet` (Robin chose to say nothing), `no_speech`, `nothing_recognised`, `failed` and `cancelled`. It is `null` until the first turn ends.
+- `proactive_waiting` counts Robin's own messages queued until the egg is idle.
+- `enrolled` lists whose voiceprints are loaded, by robin-assistant key.
+
+The port is open to the whole LAN, because the egg fetches replies from it, and nothing checks who is calling: `/announce` already lets anyone on the network make the egg speak. So `/status` is read-only and holds states, times and names only, never what anyone said or what Robin answered.
+
+### When the egg goes missing
+
+If the egg has been unreachable for 10 minutes, the server asks Robin to tell the household by text, through robin-assistant's webhook trigger (`POST /api/trigger/:agent`). Robin writes the message. If a text went out, the server asks once more when the egg is back.
+
+- One text per outage, however long it lasts. An egg that comes back before the limit is never mentioned.
+- Starting the server while the egg is unreachable counts, from the moment the server started.
+- If robin-assistant is down or answers with a server error, the server tries again every minute until the request is taken. If robin-assistant refuses it (the agent is disabled, or `[trigger] enabled` is off), the log says so as an error and nobody is told about that outage.
+- The request names no chat. An agent with one Telegram chat texts that chat, and an agent with several texts everyone it serves. An agent with no Telegram chat writes into the web chat, where the message that the egg is back is also spoken by the egg, within speaking hours.
+- `--offline-alert MINUTES` changes the limit, and `--offline-alert 0` turns it off. It is not used with `--echo` or `--demo`.
+
 ## Telling voices apart
 
 The server works out which household member is talking and sends their name to Robin with each question. Anyone it does not recognise is sent as "Unknown Speaker". It needs the speaker model downloaded as above, and the people robin-assistant lists for the agent. It is on by default; `--no-speaker-recognition` turns it off, and then every voice is "Unknown Speaker".
@@ -233,7 +276,7 @@ The defaults are cautious: they are Whisper's own limits for a failed transcript
 
 ## Measuring accuracy
 
-To pick the accept threshold from real numbers, record clips with `--save-audio` and sort them into folders, one per person, plus `unknown` for guests, the TV and anyone not enrolled:
+To pick the accept threshold from real numbers, record clips with `--save-audio` and move them into folders, one per person, plus `unknown` for guests, the TV and anyone not enrolled:
 
 ```
 clips/
@@ -249,6 +292,8 @@ Then run, from `server/`:
 ```
 
 It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json` (`--voiceprints` and `--speaker-model` change that). For each threshold from 0.30 to 0.70 it counts clips judged right, given to the wrong person, and sent as Unknown Speaker, with clips under 2 s apart from longer ones. The last line suggests the lowest threshold that gave no clip to the wrong person. With no clips there is no suggestion, and if the clips lack an `unknown/` folder or cover only one person, the report says what the suggestion does not show. Only 16 kHz mono 16-bit WAV files are read; others are skipped with a warning. These clips are audio the server otherwise never keeps, so delete the folder when you are done.
+
+The server deletes its own captures after 24 hours: files named `capture-*.wav` directly in the `--save-audio` folder, checked at startup and every hour, with a log line saying how many went. Clips moved into the per-person folders, or anywhere else, are left alone, so sort them within a day. To collect clips over a longer stretch, start with `--save-audio-hours 0`, which keeps every capture until you delete it, or give it a longer limit in hours.
 
 ## Finding the end of speech
 
@@ -322,7 +367,9 @@ The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the
 | `--openai-model` | `gpt-4o-mini-tts` | The OpenAI speech model, with `--tts openai`. |
 | `--openai-voice` | `ash` | The OpenAI voice name, with `--tts openai`. |
 | `--tts-time-limit` | 4 s | How long the hosted voice gets for one sentence before Piper speaks the rest of the reply. |
-| `--save-audio DIR` | off | Keep each mic capture as a WAV. |
+| `--offline-alert MINUTES` | 10 | Have Robin text the household once the egg has been unreachable this long, and again when it is back. `0` turns it off. Not used with `--echo`. |
+| `--save-audio DIR` | off | Keep each mic capture as a WAV, for 24 hours. |
+| `--save-audio-hours HOURS` | 24 | How long `--save-audio` keeps a capture before the server deletes it. `0` keeps captures until you delete them. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. Without it, the server waits at startup until the egg's name resolves. |
 | `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice" and checking with "who am I?". Not used with `--echo`. |
 | `--voiceprints` | `~/.robin-egg/voiceprints.json` | Where the enrolled voiceprints are kept. |
@@ -348,6 +395,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - The speech-model detector, `--vad model`. It has heard macOS `say` voices and test tones, not the egg's mic, the room, or the egg's own reply leaking into a follow-up. Its 0.5 threshold is Silero's default. Compare it with the energy detector on real captures before making it the default.
 - The hosted voice. `--tts openai` has only been run against a fake speech endpoint in the tests, never against OpenAI itself, so the real latency per sentence, whether 4 s is the right limit, and how a change from the OpenAI voice to Piper mid-reply sounds on the egg's speaker are all unknown.
 - Matching the room. Whether 60% is the right amount for the evening has only been judged from numbers, not heard through the egg's speaker at its volume setting. For `--match-voice`, nobody has measured how much of the difference between a quiet voice and a normal one survives the XVF3800's automatic gain. Read the "the voice measured" log lines for a few quiet and normal turns before turning it on.
+- The offline alert. The fake egg goes missing by closing its connection, which the server notices at once. How quickly the server notices a real egg that loses power or Wi-Fi depends on the ESPHome connection's keepalive, and an egg that reboots and reconnects within the limit should cause no text. The text itself has only been sent to the fake robin-assistant.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 - Presence. `--presence-minutes` has only been run against the fake egg. Whether "spoke in the last N minutes" is a fair guess at someone being in the room, and what N should be, needs living with the real egg.
 
@@ -372,7 +420,8 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/repeat.py` | The "say that again" command and the text of the last thing said |
 | `robin_egg_server/whoami.py` | The answer to "who am I?", from the turn's speaker match |
 | `robin_egg_server/mic_mute.py` | The egg's microphone mute switch, followed so that muting also stops Robin speaking first |
-| `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce` and `/quiet` |
+| `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce`, `/quiet` and `/status` |
+| `robin_egg_server/health.py` | What `/status` reports, the text when the egg goes missing, and clearing old mic captures |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/sounds/urgent.flac` | The cue before an urgent message, made the same way |
 | `robin_egg_server/thinking.py` | The thinking sound: writes the loop into a reply until the first sentence is ready |
@@ -391,6 +440,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_room_context.py` | The room facts, alone and through the fake egg, against the fake robin-assistant |
 | `tests/test_mic_mute.py` | Muting the fake egg's microphone: dropped messages, `/announce`, the option, a missing switch, reconnects |
 | `tests/test_thinking_cue.py` | The thinking sound against the fake egg: when it plays, how it ends, and when it must not play |
+| `tests/test_health.py` | `/status`, the offline alert and clearing old mic captures, against the fake egg and the fake robin-assistant |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |
 | `tests/test_repeat.py` | "Say that again", alone and through the fake egg |
 | `tests/test_urgent_messages.py` | Urgent messages: the cue, the speaking hours, the queue order and `/announce?priority=urgent` |

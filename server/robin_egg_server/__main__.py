@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .brain import server_url
 from .egg import Options, Robin
+from .health import OfflineAlert, keep_captures_trimmed, status
 from .hosted_tts import DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_VOICE, DEFAULT_TIME_LIMIT_S
 from .logs import setup as setup_logging
 from .room import FLOOR_GAIN, parse_hours
@@ -39,7 +40,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--demo", nargs="+", metavar="AUDIO", help="No hardware: run against a fake egg that 'says' these audio files, one per turn")
     p.add_argument("--port", type=int, default=6053, help="ESPHome API port (default 6053)")
     p.add_argument("--psk", help="Base64 API encryption key, only if one was set on the egg")
-    p.add_argument("--http-port", type=int, default=8765, help="Port the egg fetches replies from, and /announce listens on")
+    p.add_argument("--http-port", type=int, default=8765, help="Port the egg fetches replies from, and /announce and /status listen on")
     p.add_argument("--advertise-ip", help="This Mac's LAN IP, if auto-detection picks the wrong one")
     p.add_argument("--echo", action="store_true", help="Repeat what was heard instead of asking Robin, to test the audio chain with no robin-assistant")
     p.add_argument("--server", help="robin-assistant's address: a host or IP, host:port, or a URL. The port defaults to 8273. Required unless --echo")
@@ -80,12 +81,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--quiet-hours", default="21-7", help="Hours when Robin speaks more quietly, replies and announcements alike, e.g. 21-7; off for never")
     p.add_argument("--quiet-volume", type=int, default=60, metavar="PERCENT", help="How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100 (default 60)")
     p.add_argument("--match-voice", action=argparse.BooleanOptionalAction, default=False, help="Also speak more quietly to someone who spoke quietly (default off until it is tried on the real egg)")
-    p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here")
+    p.add_argument("--offline-alert", type=float, default=10.0, metavar="MINUTES", help="Have Robin text the household once the egg has been unreachable this long, and again when it is back (default 10; 0 turns it off; not used with --echo)")
+    p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here, for --save-audio-hours")
+    p.add_argument("--save-audio-hours", type=float, default=24.0, metavar="HOURS", help="How long --save-audio keeps a capture before deleting it (default 24; 0 keeps them until you delete them)")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
     if args.default_speaker_name is not None:
         p.error('--default-speaker-name is gone: a voice the server cannot identify is now sent as "Unknown Speaker". Remove the flag.')
+    if args.save_audio_hours < 0:
+        p.error("--save-audio-hours is a number of hours, or 0 to keep captures until you delete them")
+    if args.offline_alert < 0:
+        p.error("--offline-alert is a number of minutes, or 0 to turn it off")
     try:
         args.speaking_hours = parse_hours(args.speaking_hours)
         if args.speaking_hours is None:
@@ -241,6 +248,12 @@ def log_enrolment(people: list[Person] | None, store: VoiceprintStore) -> None:
 
 async def run(args: argparse.Namespace) -> None:
     robin, web = build(args)
+    trimmer = None
+    trimming = asyncio.Event()
+    if robin.opts.save_audio is not None and args.save_audio_hours > 0:
+        trimmer = asyncio.create_task(keep_captures_trimmed(robin.opts.save_audio, args.save_audio_hours * 3600, trimming))
+    elif robin.opts.save_audio is not None:
+        LOG.warning("Mic captures in %s are kept until you delete them (--save-audio-hours 0)", robin.opts.save_audio)
     try:
         if hasattr(robin.brain, "check"):
             await robin.brain.check()
@@ -261,27 +274,36 @@ async def run(args: argparse.Namespace) -> None:
         elif not args.echo:
             LOG.info("Not telling Robin facts about the room (--no-room-context)")
         stop = asyncio.Event()
-        listener = None
+        listener = stream = None
         if not args.echo and args.robin_announcements:
             from .speaker_stream import SpeakerStream
 
-            listener = asyncio.create_task(SpeakerStream(args.server, args.agent_name, robin.proactive).run(stop))
+            stream = SpeakerStream(args.server, args.agent_name, robin.proactive)
+            listener = asyncio.create_task(stream.run(stop))
             if args.presence_minutes is not None:
                 LOG.info("Robin's own messages are spoken only if someone spoke to the egg in the last %g minutes (--presence-minutes)", args.presence_minutes)
         elif not args.echo:
             LOG.info("Not listening for messages Robin sends on its own (--no-robin-announcements)")
+        web.on_status = lambda: status(robin, stream)
+        watcher = None
+        if not args.echo and args.offline_alert > 0:
+            watcher = asyncio.create_task(OfflineAlert(robin, args.server, args.agent_name, after_s=args.offline_alert * 60).run(stop))
         try:
             await robin.run_forever(args.host, args.port, args.psk, show_logs=args.logs)
         finally:
             stop.set()
-            if listener is not None:
-                listener.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await listener
+            for task in (listener, watcher):
+                if task is not None:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
             await web.stop()
             if robin.room_context is not None:
                 await robin.room_context.close()
     finally:
+        trimming.set()
+        if trimmer is not None:
+            await trimmer
         if hasattr(robin.brain, "close"):
             await robin.brain.close()
 

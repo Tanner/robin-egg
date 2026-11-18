@@ -140,6 +140,9 @@ class Robin:
         self.room_context: Any = None  # a RoomContext when Robin is told facts about the room
         self.mic_mute = MicMute()
         self.turn: Turn | None = None
+        self.egg_since = time.time()  # when the egg connected or, while it is away, when it was lost
+        self.device: dict[str, str] = {}  # the egg's name and versions, from its last connection
+        self.last_turn: tuple[float, str] | None = None  # when the last turn ended, and how
         self._follow_up_pending = False
         self._playback_until = 0.0  # when the egg should finish playing the last reply
         self._state = asyncio.Event()  # set whenever the egg may have become idle
@@ -244,6 +247,8 @@ class Robin:
                 t.listening = False
                 if t.task is not None:
                     t.task.cancel()
+                else:
+                    self.last_turn = (time.time(), "cancelled")
             elif t.listening:
                 t.vad.reason = "the egg ended the audio stream"
                 self._end_listening(t)
@@ -272,10 +277,12 @@ class Robin:
 
     async def _respond(self, t: Turn) -> None:
         E = self.E
+        ended = "cancelled"  # for /status
         try:
             if not t.vad.speech_started:
                 LOG.info("Nobody spoke; closing quietly")
                 self._end_without_reply()
+                ended = "no_speech"
                 return
             t.reply.gain = self.room.for_reply(bytes(t.audio))
             t0 = time.monotonic()
@@ -287,6 +294,7 @@ class Robin:
             if not heard and not enrolling:
                 LOG.info("Nothing recognisable was said; closing quietly")
                 self._end_without_reply()
+                ended = "nothing_recognised"
                 return
             if heard and self.room_context is not None:
                 self.room_context.spoken_to(match.user, t.follow_up)
@@ -296,6 +304,7 @@ class Robin:
             self.send(E.VOICE_ASSISTANT_INTENT_START)
             # Enrolment matches each sentence itself and asks again on a miss.
             if not enrolling and await self._ask_again_if_unsure(t, confidence, t0):
+                ended = "asked_again"
                 return
             # Mid-enrolment every turn is an answer to the enrolment, whatever it sounds like.
             quiet_step = None if enrolling else self.quiet.handle(heard)
@@ -323,6 +332,7 @@ class Robin:
                 await self._finish_reply(t, step.say, cont=step.listen)
                 # No learning: these turns decide whose voice this is, so they must not quietly reshape a voiceprint.
                 self.last_match = match
+                ended = "voice_command"
                 return
             t.cue = self._thinking_cue(t, t0)
             spoken = await self._speak(self.brain.reply(heard, user=match.user), t.reply, turn=t, t0=t0)
@@ -334,6 +344,7 @@ class Robin:
             if self.speakers is not None:
                 self.speakers.learn(match)
             self.last_match = match
+            ended = "answered"
             LOG.info("Reply %.1f s long, finished %.2f s after end of speech", t.reply.seconds, time.monotonic() - t0)
         except asyncio.CancelledError:
             raise
@@ -341,11 +352,14 @@ class Robin:
             LOG.info("Robin chose to say nothing; closing quietly")
             await self._stop_thinking(t)
             self._end_without_reply()
+            ended = "quiet"
         except Exception as err:  # noqa: BLE001 - the person in the room must hear that it failed
             LOG.exception("The turn failed")
+            ended = "failed"
             self._reset_commands()  # the apology ends the conversation
             await self._apologise(t, err)
         finally:
+            self.last_turn = (time.time(), ended)
             await self._end_thinking(t)
             await t.reply.close()
             self._state.set()
@@ -609,6 +623,11 @@ class Robin:
             LOG.info("Announcement finished (%s)", "spoken" if getattr(result, "success", True) else "the egg reported a failure")
         return 200, f"spoken ({getattr(result, 'success', result)})"
 
+    @property
+    def proactive_waiting(self) -> int:
+        """How many of Robin's own messages are queued behind whatever the egg is doing."""
+        return self._proactive_queue.qsize()
+
     def _busy_reason(self) -> str | None:
         """Why Robin should not speak first right now, or None when the egg is idle."""
         if self.client is None:
@@ -815,6 +834,7 @@ class Robin:
             try:
                 info = await client.device_info()
                 LOG.info("Egg: %s, ESPHome %s, %s %s", info.name, info.esphome_version, info.project_name, info.project_version)
+                self.device = {"name": info.name, "esphome_version": info.esphome_version, "firmware": info.project_name, "firmware_version": info.project_version}
                 if show_logs:
                     def on_log(msg: Any) -> None:
                         line = msg.message.decode("utf-8", "replace") if isinstance(msg.message, bytes) else str(msg.message)
@@ -823,6 +843,7 @@ class Robin:
                     client.subscribe_logs(on_log, log_level=LogLevel.LOG_LEVEL_INFO, dump_config=False)
                 await self.mic_mute.watch(client)
                 self.client = client
+                self.egg_since = time.time()
                 self._state.set()
                 self._egg_connected(True)
                 client.subscribe_voice_assistant(
@@ -844,6 +865,8 @@ class Robin:
             except Exception as err:  # noqa: BLE001 - an egg that drops just after connecting is tried again, like any other drop
                 LOG.warning("Lost the egg (%s); reconnecting", str(err) or type(err).__name__)
             finally:
+                if self.client is not None:
+                    self.egg_since = time.time()
                 self.client = None
                 self.mic_mute.reset()
                 self._state.set()
