@@ -102,6 +102,20 @@ curl -d "Time to leave for the airport." http://localhost:8765/announce
 
 The egg plays the proactive chime first, then speaks, within the same speaking hours.
 
+## Matching the room
+
+Robin speaks more quietly between 9 PM and 7 AM: replies, its own messages with their chime, and `/announce`. `--quiet-hours` moves the window or turns it off, and `--quiet-volume` sets how quiet, 60% of normal by default.
+
+`--match-voice` also lowers a reply when the person spoke quietly, judged from the mic audio of that turn. It is off by default. The egg's XVF3800 applies automatic gain before the audio reaches the server, so a quiet voice and a normal one may arrive at nearly the same level, and the levels the server compares against (`QUIET_VOICE_DBFS` and `NORMAL_VOICE_DBFS` in `room.py`) are guesses until they are checked on the egg. A message Robin sends on its own has no voice to match, so only the clock applies to it.
+
+The two reductions multiply, and the result never goes below 40%, so speech stays easy to follow. The reply audio is scaled on the server. The egg's own volume setting is not touched.
+
+Every turn logs the volume used and the levels measured, whether or not voice matching is on:
+
+```text
+22:14:03 INFO  robin.room [t4] Reply volume 60%: quiet hours (21:00 to 7:00); the voice measured -21 dBFS, the room -58 dBFS, not used because voice matching is off
+```
+
 ## Telling voices apart
 
 The server works out which household member is talking and sends their name to Robin with each question. Anyone it does not recognise is sent as "Unknown Speaker". It needs the speaker model downloaded as above, and the people robin-assistant lists for the agent. It is on by default; `--no-speaker-recognition` turns it off, and then every voice is "Unknown Speaker".
@@ -170,6 +184,9 @@ The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the
 | `--robin-announcements`, `--no-robin-announcements` | on | Speak the messages Robin sends on its own. Not used with `--echo`. |
 | `--proactive-sound FILE` | `sounds/proactive.flac` | The sound before Robin speaks first: wav, aiff or flac. |
 | `--speaking-hours` | `8-20` | When Robin may speak first, its own messages and `/announce`. `0-24` for always. |
+| `--quiet-hours` | `21-7` | When Robin speaks more quietly, replies and announcements alike. The window may wrap past midnight. `off` for never. |
+| `--quiet-volume` | 60 | How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100. |
+| `--match-voice`, `--no-match-voice` | off | Also speak more quietly to someone who spoke quietly. Off until it is tried on the real egg. |
 | `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the turn failed. |
 | `--whisper-model` | `base.en` | `small.en` is more accurate and slower. |
 | `--tts piper\|say\|openai` | `piper` | Which text-to-speech engine to use. `openai` is the hosted voice described under "A hosted voice". |
@@ -193,6 +210,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
 - The hosted voice. `--tts openai` has only been run against a fake speech endpoint in the tests, never against OpenAI itself, so the real latency per sentence, whether 4 s is the right limit, and how a change from the OpenAI voice to Piper mid-reply sounds on the egg's speaker are all unknown.
+- Matching the room. Whether 60% is the right amount for the evening has only been judged from numbers, not heard through the egg's speaker at its volume setting. For `--match-voice`, nobody has measured how much of the difference between a quiet voice and a normal one survives the XVF3800's automatic gain. Read the "the voice measured" log lines for a few quiet and normal turns before turning it on.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 
 ## Files
@@ -201,6 +219,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | --- | --- |
 | `robin_egg_server/egg.py` | The ESPHome connection with reconnects, and the voice turn |
 | `robin_egg_server/audio.py` | End-of-speech detection and the streamed FLAC reply |
+| `robin_egg_server/room.py` | Quieter replies in quiet hours and to a quiet voice |
 | `robin_egg_server/voices.py` | Whisper, `say` and Piper |
 | `robin_egg_server/hosted_tts.py` | The OpenAI voice, and the fallback to Piper when it fails or is slow |
 | `robin_egg_server/speaker_stream.py` | robin-assistant's speaker stream: Robin's own messages, with reconnects |
@@ -211,5 +230,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
+| `tests/test_room.py` | Quiet hours and voice matching, alone and through the fake egg |
+| `tests/conftest.py` | Runs every test at noon, so quiet hours do not depend on when the tests run |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |
