@@ -55,13 +55,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--speaker-recognition", action=argparse.BooleanOptionalAction, default=True, help="Tell household members apart by voice and let them enrol by saying 'learn my voice' (default on; --no-speaker-recognition turns it off; not used with --echo)")
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
-    p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 0-24 for always")
+    p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 20-8 runs past midnight; 0-24 for always")
     p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
     if args.default_speaker_name is not None:
         p.error('--default-speaker-name is gone: a voice the server cannot identify is now sent as "Unknown Speaker". Remove the flag.')
+    try:
+        args.speaking_hours = parse_hours(args.speaking_hours)
+    except ValueError:
+        p.error(f"--speaking-hours {args.speaking_hours!r} is not a range of hours: give start-end, such as 8-20, 20-8 to run past midnight, or 0-24 for always")
     if not args.host and not args.demo:
         p.error("give the egg's address, or --demo AUDIO to test without hardware")
     if not args.echo:
@@ -82,6 +86,29 @@ def local_ip_toward(host: str) -> str:
     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) as s:
         s.connect((socket.gethostbyname(host), 6053))
         return s.getsockname()[0]
+
+
+async def wait_for_local_ip(host: str, first_delay_s: float = 2.0) -> str:
+    """This Mac's address as the egg sees it, waiting for the egg's name to resolve.
+
+    After a power cut the Mac is often up before the egg is on the network.
+    """
+    delay = first_delay_s
+    while True:
+        try:
+            return await asyncio.to_thread(local_ip_toward, host)
+        except OSError as err:
+            LOG.info("Cannot find the egg at %s yet (%s); retrying in %.0f s. Use --advertise-ip to skip this", host, err, delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 30.0)
+
+
+def parse_hours(value: str) -> tuple[int, int]:
+    """--speaking-hours as (start, end). Raises ValueError when it is not two hours of the day."""
+    start, end = (int(x) for x in value.split("-"))
+    if not (0 <= start <= 23 and 0 <= end <= 24):
+        raise ValueError(value)
+    return start, end
 
 
 def build(args: argparse.Namespace):
@@ -109,13 +136,12 @@ def build(args: argparse.Namespace):
         from .brain import RobinBrain
 
         brain = RobinBrain(args.server, args.agent_name, timeout_s=args.server_timeout)
-    start, end = (int(x) for x in args.speaking_hours.split("-"))
     opts = Options(
         stream=not args.no_stream,
         follow_up=args.follow_up,
         follow_up_window_s=args.follow_up_window,
         max_utterance_s=args.max_utterance,
-        speaking_hours=(start, end),
+        speaking_hours=args.speaking_hours,
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,
     )
@@ -164,7 +190,7 @@ async def run(args: argparse.Namespace) -> None:
         if args.demo:
             await demo(args, robin, web)
             return
-        ip = args.advertise_ip or local_ip_toward(args.host)
+        ip = args.advertise_ip or await wait_for_local_ip(args.host)
         await web.start("0.0.0.0", args.http_port, ip)
         LOG.info("Proactive speech: curl -d 'Hello from Robin' %s/announce", web.base_url)
         stop = asyncio.Event()
