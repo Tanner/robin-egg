@@ -135,6 +135,16 @@ curl http://localhost:8765/status
 
 The port is open to the whole LAN, because the egg fetches replies from it, and nothing checks who is calling: `/announce` already lets anyone on the network make the egg speak. So `/status` is read-only and holds states, times and names only, never what anyone said or what Robin answered.
 
+### When the egg goes missing
+
+If the egg has been unreachable for 10 minutes, the server asks Robin to tell the household by text, through robin-assistant's webhook trigger (`POST /api/trigger/:agent`). Robin writes the message. If a text went out, the server asks once more when the egg is back.
+
+- One text per outage, however long it lasts. An egg that comes back before the limit is never mentioned.
+- Starting the server while the egg is unreachable counts, from the moment the server started.
+- If robin-assistant is down or answers with a server error, the server tries again every minute until the request is taken. If robin-assistant refuses it (the agent is disabled, or `[trigger] enabled` is off), the log says so as an error and nobody is told about that outage.
+- The request names no chat. An agent with one Telegram chat texts that chat, and an agent with several texts everyone it serves. An agent with no Telegram chat writes into the web chat, where the message that the egg is back is also spoken by the egg, within speaking hours.
+- `--offline-alert MINUTES` changes the limit, and `--offline-alert 0` turns it off. It is not used with `--echo` or `--demo`.
+
 ## Telling voices apart
 
 The server works out which household member is talking and sends their name to Robin with each question. Anyone it does not recognise is sent as "Unknown Speaker". It needs the speaker model downloaded as above, and the people robin-assistant lists for the agent. It is on by default; `--no-speaker-recognition` turns it off, and then every voice is "Unknown Speaker".
@@ -189,6 +199,7 @@ It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json
 | `--tts piper\|say` | `piper` | Which text-to-speech engine to use. |
 | `--piper-voice` | `voices/en_US-ryan-medium.onnx` | Another Piper voice, to audition. |
 | `--say-voice` | system voice | Any name from `say -v '?'`, with `--tts say`. |
+| `--offline-alert MINUTES` | 10 | Have Robin text the household once the egg has been unreachable this long, and again when it is back. `0` turns it off. Not used with `--echo`. |
 | `--save-audio DIR` | off | Keep each mic capture as a WAV. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. |
 | `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice". Not used with `--echo`. |
@@ -203,6 +214,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
 - Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
+- The offline alert. The fake egg goes missing by closing its connection, which the server notices at once. How quickly the server notices a real egg that loses power or Wi-Fi depends on the ESPHome connection's keepalive, and an egg that reboots and reconnects within the limit should cause no text. The text itself has only been sent to the fake robin-assistant.
 - Errors. A failed turn is spoken as a short apology in the server's own voice, ending like a normal reply. Only if the voice fails too does the egg get an error event, which shows the firmware's error LED for a second. The firmware plays no error sound.
 
 ## Files
@@ -217,10 +229,10 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/speakers.py` | Speaker embeddings, the voiceprint store, and matching a voice to a person |
 | `robin_egg_server/commands.py` | The "learn my voice" and "forget my voice" conversations |
 | `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce` and `/status` |
-| `robin_egg_server/health.py` | What `/status` reports |
+| `robin_egg_server/health.py` | What `/status` reports, and the text when the egg goes missing |
 | `robin_egg_server/sounds/proactive.flac` | The chime before Robin speaks first, made by `tools/egg-sounds/make_sounds.py` |
 | `robin_egg_server/fake_egg.py` | The fake egg, used by the tests and `--demo` |
 | `tests/test_server.py` | End-to-end tests against the fake egg |
 | `tests/test_robin_brain.py` | The Robin brain against a fake robin-assistant, alone and through the fake egg |
-| `tests/test_health.py` | `/status` against the fake egg and the fake robin-assistant |
+| `tests/test_health.py` | `/status` and the offline alert, against the fake egg and the fake robin-assistant |
 | `tests/test_speaker_stream.py` | Robin speaking first, against the fake robin-assistant's speaker stream and the fake egg |

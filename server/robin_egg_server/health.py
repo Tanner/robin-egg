@@ -1,8 +1,11 @@
-"""Health and housekeeping: what GET /status reports."""
+"""Health and housekeeping: what GET /status reports, and the text when the egg goes missing."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -33,3 +36,100 @@ def status(robin: Robin, stream: SpeakerStream | None = None) -> dict[str, Any]:
         "proactive_waiting": robin.proactive_waiting,
         "enrolled": sorted(robin.speakers.store.prints) if robin.speakers is not None else [],
     }
+
+
+def _about(seconds: float) -> str:
+    minutes = max(1, round(seconds / 60))
+    if minutes < 120:
+        return f"{minutes} minute{'' if minutes == 1 else 's'}"
+    return f"{round(minutes / 60)} hours"
+
+
+class OfflineAlert:
+    """Has Robin text the household when the egg has been away too long, and again once it is back.
+
+    It goes through robin-assistant's webhook trigger, POST /api/trigger/:agent, so Robin
+    writes the message and sends it the way it sends any other. One text per outage: a
+    send robin-assistant could not take is retried, one it accepted or refused is not.
+    """
+
+    def __init__(self, robin: Robin, url: str, agent: str, after_s: float = 600.0, check_s: float | None = None, retry_s: float = 60.0) -> None:
+        self.robin, self.agent = robin, agent
+        self.endpoint = f"{url.rstrip('/')}/api/trigger/{agent}"
+        self.after_s, self.retry_s = after_s, retry_s
+        self.check_s = min(15.0, after_s / 4) if check_s is None else check_s
+        self._settled: float | None = None  # the outage, by when it began, that needs no more alerts
+        self._told_since: float | None = None  # when the outage the household was told about began
+
+    async def run(self, stop: asyncio.Event) -> None:
+        import httpx2
+
+        LOG.info("Robin will text the household if the egg is unreachable for %s", _about(self.after_s))
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(10.0)) as client:
+            while not stop.is_set():
+                try:
+                    wait = await self._check(client)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - keep watching for the life of the server
+                    LOG.exception("The offline alert check failed")
+                    wait = self.retry_s
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(stop.wait(), wait)
+
+    async def _check(self, client) -> float:
+        """Sends whichever text is due. Returns how long to wait before looking again."""
+        robin = self.robin
+        if robin.client is None:
+            since = robin.egg_since
+            away = time.time() - since
+            if since == self._settled or away < self.after_s:
+                return self.check_s
+            clock = time.strftime("%H:%M", time.localtime(since))
+            prompt = (
+                f"The Robin Egg, the voice speaker in the house, has been unreachable for about {_about(away)}, since {clock}. "
+                "Its server on the Mac mini cannot connect to it, so nobody can talk to you through it. "
+                "Tell the household by text message in one short sentence, and suggest checking its power and Wi-Fi."
+            )
+            LOG.warning("The egg has been unreachable for %s; asking Robin to tell the household by text", _about(away))
+            sent = await self._trigger(client, prompt)
+            if sent is None:
+                return self.retry_s
+            self._settled = since
+            if sent:
+                self._told_since = since
+        elif self._told_since is not None:
+            away = robin.egg_since - self._told_since
+            prompt = (
+                f"The Robin Egg, the voice speaker in the house, is reachable again after about {_about(away)} offline. "
+                "You told the household it was offline, so tell them by text message in one short sentence that it is back."
+            )
+            LOG.info("The egg is back after %s; asking Robin to tell the household by text", _about(away))
+            if await self._trigger(client, prompt) is None:
+                return self.retry_s
+            self._told_since = None
+        return self.check_s
+
+    async def _trigger(self, client, prompt: str) -> bool | None:
+        """True when robin-assistant took the prompt, False when it refused it, None when it is worth retrying."""
+        import httpx2
+
+        try:
+            # No chat is named, so the text goes to the agent's own chat, or to everyone it serves when
+            # it has several. include_context false is what lets robin-assistant broadcast it.
+            resp = await client.post(self.endpoint, json={"prompt": prompt, "include_context": False})
+        except httpx2.HTTPError as err:
+            LOG.warning("Could not reach robin-assistant at %s to send the alert, trying again in %.0f s: %s", self.endpoint, self.retry_s, err or type(err).__name__)
+            return None
+        if resp.status_code == 202:
+            LOG.info("robin-assistant accepted the alert for agent %s", self.agent)
+            return True
+        try:
+            reason = str(resp.json().get("error") or resp.text)[:200]
+        except (ValueError, AttributeError):
+            reason = resp.text[:200]
+        if 400 <= resp.status_code < 500:
+            LOG.error("robin-assistant refused the alert for agent %s with %d: %s. Nobody was told; check --agent-name and that webhook triggers are enabled for the agent", self.agent, resp.status_code, reason)
+            return False
+        LOG.warning("robin-assistant answered %d for the alert, trying again in %.0f s: %s", resp.status_code, self.retry_s, reason)
+        return None

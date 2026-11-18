@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .brain import server_url
 from .egg import Options, Robin
-from .health import status
+from .health import OfflineAlert, status
 from .logs import setup as setup_logging
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .web import AudioServer
@@ -57,12 +57,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 0-24 for always")
+    p.add_argument("--offline-alert", type=float, default=10.0, metavar="MINUTES", help="Have Robin text the household once the egg has been unreachable this long, and again when it is back (default 10; 0 turns it off; not used with --echo)")
     p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
     if args.default_speaker_name is not None:
         p.error('--default-speaker-name is gone: a voice the server cannot identify is now sent as "Unknown Speaker". Remove the flag.')
+    if args.offline_alert < 0:
+        p.error("--offline-alert is a number of minutes, or 0 to turn it off")
     if not args.host and not args.demo:
         p.error("give the egg's address, or --demo AUDIO to test without hardware")
     if not args.echo:
@@ -178,14 +181,18 @@ async def run(args: argparse.Namespace) -> None:
         elif not args.echo:
             LOG.info("Not listening for messages Robin sends on its own (--no-robin-announcements)")
         web.on_status = lambda: status(robin, stream)
+        watcher = None
+        if not args.echo and args.offline_alert > 0:
+            watcher = asyncio.create_task(OfflineAlert(robin, args.server, args.agent_name, after_s=args.offline_alert * 60).run(stop))
         try:
             await robin.run_forever(args.host, args.port, args.psk, show_logs=args.logs)
         finally:
             stop.set()
-            if listener is not None:
-                listener.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await listener
+            for task in (listener, watcher):
+                if task is not None:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
             await web.stop()
     finally:
         if hasattr(robin.brain, "close"):
