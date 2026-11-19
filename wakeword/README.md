@@ -14,14 +14,14 @@ Settings for each round are in the first code cell: `MODEL_VERSION`, phrases, sa
 
 ## Recordings
 
-Record on an iPhone with Voice Memos, with Audio Quality set to **Lossless** and **Enhance Recording** turned off. Make one long memo per person, with about 2 seconds of quiet between takes. The notebook cuts it into single takes.
+Record on an iPhone with Voice Memos, with Audio Quality set to **Lossless** and **Enhance Recording** turned off. Make one long memo per person, with about 2 seconds of quiet between takes. The notebook cuts it into single takes. [recording-script.md](recording-script.md) has the lines to read.
 
 | File | What to say | Takes |
 |---|---|---|
 | `tanner_positive.m4a`, `ryan_positive.m4a` | "Hey Robin", said in varied ways: quiet, loud, fast, sleepy, across the room, the next room, facing away | ~40 each |
 | `tanner_negative.m4a`, `ryan_negative.m4a` | "Hey Ryan", "Robin" alone, "robbing", "Hey Rob", "Hey Robert", ordinary sentences that include "Robin" | ~20 each |
 
-Any filename that contains `negative` is used as a don't-wake set. Every other file counts as "Hey Robin". Keep the originals in `recordings/` here so we can retrain later. A second set recorded through the egg's own mics will beat phone recordings, because that's what the egg actually hears.
+Any filename that contains `negative` is used as a don't-wake set. Every other file counts as "Hey Robin". Keep the originals in `recordings/` here so we can retrain later. Recording through the egg's own mics would match what the wake word hears, but it needs new code, so it waits until v1 shows whether phone takes are good enough.
 
 The cut clips are written back to `MyDrive/robin_wakeword/recordings_cut/`, so you can listen and delete any bad cuts.
 
