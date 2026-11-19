@@ -72,7 +72,7 @@ FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 # After a reply that asked for a follow-up, how long past its end to wait for the egg to reopen its mic.
 FOLLOW_UP_GRACE_S = 3.0
 # How much sooner than the clock says a reply ends the egg may still reopen its mic for a follow-up to it.
-FOLLOW_UP_EARLY_S = 0.25
+FOLLOW_UP_EARLY_S = 1.0  # a guess until the reopen timing in the log is read on the real egg
 RECONNECT_DELAY_S = 2.0  # the first wait before trying the egg again; doubles up to 30 s
 ANNOUNCE_WAIT_S = 60.0
 ABANDONED_KEPT = 8  # how many turns that ended before Robin's answer came are remembered, for late answers  # how long /announce waits for the egg to be idle before giving up
@@ -260,6 +260,10 @@ class Robin:
         # The egg reopens its mic for a follow-up only once it has played the reply. A reopen
         # with no phrase is that, whatever the clock says. With a phrase, one that comes clearly
         # sooner than the reply could have ended is the wake word cutting the reply short.
+        if previous_turn is not None and follow_up and previous_turn.play_end:
+            off = previous_turn.play_end - time.monotonic()
+            with tagged(previous_turn.tag):
+                LOG.info("The egg reopened its mic %.2f s %s the reply's estimated end", abs(off), "before" if off > 0 else "after")
         if previous_turn is not None and not (follow_up and not wake_word_phrase):
             with tagged(previous_turn.tag):
                 self._report_unfinished(previous_turn, "interrupted by the wake word", behind_s=-FOLLOW_UP_EARLY_S if follow_up else digests.PLAYED_MARGIN_S)

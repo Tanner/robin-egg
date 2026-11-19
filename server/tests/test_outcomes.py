@@ -571,3 +571,12 @@ def test_a_reopen_with_no_wake_word_means_the_reply_was_played_whatever_the_cloc
 def test_a_reopen_that_reports_a_wake_word_well_before_the_reply_could_end_reports_what_was_cut():
     sent, egg = early_reopen("Okay Nabu")
     assert sent == [(125, "dropped", "interrupted by the wake word")]
+
+
+def test_every_follow_up_logs_how_far_it_was_from_the_replys_estimated_end(caplog):
+    with caplog.at_level(logging.INFO, logger="robin.egg"):
+        sent, _ = early_reopen("")
+    assert sent == []
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("The egg reopened its mic"))
+    seconds = float(line.split()[5])
+    assert line.endswith("before the reply's estimated end") and 1.5 < seconds < 2.5  # it reopened 2 s early
