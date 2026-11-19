@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A successful enrolment keeps its sentences as audio, so voiceprints can be rebuilt and tested against each other without anyone speaking again.
+**Goal:** A successful enrolment keeps its sentences as audio, so voiceprints can be rebuilt and tested against each other without anyone speaking again. The server also raises its accept threshold on its own when two enrolled voices are close.
 
-**Architecture:** A new `EnrolmentAudio` class owns one folder of WAVs per person under `~/.robin-egg/enrolment/`. The enrolment conversation receives each turn's audio, holds the matched sentences in memory, and writes them only when the voiceprint is saved. Two offline commands read that folder: `rebuild` remakes voiceprints with the current model, and `evaluate --enrolment` scores every sentence against voiceprints that do not contain it.
+**Architecture:** A new `EnrolmentAudio` class owns one folder of WAVs per person under `~/.robin-egg/enrolment/`. The enrolment conversation receives each turn's audio, holds the matched sentences in memory, and writes them only when the voiceprint is saved. Two offline commands read that folder: `rebuild` remakes voiceprints with the current model, and `evaluate --enrolment` scores every sentence against voiceprints that do not contain it. Separately, `SpeakerId.identify` works out each turn's accept threshold from how close the enrolled voiceprints are to each other.
 
 **Tech Stack:** Python 3.14, numpy, the standard `wave` module, pytest. No new dependencies.
 
@@ -17,6 +17,7 @@
 - Audio never outlives its voiceprint: a failed, stopped or reset enrolment writes nothing, re-enrolling replaces the folder, and forgetting deletes it.
 - Only matched sentences are saved. Mismatched and skipped takes are never written.
 - Enrolment length does not change: `ENROL_SENTENCES` and `MIN_GOOD_SENTENCES = 8` stay as they are.
+- The accept threshold is only ever raised by the server, never lowered below `Thresholds.accept` (0.45), and there are no new options to set it by hand.
 - The learning pool stays embeddings only. Everyday turn audio is not kept.
 - Log lines are plain sentences for a human, with no emojis.
 - Run tests from `server/` with `python -m pytest`.
@@ -35,13 +36,14 @@ These fill gaps the spec left open. Each one is the planner's call.
 
 ## Complexity
 
-Low to moderate. Five tasks. Tasks 1 and 2 touch the live enrolment path and need the most care. Tasks 3 and 4 are offline commands with no effect on a running server. Task 5 is documentation.
+Low to moderate. Six tasks. Tasks 1, 2 and 5 touch the live path and need the most care: 1 and 2 change enrolment, and 5 changes who is recognised on every turn. Tasks 3 and 4 are offline commands with no effect on a running server. Task 6 is documentation.
 
 ## Preventing regressions
 
 - `VoiceCommands` takes the audio store as an optional last argument that defaults to `None`, and `handle` takes `audio` with a default. Every existing test in `tests/test_commands.py` therefore runs unchanged, and must pass unchanged.
 - The full suite (`python -m pytest -q` from `server/`) runs at the end of every task. It must be green before each commit.
 - `evaluate DIR` keeps its current output. `tests/test_speakers.py::test_evaluate_*` must pass unchanged.
+- With one person enrolled, or voices that are far apart, Task 5 leaves the threshold at 0.45, so today's behaviour is unchanged until a second person enrols. Every existing test in `tests/test_speakers.py` and `tests/test_server.py` must pass unchanged.
 - Task 3 includes a test that rebuilding with the same model gives the same voiceprint as the enrolment did.
 
 ## Review Focus
@@ -368,7 +370,91 @@ Expected: PASS, with `test_evaluate_*` in `tests/test_speakers.py` unchanged.
 
 ---
 
-### Task 5: Documentation
+### Task 5: Raise the accept threshold when enrolled voices are close
+
+**Files:**
+- Modify: `server/robin_egg_server/speakers.py` (two new functions beside `scores`, and `SpeakerId.identify`)
+- Test: `server/tests/test_speakers.py`
+
+**Interfaces:**
+- Consumes: `VoiceprintStore.prints`, `Voiceprint.centroid()`, `Thresholds`.
+- Produces:
+
+```python
+SEPARATION_GAP = 0.10
+
+@dataclass
+class ClosestCall:
+    speaker: str      # whose enrolment sentence it was
+    other: str        # whose voiceprint it scored against
+    score: float
+
+def closest_call(store: VoiceprintStore, keys: set[str]) -> ClosestCall | None: ...
+# The highest cosine of any enrolled sentence of one person in keys against the centroid() of
+# another person in keys. None when fewer than two people in keys are enrolled.
+
+def separated(t: Thresholds, call: ClosestCall | None) -> Thresholds: ...
+# t with accept = min(1.0, max(t.accept, call.score + SEPARATION_GAP)); t itself when call is None.
+```
+
+`SpeakerId.thresholds` stays the default set. `identify` computes `separated(self.thresholds, closest_call(self.store, keys))` and passes that to `decide`. `VoiceCommands` and `whoami` keep the default set, so the check that refuses an enrolment sounding like someone else does not get laxer.
+
+Log lines, written only when the accept threshold differs from the one used on the previous turn:
+- `The voices of tanner and ryan score up to 0.41 against each other, so the accept threshold is raised from 0.45 to 0.51`
+- `The enrolled voices are far enough apart, so the accept threshold is back to 0.45`
+- A warning when a person's lowest enrolment sentence scores below the raised threshold against their own voiceprint: `ryan's own enrolment sentences score as low as 0.48, below the accept threshold of 0.51, so ryan will sometimes be Unknown Speaker`
+
+- [ ] **Step 1: Write the failing tests** in `tests/test_speakers.py`, with the file's `unit` helper and a store built by `store.replace`.
+
+```python
+def test_one_person_enrolled_has_no_closest_call(tmp_path):
+    # closest_call(...) is None and separated(Thresholds(), None).accept == 0.45
+
+def test_distant_voices_leave_the_threshold_alone(tmp_path):
+    # tanner (1,0,0), ryan (0,1,0): closest call 0.0, accept stays 0.45
+
+def test_close_voices_raise_the_threshold(tmp_path):
+    # tanner (1,0,0), ryan unit(1,1,0): closest call 0.71, accept == pytest.approx(0.807, abs=0.001)
+
+def test_the_closest_call_is_the_worst_single_sentence_not_the_average(tmp_path):
+    # ryan enrolled with [(0,1,0), (0,1,0), unit(1,0.2,0)]: the call is speaker "ryan", other "tanner", score 0.98
+
+def test_someone_not_in_the_people_list_does_not_count(tmp_path):
+    # the close pair above, keys={"tanner"}: closest_call is None
+
+def test_the_threshold_never_goes_above_one(tmp_path):
+    # two people enrolled with the same vectors: accept == 1.0
+
+def test_identify_sends_a_borderline_turn_as_unknown_once_the_threshold_is_raised(tmp_path):
+    # tanner (1,0,0), ryan unit(1,1,0); the turn embeds to unit(1,-0.8,0), which scores 0.78 against tanner
+    # and 0.11 against ryan. With only tanner in keys the match is tanner. With both in keys it is None.
+
+def test_the_raise_is_logged_once_and_again_when_it_changes(tmp_path, caplog):
+    # two identify calls with both people: one "accept threshold is raised" line;
+    # after store.forget("ryan") and another call: one "back to 0.45" line
+
+def test_a_person_whose_own_sentences_fall_below_the_raised_threshold_is_warned_about(tmp_path, caplog):
+```
+
+- [ ] **Step 2: Run them and see them fail**
+
+Run: `python -m pytest tests/test_speakers.py -q`
+Expected: FAIL, `cannot import name 'closest_call'`
+
+- [ ] **Step 3: Implement `closest_call`, `separated`, and the change to `identify`.**
+
+- [ ] **Step 4: Add the threshold to the held-out report** in `enrolment_tools.evaluate_enrolment`, as a line before the read-aloud caveat, worked out from the same held-out voiceprints with every sentence: `The server would raise its accept threshold to 0.51 for these voices.` or `The server would leave its accept threshold at 0.45 for these voices.` Add one test for each wording to `tests/test_enrolment_tools.py`.
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `python -m pytest -q`
+Expected: PASS, with every earlier test unchanged.
+
+- [ ] **Step 6: Commit** with the message "Raise the accept threshold when two enrolled voices are close".
+
+---
+
+### Task 6: Documentation
 
 **Files:**
 - Modify: `docs/decisions.md:60`
@@ -380,6 +466,7 @@ Expected: PASS, with `test_evaluate_*` in `tests/test_speakers.py` unchanged.
   - Line 50: changing the model no longer means everyone enrols again. Say to stop the server, run `python -m robin_egg_server.speakers rebuild`, and start it again. Anyone enrolled before 19 November 2026 has no saved audio and enrols once more.
   - Line 334: voiceprints hold no audio, and the sentences of each enrolment are kept beside them in `~/.robin-egg/enrolment/<person>/`, readable only by the owner. Say what removes them: "forget my voice", or enrolling again, which replaces them.
   - A new subsection after the existing `evaluate` text: what `evaluate --enrolment` does, how to read the tables and the closest-call lines, and that everyday speech scores lower.
+  - A paragraph in the speaker recognition section on the automatic accept threshold: what the closest call is, that the threshold is the higher of 0.45 and the closest call plus 0.10, that it only rises, and the log lines to look for. Update line 586, which says the thresholds come from defaults only.
   - Options table: `--enrolment-audio DIR`.
   - File table: `enrolment_audio.py` and `enrolment_tools.py`.
 
@@ -388,10 +475,10 @@ Expected: PASS, with `test_evaluate_*` in `tests/test_speakers.py` unchanged.
 Run: `python -m robin_egg_server.speakers rebuild --help` and `python -m robin_egg_server.speakers evaluate --help`
 Expected: both print usage that matches the README.
 
-- [ ] **Step 4: Commit** with the message "Describe the saved enrolment audio, rebuild and the held-out test".
+- [ ] **Step 4: Commit** with the message "Describe the saved enrolment audio, rebuild, the held-out test and the automatic threshold".
 
 ---
 
 ## After it ships
 
-These need people, so they are not tasks: Tanner enrols again, Ryan enrols, and `python -m robin_egg_server.speakers evaluate --enrolment` is run once both are saved. That report is the first real measure of how far apart the two voices are.
+These need people, so they are not tasks: Tanner enrols again, Ryan enrols, and `python -m robin_egg_server.speakers evaluate --enrolment` is run once both are saved. That report is the first real measure of how far apart the two voices are. The server log at the next turn shows whether the accept threshold was raised for them.

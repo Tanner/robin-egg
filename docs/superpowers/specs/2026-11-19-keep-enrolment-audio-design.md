@@ -10,11 +10,13 @@ Enrolment takes a while: Robin reads ten sentences and each one has to be repeat
 - Rebuild every voiceprint from the saved audio with the current speaker model, with one command.
 - Test the saved audio against all enrolled people: right person, wrong person or unknown, at a range of thresholds, and how the results change with the number of sentences in a voiceprint.
 - "Forget my voice" deletes the saved audio as well as the voiceprint.
+- The server raises its accept threshold on its own when two enrolled voices are close, so one is not taken for the other.
 
 ## Non-goals
 
 - Shortening enrolment. That comes after this, once the test shows how many sentences are enough.
 - Keeping audio from everyday turns. The learning pool stays embeddings only, and `--save-audio` stays the only way to keep turn audio.
+- Setting thresholds by hand. There are no new server options for it; the automatic raise is the only adjustment.
 - Getting audio for enrolments made before this change. Tanner re-enrols once. Ryan's first enrolment is saved.
 
 ## Anti-goals
@@ -35,6 +37,7 @@ Enrolment takes a while: Robin reads ten sentences and each one has to be repeat
 - **Forget:** deletes the person's folder along with the voiceprint. The log says what was deleted.
 - **Rebuild:** `python -m robin_egg_server.speakers rebuild` re-embeds every saved sentence with the current model and writes `voiceprints.json`. Learning pools are emptied, because their embeddings came from the old model and have no audio behind them. People with no saved audio are left out, and the command names them so they know to re-enrol.
 - **Test:** `python -m robin_egg_server.speakers evaluate --enrolment` builds each person's voiceprint from all but one of their sentences, scores the held-out sentence against everyone, and repeats for every sentence. It prints the existing right/wrong/unknown table and runs again with voiceprints built from 4, 6 and 8 sentences, so the effect of a shorter enrolment shows up. It says plainly that enrolment sentences are read aloud in one sitting, so everyday speech will score lower than this.
+- **Automatic accept threshold:** on each turn the server takes the people robin-assistant lists who are enrolled, scores every enrolment sentence of each person against every other person's voiceprint, and calls the highest score the closest call. The accept threshold for that turn is the default (0.45) or the closest call plus 0.10, whichever is higher, and never above 1.0. It only ever raises, so a wrong guess costs more Unknown Speaker answers, never a wrong name. It uses the embeddings already in `voiceprints.json`, so it needs no saved audio and covers people enrolled before this change. The log says so when the threshold changes, for example "Tanner's and Ryan's voices score up to 0.41 against each other, so the accept threshold is raised from 0.45 to 0.51", and warns when the raised threshold is above what a person's own sentences score. The check that refuses an enrolment sounding like someone else keeps the default threshold, so it does not get laxer as the threshold rises.
 - **Decision record:** "Keep no audio" in [decisions.md](../../decisions.md) becomes "Keep no audio except enrolment sentences, which 'forget my voice' deletes".
 
 ## Left to the builder
@@ -45,4 +48,5 @@ Enrolment takes a while: Robin reads ten sentences and each one has to be repeat
 ## Preventing regressions
 
 - Tests for: a successful enrolment writes one WAV per kept sentence; a failed one writes nothing; re-enrolling replaces the folder; forgetting deletes it; rebuild gives the same voiceprint as the original enrolment when the model hasn't changed; the held-out test never scores a sentence against a voiceprint that contains it.
+- Tests for the threshold: one person enrolled or distant voices leave it at the default; close voices raise it; someone not in the people list does not count; a turn that the default would have accepted is Unknown Speaker once the threshold is raised.
 - The existing speaker and enrolment tests run unchanged.
