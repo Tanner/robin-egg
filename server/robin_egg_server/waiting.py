@@ -31,7 +31,7 @@ from .speaker_stream import SpeakerMessage
 
 LOG = logging.getLogger("robin.waiting")
 
-MAX_WAITING = 10  # the newest messages kept; robin-assistant texted every held one when it was held
+MAX_WAITING = 10  # the newest messages kept; robin-assistant texted each one it sent when it was held
 KEEP_S = 24 * 60 * 60  # a message nobody asked about for a day is no longer news
 RING_NAME = "LED Ring"
 WAITING_EFFECT = "Breathe"
@@ -62,6 +62,12 @@ class Held:
     text: str  # markdown already stripped
     at: float  # wall-clock time it arrived
 
+    def texted(self) -> str:
+        """Whether the person can still read it elsewhere, for the line that says it was let go."""
+        if isinstance(self.msg.id, int) and not isinstance(self.msg.id, bool):
+            return "robin-assistant sent it as a text when it was held"
+        return "it came through /announce, so robin-assistant never had it and it is gone"
+
     def spoken(self) -> str:
         hour = time.strftime("%I:%M %p", time.localtime(self.at)).lstrip("0")
         text = self.text if self.text[-1] in ".!?" else self.text + "."
@@ -88,7 +94,7 @@ class MessageWaiting:
             return False
         self._held.append(Held(msg, text, self.clock()))
         for old in self._held[:-MAX_WAITING]:
-            LOG.info("Let go of waiting message %s: more than %d are waiting, and robin-assistant sent it as a text when it was held", old.msg.describe(), MAX_WAITING)
+            LOG.info("Let go of waiting message %s: more than %d are waiting, and %s", old.msg.describe(), MAX_WAITING, old.texted())
         del self._held[:-MAX_WAITING]
         with contextlib.suppress(RuntimeError):  # no event loop: nothing will expire it but the next look
             asyncio.get_running_loop().call_later(KEEP_S + 1, self.refresh)
@@ -98,7 +104,7 @@ class MessageWaiting:
     def waiting(self) -> list[Held]:
         cutoff = self.clock() - KEEP_S
         for old in [h for h in self._held if h.at < cutoff]:
-            LOG.info("Let go of waiting message %s: nobody asked for a day, and robin-assistant sent it as a text when it was held", old.msg.describe())
+            LOG.info("Let go of waiting message %s: nobody asked for a day, and %s", old.msg.describe(), old.texted())
         self._held = [h for h in self._held if h.at >= cutoff]
         return list(self._held)
 

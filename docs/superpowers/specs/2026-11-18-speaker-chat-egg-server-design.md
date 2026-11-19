@@ -138,3 +138,30 @@ Built on 2026-11-18 in this repo, against the fake robin-assistant in the tests.
 - **The fake brains in eight test files gained the `reply_to` parameter.** No assertion in an existing test changed, apart from the request assertions this work changes on purpose.
 - **Line numbers** in this document for `egg.py` and `brain.py` are from before the build.
 - **Not yet tried on the real egg:** outcome reports, the timing of unfinished replies, late replies and the reopen phrase. `server/README.md` lists them.
+
+## What a review against the firmware changed
+
+On 2026-11-18 a review compared the build with the firmware source in `reference/` (`formatbce-lite-core/core/voice-assistant.yaml` and `esphome/voice_assistant/voice_assistant.cpp`). What the firmware does with the wake word:
+
+- **While an announcement plays,** the voice assistant counts as running, so the wake word only stops it. The player stops, and the egg sends announce-finished with success. It starts no run and does not reopen its mic. If playback has not started within 2 s, the egg also sends announce-finished with success.
+- **While a reply is still being streamed** (before TTS_END), it stops the player and sends a stop request, which the server sees as `handle_stop(True)`, then announce-finished with success. It starts no run.
+- **After TTS_END while the reply still plays,** it stops the player and sends only announce-finished with success. It sends no stop request and does not reopen its mic.
+- **While Robin is thinking,** it sends a stop request, seen as `handle_stop(True)`, and then waits for RUN_END.
+
+The fake egg in the tests had started a new run on every wake word, which hid lost messages. It can now follow the firmware (`wake_stops`). The fake still finishes an announcement at once, and moves a played clock on by the audio it skipped, so the tests stay fast.
+
+What changed:
+
+1. A message Robin sent on its own is timed against its audio length. If the egg reports it finished more than 0.5 s sooner than its audio could play, it counts as stopped. It is reported `dropped`, and the mic is not expected to reopen for an answer. In a digest stopped this way, the messages heard in full are `spoken`, and the one cut short and the ones not reached are `dropped`. None is queued again, because the person stopped it.
+2. When the egg reports a reply finished more than 1 s before the server's estimate of its end, what had not played is reported `dropped`. After TTS_END this is the only sign the egg gives that the wake word stopped the reply.
+3. A late answer to a turn the egg aborted is dropped and reported, like one to a turn the wake word cut off. On the egg, an abort is what the wake word sends while Robin is thinking.
+4. A `held` or `dropped` report is tried again for up to 10 minutes, with a doubling wait or as long as `Retry-After` asks. A `spoken` report keeps the short retry. A reply from a voice turn has no 15-minute safety net on the robin-assistant side, so a lost `dropped` report would lose it.
+5. A reply with nothing to say aloud, such as one that is only a link, a code block or a table, is reported `dropped` with "it had nothing to say aloud".
+6. "What did I miss?" reports each held message `spoken` only once its words have played, and `dropped` if the egg stops the read-out first, because the earlier `held` report may not have arrived.
+7. The answer after a request to say it again keeps its `reply_to`. A message the egg stopped opens no run, so nothing after it carries one.
+
+Known gaps:
+
+- A reply in flight when the turn is cancelled can be lost. robin-assistant counts it as taken once it is written, and the egg may never have seen its id.
+- The 0.5 s margin (`ANNOUNCE_EARLY_S`) is a guess. Every announcement logs how long it took against its audio length, and the bench should set the margin from those lines.
+- After a wake word while Robin is thinking, the firmware waits for RUN_END, and the server sends none after it cancels the turn, so the egg may stay showing "thinking". The firmware source suggests a RUN_END would return it to idle. Nothing here relies on the server not sending one, but whether it should is left open until the bench shows what the egg does.

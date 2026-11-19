@@ -32,7 +32,7 @@ So "the replies to my message" cannot be "the rows of my turn". This plan define
 - **Robin choosing to speak unprompted.** It needs robin-assistant to know something can speak, and to fall back to a text when nobody hears it. That is what a dedicated `voice` Method would be for. Leave it until the egg is in daily use. Speaking the messages Robin already writes on its own is covered by the speaker stream, below.
 - **Token streaming.** robin-assistant sends whole messages. Measure the delay first.
 - **Telling Tanner from Ryan.**
-- **Choosing a target chat.** The egg sends no `chat`, `project` or `thread`, so its messages land in the plain web chat. A later version may let the egg name a project, a thread or the main chat.
+- **Choosing a target chat.** In this plan the egg sent no `chat`, `project` or `thread`, so its messages landed in the plain web chat. Since 2026-11-18 it sends `chat=speaker` and talks in the speaker chat; see [Which chat](#which-chat). Naming a project or a thread is still not planned.
 - **Slash commands from the egg.** Built-in commands bypass the turn-end hook (`src/router/message-pipeline.ts:242-275`), so `wait=1` refuses them.
 - **Posting to a project thread.** Thread posts go through `projects.deliver` (`src/admin/chat-routes.ts:582-613`) and never reach `web.receive`, so `device` and `wait` would not apply there.
 
@@ -50,7 +50,7 @@ The route already takes a `device` field (`phone`, `tablet`, `computer`, in `WEB
 
 To confirm while building:
 
-- A merged turn takes the last message's metadata, and a steered message carries text only (`steerText`, `pipeline-state-machine.ts:169-173`). A steered egg message keeps whatever device the running turn had. The egg shares the plain chat with the phone, so this can happen; see "Which chat".
+- A merged turn takes the last message's metadata, and a steered message carries text only (`steerText`, `pipeline-state-machine.ts:169-173`). A steered egg message keeps whatever device the running turn had. While the egg shared the plain chat with the phone this could happen; in the speaker chat it no longer shares a turn with the phone. See "Which chat".
 - The exact-repeat check (`agent.ts:1463`) must not hide a device change back to `speaker` after a phone message.
 - Whether memory summarisation reads system-role entries. The device row should not end up in memory as something the person said.
 
@@ -150,14 +150,14 @@ Built 2026-11-16. Where the build differs from the plan above:
 
 Done in this repo once the robin-assistant side lands.
 
-- A `RobinBrain` in `server/robin_egg_server/brain.py`, beside `EchoBrain`, behind the same `Brain` protocol. It replaced the direct-Claude brain on 2026-11-16: Robin is the only brain, and `--echo` remains for testing the audio chain. It posts `text`, `device=speaker`, `wait=1`, the speaker as `user` ("Unknown Speaker" until the voice is identified), and a fresh `send_id` to the plain web chat, reads the event stream, and yields each `reply`.
+- A `RobinBrain` in `server/robin_egg_server/brain.py`, beside `EchoBrain`, behind the same `Brain` protocol. It replaced the direct-Claude brain on 2026-11-16: Robin is the only brain, and `--echo` remains for testing the audio chain. It posts `text`, `device=speaker`, `wait=1`, the speaker as `user` ("Unknown Speaker" until the voice is identified), and a fresh `send_id`, reads the event stream, and yields each `reply`. It posted to the plain web chat until 2026-11-18, and now adds `chat=speaker`.
 - Yield a newline after each reply. `sentences()` only splits on punctuation or newlines (`brain.py:88`), so two replies would otherwise run together.
 - Strip markdown from each reply before speaking, as a backstop to the prompt.
 - Outcomes:
   - `quiet`: say nothing. `_speak` currently says `NO_REPLY` for an empty turn (`egg.py:206-208`), so `RobinBrain` needs a way to end silently.
   - `error`: speak the apology row if there is one. With no reply, it counts as a failed turn.
   - `stopped`, a connection error, or no `end` within `--server-timeout`: a failed turn. The server says `FAILED_TURN` in its own voice, after whatever part of the reply was already spoken. The firmware has no error sound, only a one-second error LED, so the error event is sent only if that apology cannot be spoken.
-- After a timeout or a barge-in, Robin's turn keeps running and its late answer lands in the chat unheard. The next thing said may be steered into that turn. Accept this for v1 and log it. An approval card from a speaker turn has the same effect until the timeout.
+- After a timeout or a barge-in, Robin's turn keeps running. In the plain chat its late answer landed unheard; in the speaker chat it comes down the speaker stream as a late reply, which the egg speaks or reports so it is texted (`server/README.md`, "Late replies"). The next thing said may be steered into that turn. Accept this for v1 and log it. An approval card from a speaker turn has the same effect until the timeout.
 - Options: `--server` (a host or IP, `host:port` or URL; a bare host gets port 8273, a URL keeps its scheme's port) and `--agent-name`, both required unless `--echo`, then `--server-timeout`. There is no brain choice: always Robin, or `--echo`.
 - The server keeps no conversation history. Robin keeps its own.
 - At startup it fetches `GET /api/chat/:agent` and exits if the agent has no web chat or is disabled. If robin-assistant is unreachable it warns and starts anyway.
@@ -178,7 +178,7 @@ Since 2026-11-18 the egg listens with `?chat=speaker` and gets the speaker chat'
 
 Added 2026-11-16. robin-assistant's design is `docs/superpowers/specs/2026-11-16-speaker-stream-design.md` in that repo.
 
-`GET /api/chat/:agent/speaker` is a `text/event-stream` of the messages Robin writes into the plain web chat on its own: reminders, scheduled tasks, held updates, routines. It sends a `: connected` comment, a `: ping` every 15 s, and one `message` event per message, `{"id": 124, "text": "...", "label": "Dentist reminder"}`, with `label` missing when the message has no task. Replies to anyone's message never come through it, so nothing the egg hears through `wait=1` is spoken twice. There is no cursor and no replay. It closes when Robin reloads. It answers 404 for an unknown agent, 409 for a disabled one and 503 with `Retry-After` while reloading.
+`GET /api/chat/:agent/speaker` is a `text/event-stream` of the messages Robin writes on its own, in the speaker chat since 2026-11-18 and in the plain web chat before that: reminders, scheduled tasks, held updates, routines. It sends a `: connected` comment, a `: ping` every 15 s, and one `message` event per message, `{"id": 124, "text": "...", "label": "Dentist reminder"}`, with `label` missing when the message has no task. Replies to anyone's message never come through it, so nothing the egg hears through `wait=1` is spoken twice. There is no cursor and no replay. It closes when Robin reloads. It answers 404 for an unknown agent, 409 for a disabled one and 503 with `Retry-After` while reloading.
 
 On the egg server side, `speaker_stream.py` holds it open for the server's life, apart from `RobinBrain`. It reconnects after 1 s, doubling to 30 s, honours `Retry-After`, and resets the backoff once a connection has stayed up 30 s. A stream that sends nothing for 45 s, not even a ping, counts as dropped. 404 and 409 are logged as errors, since only a config change fixes them, and retried like the rest.
 

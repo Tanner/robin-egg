@@ -75,9 +75,9 @@ FOLLOW_UP_EARLY_S = 1.0  # a guess until the reopen timing in the log is read on
 # An announcement the egg reports finished this much sooner than its audio could play was stopped partway.
 ANNOUNCE_EARLY_S = 0.5  # a guess until the finish timing in the log is read on the real egg
 RECONNECT_DELAY_S = 2.0  # the first wait before trying the egg again; doubles up to 30 s
-ANNOUNCE_WAIT_S = 60.0
+ANNOUNCE_WAIT_S = 60.0  # how long /announce waits for the egg to be idle before giving up
 INTERRUPTED = ("wake_word", "abort")  # how a turn ends when the person stops it, so its late answer is texted, not spoken
-ABANDONED_KEPT = 8  # how many turns that ended before Robin's answer came are remembered, for late answers  # how long /announce waits for the egg to be idle before giving up
+ABANDONED_KEPT = 8  # how many turns that ended before Robin's answer came are remembered, for late answers
 
 
 class EventSink(Protocol):

@@ -112,7 +112,7 @@ class SpeakerStream:
                 reason = await _error_reason(resp)
                 if resp.status_code in (404, 409):
                     # Only a config change fixes these, so they are errors, but keep retrying.
-                    LOG.error("robin-assistant refused the speaker stream for agent %s with %d: %s. Robin cannot speak first until this is fixed; check --agent-name and that the agent is enabled", self.agent, resp.status_code, reason)
+                    LOG.error("robin-assistant refused the speaker stream for agent %s with %d: %s. Robin cannot speak first until this is fixed; check --agent-name, that the agent is enabled, and that it has speaker_chat = true under [methods.web]", self.agent, resp.status_code, reason)
                 elif resp.status_code == 503:
                     LOG.info("robin-assistant is reloading (503: %s); retrying the speaker stream later", reason)
                 else:
