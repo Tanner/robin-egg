@@ -14,6 +14,7 @@ from pathlib import Path
 from .brain import server_url
 from .digest import DEFAULT_MAX as DEFAULT_DIGEST_MAX, MAX_MAX as MAX_DIGEST_MAX, MIN_MAX as MIN_DIGEST_MAX
 from .egg import READY_CHIME, Options, Robin
+from .enrolment_audio import DEFAULT_ENROLMENT_AUDIO, EnrolmentAudio
 from .health import OfflineAlert, keep_captures_trimmed, status
 from .hosted_tts import DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_VOICE, DEFAULT_TIME_LIMIT_S
 from .leds import DEFAULT_COLOURS_FILE, LedRing, PersonColours
@@ -94,6 +95,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--speaker-recognition", action=argparse.BooleanOptionalAction, default=True, help="Tell household members apart by voice and let them enrol by saying 'learn my voice' (default on; --no-speaker-recognition turns it off; not used with --echo)")
     p.add_argument("--offer-enrolment", action=argparse.BooleanOptionalAction, default=True, help="After a few questions from the same unrecognised voice, add a spoken hint that it can say 'learn my voice', while someone in the household has no voiceprint (default on; at most once a day)")
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
+    p.add_argument("--enrolment-audio", metavar="DIR", default=str(DEFAULT_ENROLMENT_AUDIO), help="Where the sentences from each enrolment are kept as audio, so voiceprints can be rebuilt (default ~/.robin-egg/enrolment)")
     p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
     p.add_argument("--recognition-light", action=argparse.BooleanOptionalAction, default=True, help="Show a recognised speaker's colour on the LED ring while Robin thinks and replies (default on; needs speaker recognition)")
     p.add_argument("--led-colours", default=str(DEFAULT_COLOURS_FILE), help="JSON file of ring colours by robin-assistant user key, e.g. {\"tanner\": \"orange\"} (default ~/.robin-egg/led-colours.json; people it leaves out get a default colour)")
@@ -271,7 +273,9 @@ def build(args: argparse.Namespace):
         store.load()
         speakers = SpeakerId(embedder, store)
         people = People(brain.people)
-        commands = VoiceCommands(people, store, speakers.thresholds)
+        enrolment_audio = EnrolmentAudio(Path(args.enrolment_audio).expanduser())
+        enrolment_audio.tidy()
+        commands = VoiceCommands(people, store, speakers.thresholds, enrolment_audio)
         if args.recognition_light:
             ring = LedRing()
             colours = PersonColours.load(Path(args.led_colours).expanduser())

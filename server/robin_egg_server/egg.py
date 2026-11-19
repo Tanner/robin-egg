@@ -453,7 +453,7 @@ class Robin:
                 if again != NOTHING_TO_REPEAT:
                     self.last_said.remember(again)  # said again just now, so it stays repeatable
             elif self.commands is not None:
-                step = await self.commands.handle(heard, match)
+                step = await self.commands.handle(heard, match, bytes(t.audio))
             elif is_voice_command(heard):
                 # Robin would only guess at what this means, so the egg answers it itself.
                 LOG.info("Heard a voice command, but speaker recognition is turned off")

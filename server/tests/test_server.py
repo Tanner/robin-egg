@@ -487,6 +487,19 @@ def test_enrolment_over_the_egg(tmp_path):
     assert commands.active is False
 
 
+def test_enrolment_over_the_egg_keeps_what_the_mic_heard_for_each_sentence(tmp_path):
+    from robin_egg_server.enrolment_audio import EnrolmentAudio
+
+    _, commands, kwargs = enrolment(tmp_path)
+    commands.audio = EnrolmentAudio(tmp_path / "enrolment")
+    texts = ["learn my voice", "Tanner", *ENROL_SENTENCES]
+    asyncio.run(converse([speech(2.0) for _ in texts], FakeSTT(texts), SlowBrain([]), ToneTTS(), **kwargs))
+    assert saved_keys(tmp_path) == {"tanner"}
+    clips = commands.audio.clips("tanner")
+    assert len(clips) == len(ENROL_SENTENCES)
+    assert all(len(clip) >= 2 * MIC_RATE for clip in clips)  # at least the second of speech, 16-bit
+
+
 def test_enrolment_uses_the_longer_follow_up_window(tmp_path):
     async def follow_up_window(start_enrolment: bool) -> float:
         _, commands, kwargs = enrolment(tmp_path)
@@ -512,8 +525,8 @@ def test_wake_word_mid_enrolment_ends_it(tmp_path, monkeypatch):
     egg = FakeEgg([speech(2.0) for _ in texts], wake_words=["Okay Nabu", None, None, "Okay Nabu"])
     handle = commands.handle
 
-    async def handle_then_wait(heard, match):
-        step = await handle(heard, match)
+    async def handle_then_wait(heard, match, audio=b""):
+        step = await handle(heard, match, audio)
         if heard == ENROL_SENTENCES[0]:
             # The next wake word comes long after this reply, not as the egg reopening its mic.
             monkeypatch.setattr(egg_module, "FOLLOW_UP_GRACE_S", -3600.0)
@@ -545,8 +558,8 @@ def test_disconnect_mid_enrolment_drops_it(tmp_path):
     asked_for_a_sentence = asyncio.Event()
     handle = commands.handle
 
-    async def handle_and_signal(heard, match):
-        step = await handle(heard, match)
+    async def handle_and_signal(heard, match, audio=b""):
+        step = await handle(heard, match, audio)
         if heard == "Tanner" and commands.active:
             asked_for_a_sentence.set()
         return step
