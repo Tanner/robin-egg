@@ -42,6 +42,7 @@ from .enrol_offer import ENROL_OFFER, EnrolOffer
 from .logs import tagged
 from .quiet import QuietMode
 from .mic_mute import MicMute
+from .outcomes import outcome_of
 from .morning_mention import MorningMention
 from .repeat import DEFAULT_WINDOW_S, NOTHING_TO_REPEAT, LastSaid
 from .presence import Presence, SpokenTo, absence
@@ -166,6 +167,7 @@ class Robin:
         self._announce_count = 0  # numbers the /announce calls in the log
         self.client: Any = None  # an APIClient while the egg is connected
         self.room_context: Any = None  # a RoomContext when Robin is told facts about the room
+        self.outcomes: Any = None  # an OutcomeClient when robin-assistant is told what became of each message
         self.mic_mute = MicMute()
         self.turn: Turn | None = None
         self.egg_since = time.time()  # when the egg connected or, while it is away, when it was lost
@@ -514,6 +516,8 @@ class Robin:
         await self._finish_reply(t, say, cont=bool(held) and self.opts.follow_up == "always")
         self.last_said.remember(say)
         self.waiting.mark_read(held)
+        for h in held:
+            self._report(h.msg, "spoken")
 
     def _held(self, msg: SpeakerMessage, refusal: str) -> bool:
         """Keeps a message that speaking hours stopped, for "what did I miss?". False when it is to be dropped.
@@ -1094,6 +1098,7 @@ class Robin:
         for msg, outcome in outcomes:
             fate, _, why = outcome.partition(", ")
             self.turn_log.message(msg, fate, why)
+            self._report(msg, outcome)
         told = [(m, o.replace("spoken, in", "spoken in")) for m, o in outcomes] + [(m, "not reached, still waiting") for m in waiting or []]
         if self.room_context is not None and told:
             self.room_context.digest_outcome(digests.room_fact(told))
@@ -1134,6 +1139,20 @@ class Robin:
             self.room_context.message_outcome(msg.describe(), outcome)
         fate, _, why = outcome.partition(", ")
         self.turn_log.message(msg, fate, why)
+        self._report(msg, outcome)
+
+    def _report(self, msg: SpeakerMessage, outcome: str) -> None:
+        """Tells robin-assistant what became of a message it sent, so one nobody heard arrives as a text.
+
+        `outcome` is the egg's own words, such as "dropped, the egg's microphone is muted".
+        """
+        if self.outcomes is None:
+            return
+        fate, _, why = outcome.partition(", ")
+        try:
+            self.outcomes.report(msg.id, outcome_of(fate), why)
+        except Exception:  # noqa: BLE001 - a report is never a reason to fail what the egg is doing
+            LOG.exception("Could not report what became of message %s", msg.describe())
 
     def _expect_answer(self, msg: SpeakerMessage) -> None:
         """The egg reopens its mic now, so the run that follows is an answer to this message.

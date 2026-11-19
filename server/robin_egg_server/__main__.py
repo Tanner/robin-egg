@@ -330,6 +330,11 @@ async def run(args: argparse.Namespace) -> None:
             LOG.info("Telling Robin facts about the room at %s", robin.room_context.client.endpoint)
         elif not args.echo:
             LOG.info("Not telling Robin facts about the room (--no-room-context)")
+        if not args.echo:
+            from .outcomes import OutcomeClient
+
+            robin.outcomes = OutcomeClient(args.server, args.agent_name)
+            LOG.info("Telling Robin what became of each message it sends to the speaker at %s", robin.outcomes.endpoint)
         stop = asyncio.Event()
         listener = stream = None
         if not args.echo and args.robin_announcements:
@@ -357,6 +362,8 @@ async def run(args: argparse.Namespace) -> None:
             await web.stop()
             if robin.room_context is not None:
                 await robin.room_context.close()
+            if robin.outcomes is not None:
+                await robin.outcomes.close()
     finally:
         trimming.set()
         if trimmer is not None:
