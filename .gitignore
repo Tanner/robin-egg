@@ -9,10 +9,6 @@ bench-recordings/
 .env.*
 secrets.yaml
 
-# wake-word recordings stay local (voices)
-wakeword/recordings/*
-!wakeword/recordings/.gitkeep
-
 # Piper voices are downloads, not source
 server/voices/
 
