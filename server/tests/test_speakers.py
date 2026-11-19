@@ -9,6 +9,8 @@ import asyncio
 import json
 import logging
 import wave
+from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -416,3 +418,45 @@ def test_voiceprints_are_readable_only_by_their_owner(tmp_path):
     store = VoiceprintStore(tmp_path / "voiceprints.json", "model.onnx")
     store.replace("tanner", [unit(1, 0, 0)])
     assert store.path.stat().st_mode & 0o777 == 0o600
+
+
+def test_replace_many_writes_once_and_keeps_dates(tmp_path, monkeypatch):
+    store = VoiceprintStore(tmp_path / "v.json", MODEL)
+    store.replace("tanner", [unit(1, 0, 0)])
+    store.prints["tanner"].enrolled_on = "2026-11-16"
+    store.learn("tanner", unit(1, 0.1, 0), 50)
+    store.replace("sam", [unit(0, 0, 1)])
+    sam = store.prints["sam"]
+    writes = []
+    commit = store._commit
+    monkeypatch.setattr(store, "_commit", lambda prints: (writes.append(1), commit(prints))[1])
+    store.replace_many({"tanner": [unit(0, 1, 0)] * 2, "ryan": [unit(0, 1, 1)]})
+    assert len(writes) == 1
+    assert store.prints["tanner"].enrolled_on == "2026-11-16"
+    assert store.prints["tanner"].pool == []
+    assert len(store.prints["tanner"].enrolled) == 2
+    assert store.prints["ryan"].enrolled_on == date.today().isoformat()
+    assert store.prints["sam"] is sam
+
+
+def test_the_rebuild_command_remakes_voiceprints_from_saved_audio(tmp_path, monkeypatch, capsys):
+    from robin_egg_server import speakers as speakers_module
+    from robin_egg_server.enrolment_audio import EnrolmentAudio
+
+    class OneVoice:
+        def __init__(self, model_path: str) -> None:
+            self.name = Path(model_path).name
+
+        def embed(self, pcm16: bytes) -> np.ndarray:
+            return unit(1, 0, 0)
+
+    monkeypatch.setattr(speakers_module, "SherpaEmbedder", OneVoice)
+    audio = EnrolmentAudio(tmp_path / "enrolment")
+    audio.stage("tanner", {i: b"\x01\x00" * 16000 for i in range(1, 9)})
+    audio.commit("tanner")
+    code = speakers_module.main(["rebuild", "--voiceprints", str(tmp_path / "v.json"), "--speaker-model", "m.onnx", "--enrolment-audio", str(tmp_path / "enrolment")])
+    assert code == 0
+    assert "Rebuilt tanner from 8 saved sentences." in capsys.readouterr().out
+    store = VoiceprintStore(tmp_path / "v.json", "m.onnx")
+    store.load()
+    assert set(store.prints) == {"tanner"}

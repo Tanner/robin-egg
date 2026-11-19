@@ -188,6 +188,18 @@ class VoiceprintStore:
     def replace(self, key: str, enrolled: list[np.ndarray]) -> None:
         self._commit({**self.prints, key: Voiceprint(list(enrolled), [], date.today().isoformat())})
 
+    def replace_many(self, enrolled: dict[str, list[np.ndarray]]) -> None:
+        """Give each of these people a fresh voiceprint in one write, keeping the day they first enrolled.
+
+        Their learning pools are emptied. Everyone else is left as they are.
+        """
+        today = date.today().isoformat()
+        fresh = {
+            key: Voiceprint(list(vectors), [], self.prints[key].enrolled_on if key in self.prints else today)
+            for key, vectors in enrolled.items()
+        }
+        self._commit({**self.prints, **fresh})
+
     def learn(self, key: str, embedding: np.ndarray, cap: int) -> None:
         vp = self.prints.get(key)
         if vp is None:
@@ -393,14 +405,30 @@ def evaluate(root: Path, ids: SpeakerId) -> str:
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    p = argparse.ArgumentParser(prog="python -m robin_egg_server.speakers", description="Measure how well enrolled voices are recognised")
+    p = argparse.ArgumentParser(prog="python -m robin_egg_server.speakers", description="Measure how well enrolled voices are recognised, and rebuild their voiceprints")
     sub = p.add_subparsers(dest="command", required=True)
     ev = sub.add_parser("evaluate", help="Score WAV clips from the egg against the enrolled voiceprints")
     ev.add_argument("dir", type=Path, help="A folder holding <person>/*.wav and unknown/*.wav, saved with --save-audio")
     ev.add_argument("--voiceprints", type=Path, default=Path("~/.robin-egg/voiceprints.json").expanduser(), help="Where the enrolled voiceprints are kept")
     ev.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model")
+    rb = sub.add_parser("rebuild", help="Remake voiceprints from the saved enrolment audio, with the current speaker model. Stop the server first")
+    rb.add_argument("--voiceprints", type=Path, default=Path("~/.robin-egg/voiceprints.json").expanduser(), help="Where the enrolled voiceprints are kept")
+    rb.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model")
+    rb.add_argument("--enrolment-audio", type=Path, default=Path("~/.robin-egg/enrolment").expanduser(), help="Where the sentences from each enrolment are kept as audio")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    if args.command == "rebuild":
+        # Imported here because both modules import this one.
+        from .commands import MIN_GOOD_SENTENCES
+        from .enrolment_audio import EnrolmentAudio
+        from .enrolment_tools import rebuild
+
+        embedder = SherpaEmbedder(args.speaker_model)
+        store = VoiceprintStore(args.voiceprints, embedder.name)
+        store.load()
+        print(rebuild(EnrolmentAudio(args.enrolment_audio), embedder, store, MIN_GOOD_SENTENCES))
+        return 0
 
     if not args.dir.is_dir():
         p.error(f"{args.dir} is not a folder")
