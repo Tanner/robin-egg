@@ -70,27 +70,31 @@ def test_a_batch_is_mentioned_once_and_a_later_message_starts_a_new_one():
 # ---- over the fake egg ----
 
 
+async def ask_then_let_the_follow_up_close(egg) -> str:
+    """Asks, then waits for the follow-up nobody answers to end, so the next wake word cannot race the reopened mic."""
+    await ask(egg)
+    asked = egg.asked
+    await eventually(lambda: len(egg.runs) > asked + 1 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[asked + 1].types())
+    return said(egg)
+
+
 def test_the_first_reply_after_speaking_hours_begin_mentions_the_messages_once(caplog):
     heard: list[str] = []
 
     async def scenario(egg, robin):
         await hold_overnight(robin, msg(1, "The bins go out tonight."), msg(2, "Ryan's train is late."))
         for _ in range(2):
-            await ask(egg)
-            heard.append(said(egg))
+            heard.append(await ask_then_let_the_follow_up_close(egg))
         robin.opts.speaking_hours = QUIET
         await robin.proactive(msg(3, "Good night."))
-        await ask(egg)
-        heard.append(said(egg))  # still outside speaking hours: the light is the only sign
+        heard.append(await ask_then_let_the_follow_up_close(egg))  # still outside speaking hours: the light is the only sign
         robin.opts.speaking_hours = ALL_DAY
-        await ask(egg)
-        heard.append(said(egg))
-        await ask(egg)
-        heard.append(said(egg))
+        heard.append(await ask_then_let_the_follow_up_close(egg))
+        heard.append(await ask_then_let_the_follow_up_close(egg))
 
     texts = ["what's the weather", "and tomorrow", "what time is it", "good morning", "say that again"]
     with caplog.at_level(logging.INFO, logger="robin"):
-        egg, robin, brain = asyncio.run(with_egg(scenario, Options(follow_up="always"), texts))
+        egg, robin, brain = asyncio.run(with_egg(scenario, Options(follow_up="always", follow_up_window_s=0.5), texts))
     assert heard == [f"{ANSWER} {TWO}", ANSWER, ANSWER, f"{ANSWER} {mention(3)}", ANSWER]  # the repeat leaves the hint out
     assert brain.heard == texts[:4]
     assert egg.announcements == []  # nothing was spoken unprompted
