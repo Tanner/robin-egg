@@ -6,14 +6,14 @@ Drafted 2026-11-18 against robin-assistant `74499dc1`, then revised the same day
 
 Today the egg talks in the plain web chat, `web:1`, the one the phone uses. Two things follow that nobody wants. Every message Robin writes into that chat on its own is spoken, and everything said to the egg shows up in the web chat.
 
-This plan gives speech its own chat. What is said to a speaker and what Robin says back live in a speaker chat that the web chat page never shows. Everything in the speaker chat is spoken, and everything in the web chat is text. Robin still knows what was said in both, and it can speak from other chats when it chooses to.
+This plan gives speech its own chat. What is said to a speaker and what Robin says back live in a speaker chat, apart from the web chat. Everything in the speaker chat is spoken, and everything in the web chat is text. Robin still knows what was said in both, and it can speak from other chats when it chooses to. The web UI shows the speaker chat as a read-only page, so anyone can see what was said, and nobody can type into it.
 
 It reverses the 2026-11-16 decision that the egg shares the plain chat ([decisions.md](../../decisions.md), "The egg talks in the plain web chat").
 
 ## Behaviour
 
 - A speaker posts to the speaker chat. Its replies come back through `wait=1` as today.
-- The web chat page never lists the speaker chat or shows its rows. It raises no unread badge and no push.
+- The web chat never shows the speaker chat's rows. The speaker chat has its own read-only page in the web UI, opened from the "..." menu, with no way to add a message. It raises no unread badge and no push.
 - A turn in the plain chat sees what was recently said in the speaker chat, and a turn in the speaker chat sees what was recently said in the plain chat. Either can read further back with a tool.
 - Nothing written in the plain chat is spoken unless Robin chose that. Robin chooses with a `Speak` tool, or with a scheduled task's `deliver` field.
 - A task scheduled by voice is spoken unless Robin chose text for it.
@@ -27,7 +27,7 @@ It reverses the 2026-11-16 decision that the egg shares the plain chat ([decisio
 - Telegram chats reading the speaker chat. A one-person Telegram chat can speak into it and gets the answer reported back, but only the plain chat and the speaker chat read each other.
 - Speaking from a project. Project chats and their threads get no `Speak`, and a routine's result is always text.
 - More than one speaker chat. One agent has one, however many eggs there are.
-- Showing the speaker chat on the web chat page. A debug read through the API is enough for now.
+- Answering, reacting to or editing anything in the speaker chat from the browser.
 - Telling Tanner from Ryan. The `user` field already carries it.
 - Moving the speaking rules into robin-assistant. See "Later" at the end.
 
@@ -45,16 +45,18 @@ A reserved web chat id, `WEB_SPEAKER_CHAT_ID = 2`, context `web:2`. Project and 
 
 **Device.** Every message into the speaker chat is `device=speaker`, whatever the form says. The device row is then pushed once per session and never flips, and the steered-message and exact-repeat cases in [robin-chat-api.md](../../robin-chat-api.md) cannot happen there.
 
-**Hidden from the page.** The page filters by chat only on the client (`chat/web/src/store.ts:323`). Every row of every chat is replayed (`methods/web.ts:769`) and emitted live (`web.ts:427-449`) to every `/events` listener. So the filter has to be on the server:
+**Shown read-only in the web UI.** A "Speaker" item in the "..." menu opens the speaker chat as a page of its own. To confirm: that the menu meant is the agent menu (`chat/web/src/AgentMenu.tsx`), which lists Activity, Routines, Library and Skills today. The item is there only when `speakerChat` is true.
 
-- No event whose chat is the speaker chat goes to `/events`, in the replay or live. That covers rows and also `typing`, `toolsDone`, `context` and `background` (`web.ts:798-812`, `859-880`, `1031-1035`).
-- `subscribe` sends `reset` when the cursor is more than 500 behind (`web.ts:765-767`). Hidden rows still advance the global `seq`, so count the gap over visible rows, or a quiet phone tab reloads after 500 spoken rows.
+- The page is the transcript with no composer. Nothing on it replies, reacts, edits or answers a card.
+- Each row shows who spoke. A row Robin sent to the speaker shows its outcome from the meta: spoken, not spoken with the reason, or pending. A row sent with `Speak` also shows which chat sent it and its handoff note.
+- It needs no new feed. Every row of every chat is already replayed (`methods/web.ts:769`) and emitted live (`web.ts:427-449`) to every `/events` listener, and the page keeps the rows of the chat it is showing (`chat/web/src/store.ts:323`). So the plain chat's page drops speaker rows as it drops a project's, and the speaker page keeps them. Older rows page in through `GET /messages?chat=speaker`.
+- No message can be added from the browser. The page sends `chat` as a raw id, and `chat=2` is refused, so the page's own post path cannot reach the speaker chat. This is a rule of the UI and that check, not of identity. No route has a login, so the server cannot tell a browser from an egg server that posts `chat=speaker`.
 - The badge's message count already ignores chat 2, but its approvals term counts every `web:` context (`admin/badge-routes.ts:87`). Exclude `web:2`.
 - Push needs no change. `targetOf` answers null for chat 2 (`push/notifier.ts:80-85`).
-- `/presence` and `/seen` already refuse chat 2 (`chat-routes.ts:305-307`, `348-350`). `GET /messages?chat=speaker` is allowed, for debugging.
-- The Activity view titles a run with the first 120 characters of the user's words (`activity/title.ts:12-24`) and labels any non-project web chat "Chat" (`admin/activity-routes.ts:53-59`). Label speaker runs "Speaker". The Ideas digest would call the chat "Web chat 2" (`ideas/digest.ts:60-73`), so label it there too.
+- `/presence` and `/seen` already refuse chat 2 (`chat-routes.ts:305-307`, `348-350`), and stay that way. Reading the speaker page is not being in the room.
+- The Activity view titles a run with the first 120 characters of the user's words (`activity/title.ts:12-24`) and labels any non-project web chat "Chat" (`admin/activity-routes.ts:53-59`). Label speaker runs "Speaker" and link them to the speaker page. The Ideas digest would call the chat "Web chat 2" (`ideas/digest.ts:60-73`), so label it there too.
 
-**Cards that need a screen.** A tool that needs approval writes its card into the chat the turn runs in (`web.ts:941-946`), and GetLocation does the same with its request card (`web.ts:958-962`). In the speaker chat nobody can see or tap them, approvals last 24 hours (`approvals/messages.ts:45-46`), and the turn holds the chat's history lock the whole time. So a speaker turn mirrors its approval and location cards into the plain chat, the way a project does with `approvalMirrorFor` (`agents/runtime.ts:1095`), and the `speaker` device prompt tells Robin to say that it has sent something to the phone to approve. If the mirror proves hard, the fallback is to refuse gated tools on speaker turns with words that say so.
+**Cards that need a screen.** A tool that needs approval writes its card into the chat the turn runs in (`web.ts:941-946`), and GetLocation does the same with its request card (`web.ts:958-962`). On the speaker page they can be seen and not answered, approvals last 24 hours (`approvals/messages.ts:45-46`), and the turn holds the chat's history lock the whole time. So a speaker turn mirrors its approval and location cards into the plain chat, the way a project does with `approvalMirrorFor` (`agents/runtime.ts:1095`), and the `speaker` device prompt tells Robin to say that it has sent something to the phone to approve. If the mirror proves hard, the fallback is to refuse gated tools on speaker turns with words that say so.
 
 **What the chat gets.** The project store does not know the speaker chat, so `goalsChat` (`agent/capabilities/goals.ts:24-29`) and `speakerChat` (`agent/capabilities/core.ts:20-25`) already treat it as a plain chat. It gets goals, the projects index, ScheduleTask and SetListening with no change.
 
@@ -69,7 +71,7 @@ A reply is late when no wait with a live listener took it. `waits.reply` (`metho
 
 One small gap is accepted: a reply written to a client that has just gone, before its abort fires, counts as taken. The egg server's outcome report for unfinished replies, below, covers it when the server is still running.
 
-**Outcomes and the text fallback.** A row in a hidden chat that nobody hears is lost, where today it is "still in the chat". So every row handed to the speaker stream is tracked until the speaker says what became of it.
+**Outcomes and the text fallback.** A speaker chat row that nobody hears is as good as lost. It is on the speaker page, but that page raises no badge and no push, so nobody is told to look, where today the message sits in the chat people read. So every row handed to the speaker stream is tracked until the speaker says what became of it.
 
 The state lives in the row's meta, not in memory: `speaker: {state, fallback, sentAt, reason?}`, where `state` is `pending`, `spoken` or `fell_back`, and `fallback` is a context id. It survives a reload and a crash, and nothing needs flushing when the method stops.
 
@@ -188,10 +190,10 @@ The egg should move to the speaker chat only after piece 2. With piece 1 alone t
 ## Preventing regressions
 
 - With `speaker_chat` unset, every route, tool list, prompt and speaker event is what it is today, apart from the `speakerChat: false` key. The existing suite must pass unchanged, including the web chat's, the speaker stream's unit, route and e2e tests, and Telegram's.
-- With it set, the plain chat's rows, page, badges and push are unchanged apart from the recent block in the model's history.
+- With it set, the plain chat's rows, page, badges and push are unchanged apart from the recent block in the model's history and the new menu item.
 - New tests:
   - The flag survives config load and the resolver. `chat=speaker` and `/speaker?chat=speaker` answer 404 with it off. `chat=2` is refused always.
-  - No speaker chat event of any kind reaches `/events`, live or replayed. 600 speaker rows do not send a quiet page a `reset`. A pending approval in the speaker chat adds nothing to the badge.
+  - The speaker page shows rows as they are written, with their outcomes and notes, and has no composer. The plain chat's page never shows a speaker row. A post with `chat=2` is refused. A pending approval in the speaker chat adds nothing to the badge, and opening the speaker page marks nothing seen or present.
   - An approval card and a location card from a speaker turn appear in the plain chat and can be answered there.
   - A message into the speaker chat is `device=speaker` even when the form says `phone`.
   - A stream listener with `chat=speaker` gets speaker chat rows and no plain chat rows. A listener without it gets what it gets today.
@@ -212,7 +214,7 @@ The egg should move to the speaker chat only after piece 2. With piece 1 alone t
 
 ## Complexity
 
-- Piece 1 is medium to large. The id and the target are small. The care is in keeping the chat off every page-facing path, the card mirror, the per-row late rule, and the outcome state.
+- Piece 1 is medium to large. The id and the target are small. The care is in the read-only page and keeping badges and push quiet, the card mirror, the per-row late rule, and the outcome state.
 - Piece 2 is medium. Little code, but it opens the privacy boundary.
 - Piece 3 is medium to large. `Speak` is small apart from the lock ordering. The `deliver` change touches every place `deliver` and `urgent` live, the tool descriptions the model reads, and stored tasks, which need a migration that cannot lose a reminder.
 - Piece 4 is small. `reply_to` already does the hard part.
@@ -222,7 +224,6 @@ The egg should move to the speaker chat only after piece 2. With piece 1 alone t
 - Should a `held` message fall back to text at once, as planned, or wait to see if someone asks "what did I miss?" in the morning? At once is simpler and matches text by default, but the morning read-out then repeats what the phone already showed.
 - Should the speaker chat have goals and the projects index? It costs prompt space on every spoken turn.
 - Does the speaker chat need its own, shorter inactivity window before compaction? Spoken sessions are brief and far apart.
-- Is labelling speaker runs "Speaker" in the Activity view enough, or should they be left out of it? They show the first words of what was said.
 
 ## Later
 

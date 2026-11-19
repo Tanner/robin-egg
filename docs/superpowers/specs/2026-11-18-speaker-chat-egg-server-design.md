@@ -6,7 +6,7 @@ Drafted 2026-11-18, then revised the same day after a review against the code. T
 
 The egg server stops talking in the plain web chat and moves to robin-assistant's speaker chat. After the move:
 
-- What is said to the egg, and what Robin answers, no longer shows in the web chat.
+- What is said to the egg, and what Robin answers, no longer shows in the web chat. It shows on a read-only Speaker page in the web UI.
 - The egg speaks only what Robin sent to the speaker. Reminders and task results written in the web chat stay text.
 - The egg tells robin-assistant what became of each message, so one that nobody heard arrives as text.
 
@@ -52,7 +52,7 @@ The `egg_last_message` room fact stays for now. It tells Robin the same thing le
 
 ### Replies that were not finished
 
-In the web chat an answer the egg failed to speak was at least on the page. In a hidden chat it is nowhere, so the egg reports those too. The `reply` event carries the reply's row id. When the egg does not finish speaking a reply, because the wake word cut it off, the voice failed or the egg disconnected, it reports that id as `dropped` with the reason, and robin-assistant sends the answer as a text. A reply spoken to the end needs no report.
+In the web chat an answer the egg failed to speak was at least where people read. On the speaker page nobody is told to look for it, so the egg reports those too. The `reply` event carries the reply's row id. When the egg does not finish speaking a reply, because the wake word cut it off, the voice failed or the egg disconnected, it reports that id as `dropped` with the reason, and robin-assistant sends the answer as a text. A reply spoken to the end needs no report.
 
 ### Late replies
 
@@ -111,7 +111,7 @@ Piece 1 needs robin-assistant's piece 1. Turn the option on for daily use only o
   - A reply cut off by the wake word, by a voice failure and by a disconnect is reported `dropped` with its row id. A reply spoken to the end sends no report.
   - A late reply is spoken after a timeout, dropped and reported after a wake-word interruption, and spoken when no turn matches.
   - The run after a message that asked a question carries `reply_to`. A wake-word turn does not, and neither does a message whose id is not an integer.
-- A bench check with the real egg and a real robin-assistant before the default flips: ask a question and confirm nothing appears in the web chat, type in the web chat and confirm the egg stays silent, have Robin speak from the web chat, mute the mic and confirm the message arrives as text, interrupt an answer and confirm the rest arrives as text, and answer a spoken question without the wake word.
+- A bench check with the real egg and a real robin-assistant before the default flips: ask a question and confirm it appears on the Speaker page and not in the web chat, type in the web chat and confirm the egg stays silent, have Robin speak from the web chat, mute the mic and confirm the message arrives as text, interrupt an answer and confirm the rest arrives as text, and answer a spoken question without the wake word.
 - At the flip, existing reminders go quiet. Every task stored so far belongs to the plain chat, including the ones set by voice. Ask Robin to list the scheduled tasks and say which should be spoken.
 - Update [decisions.md](../../decisions.md) (the shared-chat row), [robin-chat-api.md](../../robin-chat-api.md) ("Which chat" and the speaker stream section), [architecture.md](../../architecture.md) and `server/README.md` when the default flips, not before.
 
