@@ -23,7 +23,7 @@ Record on an iPhone with Voice Memos, with Audio Quality set to **Lossless** and
 
 Any filename that contains `negative` is used as a don't-wake set. Every other file counts as "Hey Robin". Keep the originals in `recordings/` here so we can retrain later. Recording through the egg's own mics would match what the wake word hears, but it needs new code, so it waits until v1 shows whether phone takes are good enough.
 
-The cut clips are written back to `MyDrive/robin_wakeword/recordings_cut/`, so you can listen and delete any bad cuts.
+The cut clips are written back to `MyDrive/robin_wakeword/recordings_cut/` so you can listen to them. Deleting a bad cut there does nothing, because every run cuts the memos in `recordings/` again. To drop a take, rebuild the memo without it: join the good takes with a second of silence between them and save it as a WAV under the same name. Keep the original memo in `recordings/originals/`. The notebook skips folders. A bad take in a "Hey Robin" memo matters most: a breath, a click, or half of a split take teaches the model to wake on it. Stray sounds in a don't-wake memo do no harm.
 
 ## Load it into the firmware
 
