@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import whoami
+from .enrolment_audio import EnrolmentAudio
 from .speakers import Match, People, Person, Thresholds, VoiceprintStore, scores
 
 LOG = logging.getLogger("robin.commands")
@@ -110,11 +111,13 @@ class _Flow:
     index: int = 0
     retried: bool = False
     kept: list[np.ndarray] = field(default_factory=list)
+    kept_audio: dict[int, bytes] = field(default_factory=dict)  # by sentence number, from 1
 
 
 class VoiceCommands:
-    def __init__(self, people: People, store: VoiceprintStore, thresholds: Thresholds) -> None:
+    def __init__(self, people: People, store: VoiceprintStore, thresholds: Thresholds, audio: EnrolmentAudio | None = None) -> None:
         self.people, self.store, self.thresholds = people, store, thresholds
+        self.audio = audio  # where each enrolment's sentences are kept as audio; None keeps none
         self._flow: _Flow | None = None
 
     @property
@@ -126,7 +129,7 @@ class VoiceCommands:
             LOG.info("Dropping the voice conversation that was in progress; nothing was saved")
         self._flow = None
 
-    async def handle(self, heard: str, match: Match) -> Step | None:
+    async def handle(self, heard: str, match: Match, audio: bytes = b"") -> Step | None:
         flow = self._flow
         if flow is None:
             if is_command(heard, LEARN_PHRASE):
@@ -145,7 +148,7 @@ class VoiceCommands:
             return await self._answer_name(flow, heard, match)
         if flow.kind == "replace":
             return self._answer_replace(flow, heard)
-        return await self._answer_sentence(flow, heard, match)
+        return await self._answer_sentence(flow, heard, match, audio)
 
     def _end(self, say: str) -> Step:
         self._flow = None
@@ -202,12 +205,14 @@ class VoiceCommands:
             True,
         )
 
-    async def _answer_sentence(self, flow: _Flow, heard: str, match: Match) -> Step:
+    async def _answer_sentence(self, flow: _Flow, heard: str, match: Match, audio: bytes) -> Step:
         assert flow.person is not None
         key, total = flow.person.key, len(ENROL_SENTENCES)
         expected = ENROL_SENTENCES[flow.index]
-        if match.embedding is not None and same_sentence(heard, expected):
+        usable = match.embedding is not None and (self.audio is None or bool(audio))
+        if usable and same_sentence(heard, expected):
             flow.kept.append(match.embedding)
+            flow.kept_audio[flow.index + 1] = audio
             LOG.info("Enrolment for %s: sentence %d of %d matched", key, flow.index + 1, total)
         elif not flow.retried:
             flow.retried = True
@@ -235,13 +240,39 @@ class VoiceCommands:
         if other is not None:
             LOG.info("Enrolment for %s: the sentences sound like %s, nothing saved", person.key, other.key)
             return self._end(_not_you(other, person))
+        if self.audio is not None:
+            try:
+                self.audio.stage(person.key, flow.kept_audio)
+            except (OSError, ValueError) as err:
+                LOG.warning("Enrolment for %s: could not keep the sentences as audio, so nothing was saved (%s)", person.key, err)
+                self.audio.discard(person.key)
+                return self._end(SAVE_FAILED)
         try:
             self.store.replace(person.key, flow.kept)
         except OSError as err:
             LOG.warning("Enrolment for %s: could not save the voiceprint (%s)", person.key, err)
+            if self.audio is not None:
+                self.audio.discard(person.key)
             return self._end(SAVE_FAILED)
-        LOG.info("Enrolment for %s: saved %d sentences", person.key, len(flow.kept))
+        if self.audio is None:
+            LOG.info("Enrolment for %s: saved %d sentences", person.key, len(flow.kept))
+        else:
+            self._keep_audio(person.key, len(flow.kept))
         return self._end(f"Thanks, {person.name}, I'll know your voice now.")
+
+    def _keep_audio(self, key: str, sentences: int) -> None:
+        """Swap the staged sentences in. The voiceprint is already saved, so a failure here must not undo the enrolment."""
+        assert self.audio is not None
+        try:
+            self.audio.commit(key)
+        except OSError as err:
+            LOG.warning("Enrolment for %s: saved %d sentences without its audio, so a rebuild will skip them (%s)", key, sentences, err)
+            try:
+                self.audio.delete(key)  # older audio would no longer match the voiceprint
+            except OSError as stuck:
+                LOG.warning("Enrolment for %s: audio from an earlier enrolment is still in %s and could not be removed (%s)", key, self.audio.root / key, stuck)
+            return
+        LOG.info("Enrolment for %s: saved %d sentences and their audio in %s", key, sentences, self.audio.root / key)
 
     def _closest_other(self, mean: np.ndarray, person: Person, people: list[Person]) -> Person | None:
         """Another enrolled person the mean voice confidently sounds like, if any."""
@@ -281,12 +312,21 @@ class VoiceCommands:
         if not _is_yes(heard):
             LOG.info("Forget for %s: keeping the voiceprint", flow.person.key)
             return self._end(KEEP_IT)
+        if self.audio is not None:
+            try:
+                self.audio.delete(flow.person.key)
+            except (OSError, ValueError) as err:
+                LOG.warning("Forget for %s: could not delete the enrolment audio, so the voiceprint was kept too (%s)", flow.person.key, err)
+                return self._end(FORGET_FAILED)
         try:
             self.store.forget(flow.person.key)
         except OSError as err:
             LOG.warning("Forget for %s: could not delete the voiceprint (%s)", flow.person.key, err)
             return self._end(FORGET_FAILED)
-        LOG.info("Forget for %s: voiceprint deleted", flow.person.key)
+        if self.audio is None:
+            LOG.info("Forget for %s: voiceprint deleted", flow.person.key)
+        else:
+            LOG.info("Forget for %s: voiceprint and enrolment audio deleted", flow.person.key)
         return self._end("Done. I've forgotten your voice.")
 
 

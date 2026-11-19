@@ -19,6 +19,7 @@ from robin_egg_server.commands import (
     is_command,
     same_sentence,
 )
+from robin_egg_server.enrolment_audio import EnrolmentAudio
 from robin_egg_server.speakers import Match, People, Person, Thresholds, VoiceprintStore
 
 TANNER = Person("tanner", "Tanner")
@@ -51,8 +52,8 @@ def make(tmp_path, people=(TANNER, RYAN), enrolled=()) -> tuple[VoiceCommands, V
     return VoiceCommands(People(fetch), store, Thresholds()), store
 
 
-def say(commands: VoiceCommands, text: str, match: Match | None = None):
-    return asyncio.run(commands.handle(text, match or heard_as(None)))
+def say(commands: VoiceCommands, text: str, match: Match | None = None, audio: bytes = b""):
+    return asyncio.run(commands.handle(text, match or heard_as(None), audio))
 
 
 def reach_sentences(commands: VoiceCommands, name: str = "Tanner", match: Match | None = None):
@@ -360,4 +361,194 @@ def test_forget_does_not_act_on_a_speaker_carried_over_from_the_last_turn(tmp_pa
     step = say(commands, "forget my voice", inherited)
     assert step.say == "I'm not sure whose voice this is. Say the wake word, then 'forget my voice'."
     assert not step.listen and not commands.active
+    assert "tanner" in store.prints
+
+
+# Enrolment audio: the matched sentences are kept as WAVs, and only alongside a saved voiceprint.
+
+
+def make_with_audio(tmp_path, people=(TANNER, RYAN), enrolled=()) -> tuple[VoiceCommands, VoiceprintStore, EnrolmentAudio]:
+    async def fetch() -> list[Person]:
+        return list(people)
+
+    store = VoiceprintStore(tmp_path / "voiceprints.json", "model.onnx")
+    for key, voice in enrolled:
+        store.replace(key, [voice] * 3)
+    audio = EnrolmentAudio(tmp_path / "enrolment")
+    return VoiceCommands(People(fetch), store, Thresholds(), audio), store, audio
+
+
+def clip(i: int) -> bytes:
+    return bytes([i]) * 3200
+
+
+def enrol(commands: VoiceCommands, first: int = 0, name: str = "Tanner", key: str = "tanner"):
+    """A full enrolment where sentence i is heard with the audio clip(first + i)."""
+    step = reach_sentences(commands, name)
+    if step.say.startswith("I already know"):
+        step = say(commands, "yes")
+    for i, sentence in enumerate(ENROL_SENTENCES):
+        step = say(commands, sentence, heard_as(key, TANNER_VOICE), clip(first + i))
+    return step
+
+
+def files_under(path) -> list[str]:
+    return sorted(str(p.relative_to(path)) for p in path.rglob("*")) if path.exists() else []
+
+
+def test_full_enrolment_saves_the_ten_sentences_as_audio(tmp_path):
+    commands, store, audio = make_with_audio(tmp_path)
+    step = enrol(commands)
+    assert step.say == "Thanks, Tanner, I'll know your voice now."
+    assert audio.clips("tanner") == [clip(i) for i in range(10)]
+    assert len(store.prints["tanner"].enrolled) == 10
+
+
+def test_a_skipped_sentence_leaves_no_audio(tmp_path):
+    commands, store, audio = make_with_audio(tmp_path)
+    reach_sentences(commands)
+    for i, sentence in enumerate(ENROL_SENTENCES):
+        if i == 2:
+            say(commands, "something else entirely", heard_as("tanner"), clip(100))
+            say(commands, "something else again", heard_as("tanner"), clip(101))
+        else:
+            say(commands, sentence, heard_as("tanner"), clip(i))
+    names = sorted(p.name for p in (tmp_path / "enrolment" / "tanner").iterdir())
+    assert names == ["01.wav", "02.wav", "04.wav", "05.wav", "06.wav", "07.wav", "08.wav", "09.wav", "10.wav"]
+    assert len(store.prints["tanner"].enrolled) == 9
+
+
+def test_a_matched_sentence_with_no_audio_counts_as_a_miss(tmp_path):
+    commands, _, _ = make_with_audio(tmp_path)
+    reach_sentences(commands)
+    step = say(commands, ENROL_SENTENCES[0], heard_as("tanner"))
+    assert step.say == "Sorry, let's try that one again. " + ENROL_SENTENCES[0]
+
+
+def test_fewer_than_eight_saves_no_audio(tmp_path):
+    commands, store, audio = make_with_audio(tmp_path)
+    reach_sentences(commands)
+    for i, sentence in enumerate(ENROL_SENTENCES):
+        if i < 3:
+            say(commands, "no", heard_as("tanner"), clip(i))
+            say(commands, "no", heard_as("tanner"), clip(i))
+        else:
+            say(commands, sentence, heard_as("tanner"), clip(i))
+    assert "tanner" not in store.prints
+    assert files_under(tmp_path / "enrolment") == []
+
+
+def test_stop_and_reset_save_no_audio(tmp_path):
+    commands, _, _ = make_with_audio(tmp_path)
+    reach_sentences(commands)
+    say(commands, ENROL_SENTENCES[0], heard_as("tanner"), clip(0))
+    say(commands, "stop")
+    reach_sentences(commands)
+    say(commands, ENROL_SENTENCES[0], heard_as("tanner"), clip(0))
+    commands.reset()
+    assert files_under(tmp_path / "enrolment") == []
+
+
+def test_sounding_like_someone_else_saves_no_audio(tmp_path):
+    commands, store, _ = make_with_audio(tmp_path, enrolled=[("ryan", RYAN_VOICE)])
+    reach_sentences(commands)
+    for i, sentence in enumerate(ENROL_SENTENCES):
+        step = say(commands, sentence, heard_as(None, RYAN_VOICE), clip(i))
+    assert step.say == "That sounds like Ryan, not Tanner. Say 'learn my voice' to start again."
+    assert "tanner" not in store.prints
+    assert files_under(tmp_path / "enrolment") == []
+
+
+def test_enrolling_again_replaces_the_audio(tmp_path):
+    commands, _, audio = make_with_audio(tmp_path)
+    enrol(commands)
+    step = enrol(commands, first=50)
+    assert step.say == "Thanks, Tanner, I'll know your voice now."
+    assert audio.clips("tanner") == [clip(50 + i) for i in range(10)]
+    assert sorted(p.name for p in (tmp_path / "enrolment").iterdir()) == ["tanner"]
+
+
+def test_audio_that_cannot_be_written_ends_the_enrolment_and_keeps_the_old_voiceprint(tmp_path, monkeypatch):
+    commands, store, audio = make_with_audio(tmp_path)
+    enrol(commands)
+    before = store.prints["tanner"]
+
+    def full_disk(key, clips):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(audio, "stage", full_disk)
+    step = enrol(commands, first=50)
+    assert step.say == SAVE_FAILED
+    assert not commands.active
+    assert store.prints["tanner"] is before
+    assert audio.clips("tanner") == [clip(i) for i in range(10)]
+
+
+def test_a_failed_voiceprint_save_discards_the_new_audio(tmp_path, monkeypatch):
+    commands, store, audio = make_with_audio(tmp_path)
+    enrol(commands)
+
+    def full_disk(key, enrolled):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(store, "replace", full_disk)
+    step = enrol(commands, first=50)
+    assert step.say == SAVE_FAILED
+    assert audio.clips("tanner") == [clip(i) for i in range(10)]
+    assert sorted(p.name for p in (tmp_path / "enrolment").iterdir()) == ["tanner"]
+
+
+def test_a_key_that_is_not_a_folder_name_cannot_enrol(tmp_path):
+    commands, store, _ = make_with_audio(tmp_path, people=(Person("../x", "Mallory"),))
+    step = enrol(commands, name="Mallory", key="../x")
+    assert step.say == SAVE_FAILED
+    assert store.prints == {}
+    assert not (tmp_path / "x").exists()
+    assert files_under(tmp_path / "enrolment") == []
+
+
+def test_a_voiceprint_saved_without_its_audio_keeps_no_stale_audio(tmp_path, monkeypatch, caplog):
+    commands, store, audio = make_with_audio(tmp_path)
+    enrol(commands)
+
+    def cannot_swap(key):
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr(audio, "commit", cannot_swap)
+    with caplog.at_level("WARNING"):
+        step = enrol(commands, first=50)
+    assert step.say == "Thanks, Tanner, I'll know your voice now."
+    assert audio.clips("tanner") == []
+    assert "without its audio" in caplog.text
+
+
+def test_forget_deletes_the_audio_too(tmp_path):
+    commands, store, audio = make_with_audio(tmp_path)
+    enrol(commands)
+    say(commands, "forget my voice", heard_as("tanner"))
+    step = say(commands, "yes")
+    assert step.say == "Done. I've forgotten your voice."
+    assert "tanner" not in store.prints
+    assert files_under(tmp_path / "enrolment") == []
+
+
+def test_forget_works_for_someone_with_no_saved_audio(tmp_path):
+    commands, store, _ = make_with_audio(tmp_path, enrolled=[("tanner", TANNER_VOICE)])
+    say(commands, "forget my voice", heard_as("tanner"))
+    step = say(commands, "yes")
+    assert step.say == "Done. I've forgotten your voice."
+    assert "tanner" not in store.prints
+
+
+def test_audio_that_cannot_be_deleted_keeps_the_voiceprint(tmp_path, monkeypatch):
+    commands, store, audio = make_with_audio(tmp_path)
+    enrol(commands)
+
+    def stuck(key):
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr(audio, "delete", stuck)
+    say(commands, "forget my voice", heard_as("tanner"))
+    step = say(commands, "yes")
+    assert step.say == FORGET_FAILED
     assert "tanner" in store.prints
