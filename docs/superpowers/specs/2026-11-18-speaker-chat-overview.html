@@ -46,7 +46,7 @@
   <h1>Speaker chat plan</h1>
   <p class="sub">Written 2026-11-18 for review. The short version of the two design docs, without code references.</p>
   <p>Detail: <a href="2026-11-18-speaker-chat-robin-assistant-design.md">robin-assistant side</a> and <a href="2026-11-18-speaker-chat-egg-server-design.md">egg server side</a>.</p>
-  <div class="note">Both design docs have been through two reviews against the code. No code has been written.</div>
+  <div class="note">Status on 2026-11-18: the egg server and robin-assistant pieces 1 and 2 are built and tested on their branches. Piece 3 is being built. Nothing has run on the real egg, and nothing is merged.</div>
 
   <h2>The problem</h2>
   <p>The egg talks in the plain web chat, the one the phone uses. So every reminder and task result Robin writes there is spoken, and everything said to the egg shows up in the web chat.</p>
@@ -69,7 +69,7 @@
     <div class="card"><h3>The answer is reported back</h3><p>When someone answers a spoken message, the chat that sent it is told who answered and what was said.</p></div>
     <div class="card"><h3>Unheard becomes text</h3><p>The egg server already decides whether it may speak: speaking hours, a muted mic, quiet asked for by voice, being offline. Now it reports the result, and anything not spoken is delivered as text. An answer you interrupt arrives as text too.</p></div>
     <div class="card"><h3>Approvals go to the phone</h3><p>A spoken turn that needs an approval or a location puts the card in the web chat, and Robin says so aloud.</p></div>
-    <div class="card"><h3>Guests</h3><p>The speaker chat only gets web chat content when the voice is a recognised household member.</p></div>
+    <div class="card"><h3>Guests</h3><p>Not handled yet. The speaker chat knows the web chat whoever is speaking. Robin is told not to bring up the web chat aloud unless asked. Security is a later feature.</p></div>
   </div>
 
   <h2>One field for how a task is delivered</h2>

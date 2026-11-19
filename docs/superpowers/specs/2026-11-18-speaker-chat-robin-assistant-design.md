@@ -301,3 +301,14 @@ Piece 1 was built on 2026-11-18 on robin-assistant's `speaker-chat` branch. Wher
 - **`/presence` and `/seen` refuse the name `speaker`** as well as the id. `GET /speaker` answers 404 for any `chat` value except `speaker`.
 - **The outcome route answers `{id, state}`.**
 - **Not built yet,** both waiting for piece 3: the "a chime played" first line, and the Speaker page showing which chat sent a `Speak` message and its note.
+
+## What changed while building piece 2
+
+Piece 2 was built on 2026-11-18 on the same branch.
+
+- **The recognised-voice rule is dropped.** Decided 2026-11-18: security is a later feature. The speaker chat gets the web chat's recent messages, and `ReadChat` works, whoever is speaking. The rule could not have been a hard boundary anyway: once a household member's turn had put the web chat's messages into the speaker chat's history, a guest's later turn still had them in front of the model. The sentence telling Robin not to bring up the web chat aloud unless asked stays.
+- **Who is speaking does not reach the agent** with a web message. The code that needed it read the sender from the turn's own transcript rows.
+- **With no earlier record in history,** the block leaves out the "earlier messages were left out" line.
+- **`ReadChat` shows a pending speaker row** as "not spoken yet". The block still holds such rows back.
+- **The privacy sentence** is in `SPEAKER_CHAT_TURN_NOTE`, not in the `speaker` device prompt.
+- **`WEB_MAIN_CHAT_ID`** moved into `web-types.ts`, beside `otherChatOf`, the one helper that names the pair.
