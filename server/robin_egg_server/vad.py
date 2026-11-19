@@ -186,11 +186,11 @@ def judge(vad: EnergyVad | ModelVad, pcm16: bytes) -> Verdict:
 
 def compare(root: Path, cfg: VadConfig, model: SpeechModel, model_cfg: ModelVadConfig | None = None) -> str:
     """Run both detectors over every WAV under root and say where each would have ended the turn."""
-    from .speakers import _read_clip
+    from .speakers import read_clip
 
     rows: list[tuple[str, float, Verdict, Verdict]] = []
     for path in sorted(root.rglob("*.wav")):
-        pcm = _read_clip(path)
+        pcm = read_clip(path)
         if pcm is None:
             continue
         energy = judge(EnergyVad(replace(cfg)), pcm)

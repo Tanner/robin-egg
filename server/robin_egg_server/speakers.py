@@ -317,7 +317,7 @@ EVAL_THRESHOLDS = [round(0.30 + 0.05 * i, 2) for i in range(9)]
 SHORT_CLIP_S = 2.0
 
 
-def _read_clip(path: Path) -> bytes | None:
+def read_clip(path: Path) -> bytes | None:
     """The clip's samples, or None with a warning when it is not 16 kHz mono 16-bit, the format --save-audio writes."""
     try:
         with wave.open(str(path), "rb") as w:
@@ -347,7 +347,7 @@ def evaluate(root: Path, ids: SpeakerId) -> str:
     for folder in sorted(p for p in root.iterdir() if p.is_dir()):
         truth = None if folder.name == "unknown" else folder.name
         for path in sorted(folder.glob("*.wav")):
-            pcm = _read_clip(path)
+            pcm = read_clip(path)
             if pcm is None:
                 continue
             try:
