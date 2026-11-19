@@ -15,8 +15,8 @@ It reverses the 2026-11-16 decision that the egg shares the plain chat ([decisio
 - A speaker posts to the speaker chat. Its replies come back through `wait=1` as today.
 - The web chat page never lists the speaker chat or shows its rows. It raises no unread badge and no push.
 - A turn in the plain chat sees what was recently said in the speaker chat, and a turn in the speaker chat sees what was recently said in the plain chat. Either can read further back with a tool.
-- Nothing written in the plain chat is spoken unless Robin chose that. Robin chooses with a `Speak` tool, or with `speak: true` on a scheduled task.
-- A task scheduled by voice delivers to the speaker chat, so it is spoken. This needs no new code: a stored task delivers to the chat that created it (`scheduler/planner.ts:248-250`).
+- Nothing written in the plain chat is spoken unless Robin chose that. Robin chooses with a `Speak` tool, or with a scheduled task's `deliver` field.
+- A task scheduled by voice is spoken unless Robin chose text for it.
 - A spoken message carries a note for whoever answers it. The note is never spoken.
 - A message nobody heard is delivered as text instead, to the chat it came from.
 - When someone answers a spoken message, the chat that sent it is told what was answered.
@@ -24,10 +24,12 @@ It reverses the 2026-11-16 decision that the egg shares the plain chat ([decisio
 ## Not in this plan
 
 - Merging the two chats' histories into one. Each chat keeps its own history, summary and archive. They share recent rows, not a transcript.
-- Project chats and Telegram chats reading the speaker chat. They can speak into it, and they get the answer reported back, but only the plain chat and the speaker chat read each other.
+- Telegram chats reading the speaker chat. A one-person Telegram chat can speak into it and gets the answer reported back, but only the plain chat and the speaker chat read each other.
+- Speaking from a project. Project chats and their threads get no `Speak`, and a routine's result is always text.
 - More than one speaker chat. One agent has one, however many eggs there are.
 - Showing the speaker chat on the web chat page. A debug read through the API is enough for now.
 - Telling Tanner from Ryan. The `user` field already carries it.
+- Moving the speaking rules into robin-assistant. See "Later" at the end.
 
 ## Design
 
@@ -56,8 +58,6 @@ A reserved web chat id, `WEB_SPEAKER_CHAT_ID = 2`, context `web:2`. Project and 
 
 **What the chat gets.** The project store does not know the speaker chat, so `goalsChat` (`agent/capabilities/goals.ts:24-29`) and `speakerChat` (`agent/capabilities/core.ts:20-25`) already treat it as a plain chat. It gets goals, the projects index, ScheduleTask and SetListening with no change.
 
-ScheduleTask refuses `deliver: "later"` in the speaker chat. A held result there would release after the next spoken reply or after an hour (`held/release-rules.ts:44-55`), and be spoken at a moment nobody chose.
-
 **The speaker stream.** `GET /api/chat/:agent/speaker` gains `?chat=speaker`, and answers 404 for it when the flag is off. A listener registered that way gets the speaker chat's rows. A listener without it gets the plain chat's unprompted rows exactly as today. `speak` (`web.ts:537-564`) checks the row's chat against each listener's chat in place of `chatId !== PLAIN_CHAT_ID`. Wherever this plan says "no speaker is connected", it means no `chat=speaker` listener.
 
 In the speaker chat the stream carries two kinds of row:
@@ -75,12 +75,12 @@ The state lives in the row's meta, not in memory: `speaker: {state, fallback, se
 
 - `POST /api/chat/:agent/speaker/outcome` with `{"id": 124, "outcome": "spoken" | "held" | "dropped", "reason": "..."}`. It answers 404 only when the id is not a robin row in the speaker chat. For a row already settled it answers 200 and changes nothing, so a retry or a second report is harmless.
 - `spoken` settles the row.
-- `held` and `dropped` deliver the row's text to its fallback chat as an ordinary message. Its first line says it was not spoken and why. For a `held` row with `priority: "low"` the line says a chime played, since that is the design working, not a failure.
+- `held` and `dropped` deliver the row's text to its fallback chat as an ordinary message. Its first line says it was not spoken and why. For a `chime` message the line says a chime played, since that is the design working, not a failure.
 - A reply taken by a wait starts with no pending state, since the speaker normally just says it. The speaker may still report `dropped` for one it did not finish, and it falls back the same way. `spoken` for such a row is a no-op.
 - A row written while no speaker is connected falls back at once.
 - A pending row older than 15 minutes falls back, with a first line saying it may not have been heard. The egg server gives up on a waiting message after 10. A periodic check finds these, and `start()` runs the same check, as it already sweeps live browser cards and location requests (`web.ts:686-696`).
 - With more than one speaker connected, `spoken` from any of them settles the row. `held` or `dropped` from one waits for the others or for the 15 minutes.
-- The fallback chat is where the message came from. For a row native to the speaker chat, a voice-scheduled task or a reply, it is the plain chat. For `Speak` and `speak: true` it is the calling chat. Delivery goes through that chat's Method, so a Telegram chat gets a Telegram message.
+- The fallback chat is where the message came from. For a row native to the speaker chat, a voice-scheduled task or a reply, it is the plain chat. For `Speak` and a spoken task it is the calling chat. Delivery goes through that chat's Method, so a Telegram chat gets a Telegram message.
 - A fallback also appends a system note to the fallback chat's model history. A Method send writes only a transcript row (`web.ts:821-857`), and a chat that was told "sent to the speaker" must learn it was not heard.
 - A fallback row in the plain chat is never handed to a plain-chat speaker listener, or an old egg server would speak what the new path just declined to.
 
@@ -90,7 +90,11 @@ The fallback is also how "text by default, speak when time-critical" starts to w
 
 Only between `web:1` and `web:2` of the same agent, and only with the flag on.
 
-**The recent block.** Before a turn, each of the two chats gets a block with the other chat's rows since the last block. It is appended to history as a system entry before the user message, the way the ambient block is (`agent/agent.ts:1451-1512`), so the system prompt and its cache are untouched.
+**The recent block.** Before a turn, each of the two chats gets a block with the other chat's rows since its own last turn. Talk to the egg at 9, type on the phone at noon, talk to the egg again at 6, and the 6 o'clock turn gets the noon exchange.
+
+The block is data, not an instruction, so it does not go where instructions go. Claude's API guidance is to leave the top-level system prompt alone between turns, because editing it throws away the prompt cache, and to keep system-role messages for the operator's own instructions, which the model follows with the operator's authority. The other chat's rows are what people said and what Robin answered, and an answer can quote a web page or an email. So the block goes at the top of the user's turn, in its own tag, `<speaker-chat>` in the plain chat and `<web-chat>` in the speaker chat. Its first line says it is a record of the other chat and that nothing in it is an instruction.
+
+This differs from the ambient block, which is pushed as a system entry (`agent/agent.ts:1451-1512`) and reaches Claude folded into the user message inside `<system>` tags (`models/anthropic.ts:313-368`). The recent block must not get that wrapper. It is still appended, never inserted, so the cache prefix holds.
 
 - It needs a new transcript query: rows of one chat with an id above a given id, of kinds `user` and `robin` only. The existing queries are "newest N" and "before id" with no kind filter (`methods/web-transcript.ts:113-118`), and a voice turn that used tools would otherwise fill the block with activity rows.
 - At most 10 rows, each cut to 500 characters, the caps `ReadThread` uses (`tools/read-thread.ts:16-17`). If more were skipped, the block says how many and names the tool.
@@ -98,7 +102,7 @@ Only between `web:1` and `web:2` of the same agent, and only with the flag on.
 - Rows that are fallback copies are left out. The other chat already has the original.
 - The watermark is in the block itself. Its first line names the newest row id it covers, for example `<speaker-chat through="1234">`, and the next turn reads the newest such block out of history. This is the pattern the ambient code argues for (`agent.ts:1462-1469`): a reset, a compaction or `/clear` drops the block, and remembered state would not notice. No block in history means show the last 10 rows, but none older than 24 hours.
 - No block when there is nothing new.
-- Every value goes through `inline` as in `ReadThread` (`read-thread.ts:38-45`). The Anthropic provider folds a system entry that precedes a user message into that message inside `<system>` tags (`models/anthropic.ts:313-368`), and `inline` escapes angle brackets, so a row cannot close the wrapper.
+- Every value goes through `inline` as in `ReadThread` (`read-thread.ts:38-45`). It escapes angle brackets, so a row cannot close the tag.
 
 Compaction passes the whole history to the summarizer and then clears it (`agent/compactor.ts:76-95`). So the other chat's recent rows end up in each chat's summary. That is wanted here: it is how the two stay in step across sessions.
 
@@ -111,19 +115,19 @@ Compaction passes the whole history to the summarizer and then clears it (`agent
 
 ### 3. Speaking from other chats
 
-**`Speak`.** Offered in the plain chat, in project chats, and in a Telegram chat with one person in it. Never in a Telegram group, where any member could make Robin speak in the house and have the answer written back into the group. Never in the speaker chat itself or in a scheduled job. It is in the tool list whether or not a speaker is connected, so the prompt cache does not change when the egg drops off the network.
+**`Speak`.** Offered in the plain chat and in a Telegram chat with one person in it. Never in a project's chat or its threads: a thread works unattended on web pages and uploaded files, text nobody vouched for, and it reports to the project's chat, not to the room. Never in a Telegram group, where any member could make Robin speak in the house and have the answer written back into the group. Never in the speaker chat itself or in a scheduled job. It is in the tool list whether or not a speaker is connected, so the prompt cache does not change when the egg drops off the network.
 
 | Parameter | Meaning |
 | --- | --- |
 | `text` | The words to say. Written for the ear, as the `speaker` prompt describes. |
 | `note` | Background for whoever answers, up to 1,000 characters. Never spoken. Where this came from, why it is being said, and what a likely answer would need. |
-| `priority` | Optional, `"urgent"` or `"low"`, with the meanings in [robin-chat-api.md](../../robin-chat-api.md). |
+| `deliver` | Optional. `"speak"` (the default), `"speak_urgent"` or `"chime"`, as on ScheduleTask below. |
 | `label` | Optional short name, as a task has. |
 
 What it does:
 
 1. If no speaker is connected, it writes nothing and returns "no speaker is connected, nothing was said". The model answers in its own chat as usual.
-2. Otherwise it writes a robin row in the speaker chat with the text, and `origin` (the calling context id), `note`, `label` and `priority` in the meta, with the calling chat as the fallback.
+2. Otherwise it writes a robin row in the speaker chat with the text, and `origin` (the calling context id), `note`, `label` and `deliver` in the meta, with the calling chat as the fallback.
 3. It hands the row to the speaker stream and returns "sent to the speaker".
 4. It appends to the speaker chat's model history with `appendScheduledMessage` (`agent/agent.ts:2303-2316`), without waiting for it. The system note says which chat sent it and carries the handoff note, and the assistant entry is the spoken text. A reply in the speaker chat then has both in front of it.
 
@@ -131,15 +135,34 @@ Step 4 must not be awaited inside the tool. `appendScheduledMessage` takes the s
 
 `note` and `label` are escaped like every other value when they are shown to the speaker chat.
 
-An interactive turn can have read a web page or an email, so injected text could ask for `Speak` with `priority: "urgent"`, which is spoken at any hour. ScheduleTask already accepts `urgent` from the same turns, so this adds no new opening, but the description sets the same high bar: speak only when hearing it now matters more than reading it later, or when the person asked for it out loud, and mark it urgent only when someone has to act within minutes.
+An interactive turn can have read a web page or an email, so injected text could ask for `Speak` with `deliver: "speak_urgent"`, which is spoken at any hour. ScheduleTask already accepts `urgent` from the same turns, so this adds no new opening, but the description sets the same high bar: speak only when hearing it now matters more than reading it later, or when the person asked for it out loud, and mark it urgent only when someone has to act within minutes.
 
-**`speak: true` on ScheduleTask.** A scheduled job does not get `Speak`. The choice is made when the task is scheduled, by the turn the person was talking to. ScheduleTask and UpdateScheduledTask gain an optional `speak` boolean, shown in ListScheduledTasks, valid wherever `Speak` is offered. The job runs in its own chat's context as today. Its result is delivered to the speaker chat with the creating chat as `origin` and fallback, and the task's label and creating chat as the note. The creating chat's history still gets its `scheduledMessageAppend` (`scheduler/planner.ts:251-259`), so that chat knows its task ran. `speak` needs `deliver: "now"`. Carry the field through the task store's hand-copied rebuild on update (`scheduler/task-store.ts:336-347`).
+**One `deliver` field on a task.** Today a task has two fields that answer one question, how its result reaches people: `deliver`, `"now"` or `"later"` (`tools/schedule-task.ts:218`, required), and a boolean `urgent` (`schedule-task.ts:156`, stored at `scheduler/task-store.ts:23-24`). Adding `speak` and `low` beside them would make four, with combinations that mean nothing, such as urgent text or a spoken result held for later. They become one required field with five values:
 
-A task scheduled in the speaker chat needs no flag. It is spoken because it delivers there.
+| `deliver` | What happens when the task fires |
+| --- | --- |
+| `"text"` | Written to the chat now. What `"now"` is today. |
+| `"text_later"` | Held until the person is next around. What `"later"` is today. |
+| `"speak"` | Said aloud on the speaker, within speaking hours, after a chime. |
+| `"speak_urgent"` | Said aloud at any hour, ahead of anything waiting, after the alert sound. Only when someone has to act within minutes. |
+| `"chime"` | The speaker plays a chime and the words arrive as text. For something worth knowing and not worth saying. |
 
-Every task stored so far has `chat_context` `web:1`, including the ones set by voice, because the egg has been posting to the plain chat. After the move those are text only. List and Cancel are agent-wide outside projects (`agent/toolkit.ts:56`), so the fix is a conversation: list the tasks and say which should be spoken.
+- The three speaker values exist only where `Speak` is offered, and in the speaker chat. Everywhere else, a project's routines included, the tool's schema lists the two text values.
+- A text value sends the result to the chat that scheduled the task, as today. From the speaker chat, where nobody reads, that is the plain chat. So "text me that at five", said to the egg, works.
+- A speaker value sends it to the speaker chat with the scheduling chat as `origin` and fallback, and the task's label and scheduling chat as the note. From the speaker chat itself the fallback is the plain chat.
+- The tool description tells the model which to pick by where it is: a reminder set by voice is `"speak"` unless the person asked for text, and one set by typing is `"text"` unless they asked to hear it.
+- The job runs in the scheduling chat's context as today, and that chat's history still gets its `scheduledMessageAppend` (`scheduler/planner.ts:251-259`), so it knows its task ran.
+- A scheduled job does not get `Speak`. The choice is made when the task is scheduled, by the turn the person was talking to.
+- ScheduleTask, UpdateScheduledTask and ListScheduledTasks all carry the field. Carry it through the task store's hand-copied rebuild on update (`task-store.ts:336-347`).
+- `Speak` takes the same three speaker values under the same name.
 
-**Priority.** A boolean `urgent` already ships: on ScheduleTask (`tools/schedule-task.ts:156`, `240`, `356-363`), in the task store (`task-store.ts:23-24`, `281`, `346-347`), through the planner and delivery (`planner.ts:320`, `delivery.ts:42`) to the stream (`web.ts:553`). `low` is not built. This plan replaces the boolean with one optional `priority` field, `"urgent"` or `"low"`, on ScheduleTask, UpdateScheduledTask, `Speak` and the `SpeakerMessage`. A stored `urgent: true` is read as `priority: "urgent"`, and only `priority` is written from then on.
+**Stored tasks.** A migration rewrites each stored task once: `deliver: "now"` becomes `"text"`, `"later"` becomes `"text_later"`, and `urgent: true` becomes `"speak_urgent"`. The old fields are read for one release in case a task was written between the migration and the restart, and never written again. With the speaker chat off, a stored `"speak_urgent"` falls back at once and is delivered as text, which is what an urgent task does today on an agent with no speaker.
+
+Every task stored so far belongs to `web:1`, including the ones set by voice, because the egg has been posting to the plain chat. After the migration those are `"text"`. List and Cancel are agent-wide outside projects (`agent/toolkit.ts:56`), so the fix is a conversation: list the tasks and say which should be spoken.
+
+**Jobs in the config.** A cron job in the agent's config (`config/validation.ts:140`) gains the same optional `deliver`, default `"text"`. A job with no `chat_context` is a broadcast (`scheduler/delivery.ts:73-95`). Today the egg speaks the copy that lands in the plain chat. After the move it is text unless the job says `"speak"`. A spoken broadcast has no origin: it falls back to the plain chat, and an answer to it is reported nowhere, though the plain chat sees the answer in its recent block.
+
+**On the wire.** The stream's `SpeakerMessage` keeps its `priority` field, which the egg server is already built against. `"speak_urgent"` is sent as `priority: "urgent"`, `"chime"` as `priority: "low"`, and `"speak"` with no priority.
 
 ### 4. Reporting the answer back
 
@@ -157,7 +180,7 @@ Four pieces. Each can ship alone, and nothing changes for an agent until `speake
 
 1. The flag, the speaker chat, hiding it, the stream's `chat` parameter, late replies, outcomes and the fallback.
 2. The recent block and `ReadChat`.
-3. `Speak`, `speak: true` and `priority`.
+3. `Speak` and the one `deliver` field.
 4. The report back.
 
 The egg should move to the speaker chat only after piece 2. With piece 1 alone the two chats know nothing of each other, which is the divergence this design exists to avoid.
@@ -174,12 +197,16 @@ The egg should move to the speaker chat only after piece 2. With piece 1 alone t
   - A stream listener with `chat=speaker` gets speaker chat rows and no plain chat rows. A listener without it gets what it gets today.
   - A reply with no attached wait reaches the stream once, with `late` and `answers`. A reply a live wait took does not. A reply answering a cancelled message and a live one goes only to the live wait.
   - Each outcome: `spoken`, `held`, `dropped`, none within 15 minutes, no speaker connected, a reload with rows pending, a restart with rows pending, a second report for one id, a report for a wait reply, an id that is not a speaker row, and two speakers that disagree.
-  - The fallback goes to the plain chat, to a project chat and to a Telegram chat by origin, adds the note to that chat's history, and is not spoken by a plain-chat listener.
+  - The fallback goes to the plain chat and to a Telegram chat by origin, adds the note to that chat's history, and is not spoken by a plain-chat listener.
   - The recent block: nothing new, one row, more than 10, a long row, activity rows left out, a fallback copy left out, a row that tries to close the block, no block in history after a compaction, rows older than 24 hours after a reset, and no row shown twice.
   - An unknown speaker gets no recent block and no `ReadChat`. A Telegram chat and a project thread never get either.
-  - `Speak` from the plain chat, a project chat and a Telegram chat with one person. It is absent from a Telegram group, the speaker chat and scheduled jobs. With no speaker it writes nothing. It returns while a speaker turn holds the lock.
-  - A task with `speak: true` scheduled from the plain chat is spoken, falls back to the plain chat, and is appended to the plain chat's history. `speak` survives a task update that does not mention it, and can be cleared. It is refused with `deliver: "later"`, and so is any `"later"` task in the speaker chat.
-  - A stored task with `urgent: true` is delivered as `priority: "urgent"`.
+  - `Speak` from the plain chat and a Telegram chat with one person. It is absent from a project's chat, a thread, a Telegram group, the speaker chat and scheduled jobs. A routine cannot be given a speaker value. With no speaker it writes nothing. It returns while a speaker turn holds the lock.
+  - Each `deliver` value from the plain chat and from the speaker chat goes where the table says. A spoken task falls back to its scheduling chat and is appended to that chat's history.
+  - `deliver` survives a task update that does not mention it, and can be changed. A speaker value is refused with the speaker chat off, and the schema does not list it.
+  - The migration turns `"now"`, `"later"` and `urgent: true` into the new values, and a task with the old fields still fires correctly for one release.
+  - Each value reaches the stream with the right `priority`, or none.
+  - A config job with `deliver: "speak"` is spoken, and a broadcast without it is not.
+  - The recent block reaches the model inside the user turn in its own tag, never in a `<system>` wrapper.
   - A `reply_to` answer is noted in the origin's history, after the speaker turn's lock is released.
 - Document `speaker_chat`, `chat=speaker`, the stream parameter, the late event and the outcome route in `docs/configuration.md` and on the admin Endpoints screen.
 
@@ -187,7 +214,7 @@ The egg should move to the speaker chat only after piece 2. With piece 1 alone t
 
 - Piece 1 is medium to large. The id and the target are small. The care is in keeping the chat off every page-facing path, the card mirror, the per-row late rule, and the outcome state.
 - Piece 2 is medium. Little code, but it opens the privacy boundary.
-- Piece 3 is medium. `Speak` is small apart from the lock ordering. `speak: true` rides the delivery path `urgent` already takes, with a second target chat, and the `priority` change touches every place the boolean lives.
+- Piece 3 is medium to large. `Speak` is small apart from the lock ordering. The `deliver` change touches every place `deliver` and `urgent` live, the tool descriptions the model reads, and stored tasks, which need a migration that cannot lose a reminder.
 - Piece 4 is small. `reply_to` already does the hard part.
 
 ## Open questions
@@ -196,3 +223,11 @@ The egg should move to the speaker chat only after piece 2. With piece 1 alone t
 - Should the speaker chat have goals and the projects index? It costs prompt space on every spoken turn.
 - Does the speaker chat need its own, shorter inactivity window before compaction? Spoken sessions are brief and far apart.
 - Is labelling speaker runs "Speaker" in the Activity view enough, or should they be left out of it? They show the first words of what was said.
+
+## Later
+
+Not part of this plan, noted so it is not lost.
+
+The egg server decides whether a message may be spoken: speaking hours, quiet asked for by voice, the presence rule, holding for morning, and "what did I miss?". Those are policy, and they would sit better in robin-assistant. Robin would know it is quiet hours before choosing to speak, and would text straight away. "What did I miss?" would be an ordinary question answered from the chat. The egg server would keep only what it alone can know: the mic is muted, the egg is busy or offline, playback failed.
+
+That move is a medium-sized migration of code built and tested this week, on both sides. The outcome report in this plan is needed either way, since playback can still fail, so nothing here is thrown away by doing it later.

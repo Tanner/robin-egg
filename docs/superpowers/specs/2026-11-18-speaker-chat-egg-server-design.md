@@ -85,7 +85,8 @@ The README and several log lines say a missed message is "still in the chat". Wi
 
 - Choosing between several speaker chats or naming a project. There is one speaker chat.
 - Skipping held messages that someone already read on the phone. robin-assistant's `/seen` route is there for it, and it is a separate change.
-- Any change to `/announce`, the health alert (`server/robin_egg_server/health.py`), speaking hours, quiet, presence, or the priorities. They act on a message exactly as before.
+- Any change to `/announce`, the health alert (`server/robin_egg_server/health.py`), speaking hours, quiet, presence, or the priorities. They act on a message exactly as before. robin-assistant renames its task fields, but the stream still sends `priority: "urgent"` and `"low"`.
+- Moving the speaking rules to robin-assistant. Speaking hours, quiet, presence and "what did I miss?" stay here for now. The robin-assistant doc notes the move under "Later".
 
 ## Order of work
 
