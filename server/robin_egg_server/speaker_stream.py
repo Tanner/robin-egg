@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable
 
-from .brain import redirect_target, sse_events
+from .brain import redirect_target, retry_after, sse_events
 from .logs import tagged
 
 LOG = logging.getLogger("robin.speaker")
@@ -117,7 +117,7 @@ class SpeakerStream:
                     LOG.info("robin-assistant is reloading (503: %s); retrying the speaker stream later", reason)
                 else:
                     LOG.warning("robin-assistant answered %d for the speaker stream: %s", resp.status_code, reason)
-                return _retry_after(resp)
+                return retry_after(resp)
             self._up_since = time.monotonic()
             self.connected = True
             self.connections += 1
@@ -165,11 +165,3 @@ async def _error_reason(resp) -> str:
         return str(json.loads(body).get("error") or body)[:200]
     except (ValueError, AttributeError):
         return body[:200]
-
-
-def _retry_after(resp) -> float | None:
-    value = resp.headers.get("retry-after")
-    try:
-        return max(0.0, float(value)) if value is not None else None
-    except ValueError:
-        return None

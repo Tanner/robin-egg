@@ -70,6 +70,15 @@ def server_url(server: str) -> str:
     return f"{parts.scheme}://{netloc}{parts.path.rstrip('/')}"
 
 
+def retry_after(resp) -> float | None:
+    """The seconds a response's Retry-After header asks for, or None."""
+    value = resp.headers.get("retry-after")
+    try:
+        return max(0.0, float(value)) if value is not None else None
+    except ValueError:
+        return None
+
+
 def redirect_target(resp) -> str:
     """Where a 3xx points, as the base URL to give --server, so the log can say what to use."""
     location = resp.headers.get("location", "")

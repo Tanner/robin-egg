@@ -93,6 +93,76 @@ def test_a_5xx_is_tried_twice_more_and_then_given_up_with_one_warning(monkeypatc
     assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
 
 
+def fast_retries(monkeypatch, keep_trying_s: float = 600.0) -> None:
+    monkeypatch.setattr(outcomes_module, "RETRY_DELAY_S", 0.01)
+    monkeypatch.setattr(outcomes_module, "MAX_RETRY_DELAY_S", 0.02)
+    monkeypatch.setattr(outcomes_module, "KEEP_TRYING_S", keep_trying_s)
+
+
+@pytest.mark.parametrize("outcome", ["dropped", "held"])
+def test_a_dropped_or_held_report_keeps_being_tried_well_past_three_tries(monkeypatch, caplog, outcome):
+    fast_retries(monkeypatch)
+
+    async def scenario(client, fake):
+        fake.outcome_replies = [(503, {"error": "reloading"})] * 6
+        client.report(124, outcome, "the egg stopped playing it partway")
+        await eventually(lambda: "Told Robin" in caplog.text)
+
+    with caplog.at_level(logging.INFO, logger="robin.outcomes"):
+        _, fake = asyncio.run(with_client(scenario))
+    assert len(fake.outcome_posts) == 7
+    assert "Gave up" not in caplog.text
+
+
+def test_a_retry_waits_as_long_as_retry_after_says(monkeypatch):
+    monkeypatch.setattr(outcomes_module, "RETRY_DELAY_S", 0.0)
+
+    async def scenario(client, fake):
+        fake.outcome_replies = [(503, {"error": "reloading"}, "Retry-After: 1\r\n")]
+        client.report(124, "dropped", "the voice failed")
+        await eventually(lambda: len(fake.outcome_posts) == 2)
+
+    _, fake = asyncio.run(with_client(scenario))
+    assert fake.outcome_times[1] - fake.outcome_times[0] >= 0.95
+
+
+def test_a_dropped_report_is_given_up_after_its_time_with_one_warning_that_says_a_reply_is_lost(monkeypatch, caplog):
+    fast_retries(monkeypatch, keep_trying_s=0.3)
+
+    async def scenario(client, fake):
+        fake.outcome_replies = [(503, {"error": "reloading"})] * 1000
+        client.report(124, "dropped", "the voice failed")
+        await eventually(lambda: "Gave up" in caplog.text)
+
+    with caplog.at_level(logging.INFO, logger="robin.outcomes"):
+        _, fake = asyncio.run(with_client(scenario))
+    assert len(fake.outcome_posts) > 3
+    (warning,) = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert "a reply from a voice turn does not, so it is lost" in warning.getMessage()
+
+
+def test_close_returns_within_its_timeout_while_a_dropped_report_is_still_being_tried(monkeypatch, caplog):
+    fast_retries(monkeypatch)
+
+    async def scenario():
+        fake = FakeRobinAssistant([])
+        fake.outcome_replies = [(503, {"error": "reloading"})] * 10000
+        client = OutcomeClient(await fake.start(), "robin", timeout_s=0.3)
+        try:
+            client.report(124, "dropped", "the voice failed")
+            await eventually(lambda: len(fake.outcome_posts) > 3)
+            start = time.monotonic()
+            await client.close()
+            return time.monotonic() - start
+        finally:
+            await fake.stop()
+
+    with caplog.at_level(logging.INFO, logger="robin.outcomes"):
+        closed = asyncio.run(scenario())
+    assert closed < 1.0
+    assert "Stopped telling Robin that message 124 was dropped" in caplog.text
+
+
 def test_a_4xx_is_final(monkeypatch, caplog):
     monkeypatch.setattr(outcomes_module, "RETRY_DELAY_S", 0.0)
 

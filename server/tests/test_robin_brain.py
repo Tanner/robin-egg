@@ -66,7 +66,8 @@ class FakeRobinAssistant:
         self.triggers: list[dict] = []  # every POST /api/trigger/:agent: the agent, the JSON body, and the status answered
         self.trigger_reply: tuple[int, dict] = (202, {"ok": True})
         self.outcome_posts: list[dict] = []  # each POST /api/chat/:agent/speaker/outcome body, retries included
-        self.outcome_replies: list[tuple[int, dict]] = []  # answers to the next outcome posts, in order; then 200
+        self.outcome_replies: list[tuple] = []  # answers to the next outcome posts, in order, as (status, body) or (status, body, headers); then 200
+        self.outcome_times: list[float] = []  # when each outcome post arrived
         self.outcome_hang = False  # accept outcome posts and never answer them
         self._release = asyncio.Event()
         self._server: asyncio.base_events.Server | None = None
@@ -119,12 +120,13 @@ class FakeRobinAssistant:
                 return
             if request_line.startswith("POST ") and request_line.split()[1].endswith("/speaker/outcome"):
                 self.outcome_posts.append(json.loads(body))
+                self.outcome_times.append(time.monotonic())
                 if self.outcome_hang:
                     await self._release.wait()
                     return
-                status, payload = self.outcome_replies.pop(0) if self.outcome_replies else (200, {"ok": True})
+                status, payload, *extra = self.outcome_replies.pop(0) if self.outcome_replies else (200, {"ok": True})
                 answer = json.dumps(payload).encode()
-                writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(answer)}\r\nConnection: close\r\n\r\n".encode() + answer)
+                writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(answer)}\r\n{''.join(extra)}Connection: close\r\n\r\n".encode() + answer)
                 await writer.drain()
                 return
             if request_line.startswith("POST /api/context/"):
