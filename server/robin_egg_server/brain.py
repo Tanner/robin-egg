@@ -35,8 +35,9 @@ class Brain(Protocol):
 class EchoBrain:
     """Repeats what it heard. Tests speech-to-text and the voice with no robin-assistant."""
 
-    accepted_id: int | None = None
-    reply_ids: list[int] = []
+    def __init__(self) -> None:
+        self.accepted_id: int | None = None
+        self.reply_ids: list[int] = []
 
     async def reply(self, heard: str, user: str) -> AsyncIterator[str]:
         yield f"I heard: {heard}"

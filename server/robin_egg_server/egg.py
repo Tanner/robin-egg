@@ -246,9 +246,10 @@ class Robin:
         reopened = time.monotonic() <= self._playback_until + FOLLOW_UP_GRACE_S
         follow_up = self._follow_up_pending and (not wake_word_phrase or reopened)
         self._follow_up_pending = False
-        if previous_turn is not None:
-            # The egg reopens its mic for a follow-up only once it has played the reply, so a
-            # follow-up that comes clearly sooner is the wake word cutting the reply short.
+        # The egg reopens its mic for a follow-up only once it has played the reply. A reopen
+        # with no phrase is that, whatever the clock says. With a phrase, one that comes clearly
+        # sooner than the reply could have ended is the wake word cutting the reply short.
+        if previous_turn is not None and not (follow_up and not wake_word_phrase):
             with tagged(previous_turn.tag):
                 self._report_unfinished(previous_turn, "interrupted by the wake word", behind_s=-FOLLOW_UP_EARLY_S if follow_up else digests.PLAYED_MARGIN_S)
         answering, self._answering = self._answering if follow_up else None, None
@@ -530,6 +531,8 @@ class Robin:
         await self._finish_reply(t, say, cont=bool(held) and self.opts.follow_up == "always")
         self.last_said.remember(say)
         self.waiting.mark_read(held)
+        # Sent once the words are handed to the egg, not when it says they played. These were
+        # reported held when they arrived, so robin-assistant has already texted them and this cannot lose one.
         for h in held:
             self._report(h.msg, "spoken")
 

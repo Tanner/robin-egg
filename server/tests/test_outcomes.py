@@ -6,14 +6,12 @@ A message reported spoken is never sent as a text, so a wrong "spoken" loses it.
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import threading
 import time
 import urllib.request
 
 import pytest
-import soundfile as sf
 from aioesphomeapi import VoiceAssistantEventType
 from aioesphomeapi import api_pb2 as pb
 
@@ -401,6 +399,8 @@ def turn_reports(brain, scenario, opts: Options | None = None, tts=None, texts=(
         await web.start("127.0.0.1", 0, "127.0.0.1")
         robin = Robin(FakeSTT(list(texts)), brain, tts or ToneTTS(), web, VoiceAssistantEventType, opts or Options(speaking_hours=ALWAYS, follow_up="off"))
         robin.outcomes = reports
+        if isinstance(egg, PlaysInRealTime):
+            egg.ends_at = lambda: robin._playback_until
         stop = asyncio.Event()
         server = asyncio.create_task(robin.run_forever("127.0.0.1", port, stop=stop))
         try:
@@ -494,11 +494,18 @@ def test_a_reply_lost_because_the_egg_disconnected_is_reported_dropped():
 
 
 class PlaysInRealTime(FakeEgg):
-    """Reopens its mic for a follow-up only once the reply would have finished playing, as the real egg does."""
+    """Reopens its mic for a follow-up only once the reply has played, as the real egg does.
 
-    def __init__(self, *args, **kw) -> None:
+    When the reply ends is the server's own estimate, `ends_at`. `early_s` reopens that much
+    sooner, and `phrase`, when given, is the wake word phrase the reopen reports.
+    """
+
+    def __init__(self, *args, early_s: float = -0.05, phrase: str | None = None, **kw) -> None:
         super().__init__(*args, **kw)
         self._following = False
+        self.early_s, self.phrase = early_s, phrase
+        self.ends_at = time.monotonic
+        self.reopened_at: float | None = None
 
     async def _on_event(self, t: int, data: dict[str, str]) -> None:
         self._following = t == pb.VOICE_ASSISTANT_RUN_END
@@ -508,13 +515,11 @@ class PlaysInRealTime(FakeEgg):
     def _start_run(self, wake_word: str) -> None:
         if not self._following:
             return super()._start_run(wake_word)
-        run = self.runs[-1]
-        audio = run.streamed or run.final
-        ends = (run.first_byte_at or time.monotonic()) + (sf.info(io.BytesIO(audio)).duration if audio else 0.0)
 
         async def later() -> None:
-            await asyncio.sleep(max(0.0, ends - time.monotonic()) + 0.05)
-            FakeEgg._start_run(self, wake_word)
+            await asyncio.sleep(max(0.0, self.ends_at() - self.early_s - time.monotonic()))
+            self.reopened_at = time.monotonic()
+            FakeEgg._start_run(self, wake_word if self.phrase is None else self.phrase)
 
         self._later = asyncio.get_running_loop().create_task(later())
 
@@ -543,3 +548,26 @@ def test_the_wake_word_during_a_reply_that_asked_for_a_follow_up_is_reported():
     egg = FakeEgg([speech(), speech()], wake_words=["Okay Nabu", "Okay Nabu"])
     sent = turn_reports(IdBrain([DENTIST, REMINDER]), scenario, Options(speaking_hours=ALWAYS, follow_up="questions"), egg=egg)  # the reply ends in a question, "Okay." does not
     assert sent == [(124, "dropped", "interrupted by the wake word"), (125, "dropped", "interrupted by the wake word")]
+
+
+LONG_REMINDER = (125, "Shall I set a reminder for nine o'clock tomorrow?")  # long enough that 2 s before the end is inside it
+
+
+def early_reopen(phrase: str) -> tuple[list, PlaysInRealTime]:
+    async def scenario(egg, robin):
+        await eventually(lambda: egg.reopened_at is not None and len(egg.runs) == 2 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[1].types())
+
+    egg = PlaysInRealTime([speech()], early_s=2.0, phrase=phrase)
+    sent = turn_reports(IdBrain([DENTIST, LONG_REMINDER]), scenario, Options(speaking_hours=ALWAYS, follow_up="always"), egg=egg)
+    return sent, egg
+
+
+def test_a_reopen_with_no_wake_word_means_the_reply_was_played_whatever_the_clock_says():
+    sent, egg = early_reopen("")
+    assert egg.runs[1].wake_word == ""
+    assert sent == []
+
+
+def test_a_reopen_that_reports_a_wake_word_well_before_the_reply_could_end_reports_what_was_cut():
+    sent, egg = early_reopen("Okay Nabu")
+    assert sent == [(125, "dropped", "interrupted by the wake word")]
