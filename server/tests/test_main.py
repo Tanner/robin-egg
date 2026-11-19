@@ -41,3 +41,27 @@ def test_the_server_waits_for_an_egg_whose_name_does_not_resolve_yet(monkeypatch
         assert asyncio.run(wait_for_local_ip("egg.local", first_delay_s=0.01)) == "10.0.0.2"
     assert answers == []
     assert "egg.local" in caplog.text and "retrying" in caplog.text
+
+
+def test_a_robin_assistant_too_old_for_the_speaker_chat_stops_the_server_before_its_stream_connects(monkeypatch):
+    from robin_egg_server import voices
+    from test_robin_brain import FakeRobinAssistant
+
+    monkeypatch.setattr(voices.WhisperSTT, "load", lambda self: None)
+
+    async def start():
+        fake = FakeRobinAssistant([])
+        fake.speaker_chat = None  # an old robin-assistant, which would serve the plain chat's stream
+        url = await fake.start()
+        try:
+            with pytest.raises(SystemExit) as exit_info:
+                args = parse_args(["egg.local", "--server", url, "--agent-name", "robin", "--tts", "say", "--no-speaker-recognition"])
+                await asyncio.wait_for(main_module.run(args), 10)
+            return exit_info.value, fake
+        finally:
+            await fake.stop()
+
+    err, fake = asyncio.run(start())
+    assert "too old" in str(err)
+    assert fake.speaker_connects == []
+    assert not any("/speaker" in r["line"] for r in fake.requests)

@@ -88,7 +88,7 @@ def test_messages_are_handed_over_in_order_and_comments_ignored():
         (126, "", None),
     ]
     req = next(r for r in fake.requests if r["line"].startswith("GET"))
-    assert req["line"] == "GET /api/chat/robin/speaker HTTP/1.1"
+    assert req["line"] == "GET /api/chat/robin/speaker?chat=speaker HTTP/1.1"
     assert req["headers"]["accept"] == "text/event-stream"
 
 
@@ -100,7 +100,7 @@ def test_a_closed_stream_reconnects_and_asks_for_nothing_missed():
     assert stream.connections == 2
     gets = [r for r in fake.requests if r["line"].startswith("GET")]
     # No cursor and no replay: every connection is the same bare request.
-    assert {r["line"] for r in gets} == {"GET /api/chat/robin/speaker HTTP/1.1"}
+    assert {r["line"] for r in gets} == {"GET /api/chat/robin/speaker?chat=speaker HTTP/1.1"}
     assert not any("last-event-id" in r["headers"] for r in gets)
 
 

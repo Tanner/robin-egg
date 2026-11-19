@@ -58,6 +58,7 @@ class FakeRobinAssistant:
         self.speaker = list(speaker or [])  # one script per speaker-stream connection, then streams that hang
         self.requests: list[dict] = []
         self.speaker_connects: list[float] = []  # when each speaker-stream request arrived
+        self.speaker_chat: bool | None = True  # speakerChat in the agent lookup; None leaves the key out, as an old robin-assistant does
         self.users_reply: tuple[int, dict] = (200, {"users": []})
         self.users_hang = False  # accept GET /api/users and never answer it
         self.context_posts: list[dict] = []  # each POST /api/context/:agent body: key, value and ttl
@@ -87,15 +88,21 @@ class FakeRobinAssistant:
             body = await reader.readexactly(int(headers.get("content-length", "0")))
             fields = dict(re.findall(r'name="([^"]+)"\r\n\r\n(.*?)\r\n--', body.decode(), re.S))
             self.requests.append({"line": request_line, "headers": headers, "fields": fields})
-            if request_line.startswith("GET ") and request_line.split()[1].endswith("/speaker"):
+            path = request_line.split()[1] if request_line.startswith("GET ") else ""
+            if path.endswith("/speaker?chat=speaker"):
                 self.speaker_connects.append(time.monotonic())
                 await self._speaker(writer, self.speaker.pop(0) if self.speaker else [HANG])
+                return
+            if path.endswith("/speaker"):  # the plain chat's stream, which this egg server must never listen to
+                await self._speaker(writer, refuse(400, "This fake serves only the speaker chat's stream"))
                 return
             if self.users_hang and request_line.startswith("GET /api/users"):
                 await self._release.wait()
                 return
             if request_line.startswith("GET "):  # /api/users, or /api/chat/:agent for the startup check
                 status, payload = self.users_reply if request_line.startswith("GET /api/users") else self.agent_lookup
+                if path.startswith("/api/chat/") and status == 200 and self.speaker_chat is not None:
+                    payload = {"speakerChat": self.speaker_chat, **payload}
                 body = json.dumps(payload).encode()
                 writer.write(f"HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n{self.headers}Connection: close\r\n\r\n".encode() + body)
                 await writer.drain()
@@ -196,8 +203,8 @@ def test_posts_as_a_speaker_and_yields_each_reply_separately():
     assert req["headers"]["accept"] == "text/event-stream"
     assert req["headers"]["content-type"].startswith("multipart/form-data")
     f = req["fields"]
-    assert {k: f[k] for k in ("text", "device", "wait")} == {"text": "what's on tomorrow", "device": "speaker", "wait": "1"}
-    assert not {"chat", "project", "thread"} & f.keys()  # the plain web chat, shared with the phone
+    assert {k: f[k] for k in ("text", "device", "wait", "chat")} == {"text": "what's on tomorrow", "device": "speaker", "wait": "1", "chat": "speaker"}
+    assert not {"project", "thread"} & f.keys()
     assert re.fullmatch(r"[A-Za-z0-9_-]{8,64}", f["send_id"])  # the route's SEND_ID pattern
     assert f["user"] == "Unknown Speaker"
 
@@ -351,8 +358,9 @@ def test_strip_markdown_leaves_plain_spoken_words():
     assert strip_markdown("It's 3*4 = 12, a snake_case name.") == "It's 3*4 = 12, a snake_case name."
 
 
-async def check(agent_lookup=None, url=None, headers=""):
+async def check(agent_lookup=None, url=None, headers="", speaker_chat=True):
     fake = FakeRobinAssistant([], agent_lookup=agent_lookup or (200, {}), headers=headers)
+    fake.speaker_chat = speaker_chat
     brain = RobinBrain(url or await fake.start(), "robin")
     try:
         await brain.check()
@@ -367,6 +375,16 @@ async def check(agent_lookup=None, url=None, headers=""):
 def test_startup_check_looks_up_the_agent_chat():
     reqs, err = asyncio.run(check())
     assert err is None and reqs[0]["line"] == "GET /api/chat/robin HTTP/1.1"
+
+
+def test_startup_check_exits_when_the_agent_has_no_speaker_chat():
+    _, err = asyncio.run(check(speaker_chat=False))
+    assert isinstance(err, SystemExit) and "speaker_chat = true" in str(err) and "too old" not in str(err)
+
+
+def test_startup_check_exits_when_robin_assistant_is_too_old_for_the_speaker_chat():
+    _, err = asyncio.run(check(speaker_chat=None))
+    assert isinstance(err, SystemExit) and "speaker_chat = true" in str(err) and "too old" in str(err)
 
 
 @pytest.mark.parametrize("status, error", [(404, 'Agent "robin" has no web chat'), (409, 'Agent "robin" is disabled')])

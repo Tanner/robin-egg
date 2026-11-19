@@ -1,7 +1,7 @@
 """Robin speaking first: robin-assistant's speaker stream.
 
-GET /api/chat/:agent/speaker is an event stream of the messages Robin writes into the
-plain web chat on its own: a reminder coming due, a scheduled task, a held update, a
+GET /api/chat/:agent/speaker?chat=speaker is an event stream of the messages Robin writes
+into the speaker chat on its own: a reminder coming due, a scheduled task, a held update, a
 routine. Replies to anyone's message never come through here; the egg gets its own
 replies from wait=1. There is no replay, so a message sent while this is not connected
 is missed, which is intended.
@@ -60,7 +60,7 @@ class SpeakerStream:
         silence_timeout_s: float = 45.0,
     ) -> None:
         self.agent = agent
-        self.endpoint = f"{url.rstrip('/')}/api/chat/{agent}/speaker"
+        self.endpoint = f"{url.rstrip('/')}/api/chat/{agent}/speaker?chat=speaker"
         self.on_message = on_message
         self.first_delay_s, self.max_delay_s = first_delay_s, max_delay_s
         self.stable_after_s = stable_after_s  # a connection up this long resets the backoff

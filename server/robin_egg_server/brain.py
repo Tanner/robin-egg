@@ -72,9 +72,9 @@ def redirect_target(resp) -> str:
 class RobinBrain:
     """Asks Robin through robin-assistant's web chat API and yields each reply as it arrives.
 
-    It posts to the plain web chat, the one the phone uses, so a question asked out loud
-    can be followed up on the phone. robin-assistant keeps the conversation, so this
-    keeps no history of its own.
+    It posts to the agent's speaker chat, which robin-assistant keeps apart from the web
+    chat the phone uses and shows read-only in the web UI. robin-assistant keeps the
+    conversation, so this keeps no history of its own.
     """
 
     def __init__(
@@ -96,7 +96,7 @@ class RobinBrain:
     async def reply(self, heard: str, user: str) -> AsyncIterator[str]:
         import httpx2
 
-        fields = {"text": heard, "device": "speaker", "wait": "1", "user": user, "send_id": secrets.token_urlsafe(16)}
+        fields = {"text": heard, "chat": "speaker", "device": "speaker", "wait": "1", "user": user, "send_id": secrets.token_urlsafe(16)}
         deadline = time.monotonic() + self.timeout_s
         replies = 0
         outcome = None
@@ -190,7 +190,16 @@ class RobinBrain:
         if resp.status_code != 200:
             LOG.warning("robin-assistant answered %d when checking agent %s, starting anyway", resp.status_code, self.agent)
             return
-        LOG.info("robin-assistant is ready to answer as agent %s", self.agent)
+        try:
+            body = resp.json()
+        except ValueError:
+            body = None
+        speaker_chat = body.get("speakerChat") if isinstance(body, dict) else None
+        if speaker_chat is None:
+            raise SystemExit(f"robin-assistant at {self.url} is too old for this egg server: it has no speaker chat. Update robin-assistant and set speaker_chat = true under [methods.web] in agent {self.agent!r}'s config.")
+        if speaker_chat is not True:
+            raise SystemExit(f"Agent {self.agent!r} has no speaker chat. Set speaker_chat = true under [methods.web] in its robin-assistant config.")
+        LOG.info("robin-assistant is ready to answer as agent %s in its speaker chat", self.agent)
 
     async def close(self) -> None:
         await self.client.aclose()
