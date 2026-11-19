@@ -459,6 +459,31 @@ def test_a_held_message_whose_read_out_the_wake_word_cuts_off_is_not_reported_sp
     assert reports.sent == [(9, "held", "outside speaking hours")]
 
 
+
+def read_out_reports(cut: bool) -> list:
+    """A held message, then "what did I miss?" on an egg that follows the firmware, stopped by the wake word as it plays or not."""
+    reports = Reports()
+
+    async def scenario(egg, robin):
+        robin.outcomes = reports
+        await robin.proactive(SpeakerMessage(9, "Good night.", "Bedtime"))
+        await ask(egg)
+        if cut:
+            await eventually(lambda: egg._playout is not None and not egg._playout.done())
+            egg.wake()  # after TTS_END: only announce-finished comes
+        await eventually(lambda: len(reports.sent) == 2)
+
+    asyncio.run(with_egg(scenario, Options(speaking_hours=NEVER, follow_up="off"), ["What did I miss?"], egg=FakeEgg([], wake_stops=True)))
+    return reports.sent
+
+
+def test_a_held_message_read_out_to_its_end_on_the_firmware_is_reported_spoken():
+    assert read_out_reports(cut=False) == [(9, "held", "outside speaking hours"), (9, "spoken", "")]
+
+
+def test_a_held_message_whose_read_out_the_wake_word_stops_as_it_plays_is_reported_dropped():
+    assert read_out_reports(cut=True) == [(9, "held", "outside speaking hours"), (9, "dropped", "the read-out was cut off before it")]
+
 def test_announce_sends_no_report():
     async def scenario():
         fake = FakeRobinAssistant([])

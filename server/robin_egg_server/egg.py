@@ -144,6 +144,8 @@ class Turn:
     voiced: list[tuple[str, float]] = field(default_factory=list)  # each sentence of the replies, and where its audio ends in the reply
     asked_robin: bool = False  # this turn's words went to Robin
     answered: bool = False  # Robin's answer came to its end
+    read_out: list[tuple[SpeakerMessage, int]] = field(default_factory=list)  # held messages read out, and where each one's words end in reply_text
+    settle: asyncio.TimerHandle | None = None  # reports the read-out spoken once it should have played, if nothing says otherwise first
 
 
 class Robin:
@@ -338,6 +340,8 @@ class Robin:
             with tagged(t.tag):
                 LOG.info("The egg reported the reply finished %.2f s before its estimated end, so it was stopped partway", left)
                 self._report_unfinished(t, "the egg stopped playing it partway")
+        else:
+            self._settle_read_out(t, math.inf)
 
     # ---- the turn ----
 
@@ -556,16 +560,23 @@ class Robin:
         """Answers "what did I miss?" with the messages held from outside speaking hours."""
         say, held = self.waiting.read_out()
         LOG.info("Asked what was missed: %d message%s waiting", len(held), "" if len(held) == 1 else "s")
-        await self._speak(_once(say), t.reply, turn=t, t0=t0)
+        await self._speak(_once(say), t.reply, turn=t, t0=t0, voiced=t.voiced)
         LOG.info('Robin: "%s"', say)
         # Someone may want to answer a message they just heard, so the mic reopens as it does after a reply.
         await self._finish_reply(t, say, cont=bool(held) and self.opts.follow_up == "always")
         self.last_said.remember(say)
         self.waiting.mark_read(held)
-        # Sent once the words are handed to the egg, not when it says they played. These were
-        # reported held when they arrived, so robin-assistant has already texted them and this cannot lose one.
+        # The report that a message was held may never have reached robin-assistant, so each is
+        # reported spoken only once its words have played. A read-out the egg stops first reports
+        # what it had not reached as dropped, and the timer settles one that nothing stopped.
+        t.reply_text, pos = say, 0
         for h in held:
-            self._report(h.msg, "spoken")
+            at = say.find(h.spoken(), pos)
+            pos = at + len(h.spoken()) if at >= 0 else len(say) + 1
+            t.read_out.append((h.msg, pos))
+        if t.read_out:
+            wait = max(0.0, t.play_end - time.monotonic()) + digests.PLAYED_MARGIN_S + FOLLOW_UP_EARLY_S
+            t.settle = asyncio.get_running_loop().call_later(wait, self._settle_read_out, t, math.inf)
 
     def _held(self, msg: SpeakerMessage, refusal: str) -> bool:
         """Keeps a message that speaking hours stopped, for "what did I miss?". False when it is to be dropped.
@@ -724,6 +735,36 @@ class Robin:
             return 0.0
         return t.reply.seconds - max(0.0, t.play_end + behind_s - now)
 
+    def _spoken_upto(self, t: Turn, played: float) -> int:
+        """Where in the turn's words the egg has finished speaking, by whole sentences, once `played` seconds have played."""
+        done = pos = 0
+        for sentence, ends_s in t.voiced:
+            at = t.reply_text.find(sentence, pos)
+            if at < 0 or ends_s > played:
+                break
+            done = pos = at + len(sentence)
+        return done
+
+    def _settle_read_out(self, t: Turn, played: float) -> None:
+        """Reports the held messages this turn read out: spoken once their words have played, dropped if the read-out stopped first."""
+        if t.settle is not None:
+            t.settle.cancel()
+            t.settle = None
+        if not t.read_out:
+            return
+        done = self._spoken_upto(t, played)
+        heard = [m for m, end in t.read_out if end <= done]
+        missed = [m for m, end in t.read_out if end > done]
+        t.read_out = []
+        if missed:
+            with tagged(t.tag):
+                LOG.info("The read-out of waiting messages stopped before %s, so robin-assistant is told to send %s as a text",
+                         digests.listed([m.describe() for m in missed]), "it" if len(missed) == 1 else "them")
+        for m in heard:
+            self._report(m, "spoken")
+        for m in missed:
+            self._report(m, "dropped, the read-out was cut off before it")
+
     def _report_unfinished(self, t: Turn, why: str, played_s: float | None = None, behind_s: float = digests.PLAYED_MARGIN_S) -> None:
         """Reports each of Robin's replies in this turn that the egg did not speak to the end, so it arrives as a text.
 
@@ -731,15 +772,11 @@ class Robin:
         egg cannot tell where one reply ends, the replies from the one being spoken onward
         are reported. Each reply is reported at most once.
         """
+        played = self._played_s(t, time.monotonic(), behind_s) if played_s is None else played_s
+        self._settle_read_out(t, played)
         if self.outcomes is None or not t.reply_ends:
             return
-        played = self._played_s(t, time.monotonic(), behind_s) if played_s is None else played_s
-        done = pos = 0
-        for sentence, ends_s in t.voiced:
-            at = t.reply_text.find(sentence, pos)
-            if at < 0 or ends_s > played:
-                break
-            done = pos = at + len(sentence)
+        done = self._spoken_upto(t, played)
         unspoken = [rid for rid, end in t.reply_ends if end > done]
         if not unspoken:
             return
