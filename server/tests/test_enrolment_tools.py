@@ -233,3 +233,21 @@ def test_sentences_the_model_cannot_use_are_left_out(tmp_path):
 def test_the_report_ends_with_the_read_aloud_caveat(tmp_path):
     audio, _ = setup(tmp_path, {"tanner": [TANNER] * 10, "ryan": [RYAN] * 10})
     assert evaluate_enrolment(audio, FakeEmbedder(VOICES), Thresholds()).splitlines()[-1] == CAVEAT
+
+
+def test_the_report_says_when_the_server_would_raise_its_threshold(tmp_path):
+    audio, _ = setup(tmp_path, {"tanner": [TANNER] * 10, "ryan": [RYAN] * 9 + [SOUNDS_LIKE_TANNER]})
+    report = evaluate_enrolment(audio, FakeEmbedder(CLOSE_VOICES), Thresholds())
+    assert "The server would raise its accept threshold to 1.00 for these voices." in report
+
+
+def test_the_report_says_when_the_server_would_leave_its_threshold(tmp_path):
+    audio, _ = setup(tmp_path, {"tanner": [TANNER] * 10, "ryan": [RYAN] * 10})
+    report = evaluate_enrolment(audio, FakeEmbedder(VOICES), Thresholds())
+    assert "The server would leave its accept threshold at 0.45 for these voices." in report
+    assert report.splitlines()[-1] == CAVEAT
+
+
+def test_one_person_gets_no_line_about_the_server_threshold(tmp_path):
+    audio, _ = setup(tmp_path, {"tanner": [TANNER] * 10})
+    assert "The server would" not in evaluate_enrolment(audio, FakeEmbedder(VOICES), Thresholds())

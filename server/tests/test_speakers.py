@@ -17,6 +17,9 @@ import pytest
 
 from robin_egg_server.audio import MIC_RATE
 from robin_egg_server.speakers import (
+    SEPARATION_GAP,
+    closest_call,
+    separated,
     DEFAULT_SPEAKER_MODEL,
     SherpaEmbedder,
     UNKNOWN_SPEAKER,
@@ -491,3 +494,106 @@ def test_the_evaluate_command_wants_a_folder_or_the_enrolment_sentences_not_both
     with pytest.raises(SystemExit):
         speakers_module.main(args)
     assert "--enrolment" in capsys.readouterr().err
+
+
+# ---- the accept threshold rises when two enrolled voices are close ----
+
+
+def enrolled_store(tmp_path, **people) -> VoiceprintStore:
+    store = VoiceprintStore(tmp_path / "v.json", MODEL)
+    for key, vectors in people.items():
+        store.replace(key, [unit(*v) for v in vectors])
+    return store
+
+
+CLOSE = {"tanner": [(1, 0, 0)] * 3, "ryan": [(1, 1, 0)] * 3}
+
+
+def test_one_person_enrolled_has_no_closest_call(tmp_path):
+    store = enrolled_store(tmp_path, tanner=[(1, 0, 0)] * 3)
+    assert closest_call(store, {"tanner", "ryan"}) is None
+    assert separated(Thresholds(), None).accept == 0.45
+
+
+def test_distant_voices_leave_the_threshold_alone(tmp_path):
+    store = enrolled_store(tmp_path, tanner=[(1, 0, 0)] * 3, ryan=[(0, 1, 0)] * 3)
+    call = closest_call(store, {"tanner", "ryan"})
+    assert call.score == pytest.approx(0.0, abs=1e-6)
+    assert separated(Thresholds(), call).accept == 0.45
+
+
+def test_close_voices_raise_the_threshold(tmp_path):
+    store = enrolled_store(tmp_path, **CLOSE)
+    call = closest_call(store, {"tanner", "ryan"})
+    assert call.score == pytest.approx(0.707, abs=0.001)
+    raised = separated(Thresholds(), call)
+    assert raised.accept == pytest.approx(0.707 + SEPARATION_GAP, abs=0.001)
+    assert (raised.margin, raised.retrain) == (Thresholds().margin, Thresholds().retrain)
+
+
+def test_the_closest_call_is_the_worst_single_sentence_not_the_average(tmp_path):
+    store = enrolled_store(tmp_path, tanner=[(1, 0, 0)] * 3, ryan=[(0, 1, 0), (0, 1, 0), (1, 0.2, 0)])
+    call = closest_call(store, {"tanner", "ryan"})
+    assert (call.speaker, call.other) == ("ryan", "tanner")
+    assert call.score == pytest.approx(0.98, abs=0.005)
+
+
+def test_the_closest_call_counts_what_a_voiceprint_has_learned(tmp_path):
+    store = enrolled_store(tmp_path, tanner=[(1, 0, 0)] * 3, ryan=[(0, 1, 0)] * 3)
+    for _ in range(3):
+        store.learn("ryan", unit(1, 0, 0), 50)
+    assert closest_call(store, {"tanner", "ryan"}).score == pytest.approx(0.707, abs=0.001)
+
+
+def test_someone_not_in_the_people_list_does_not_count(tmp_path):
+    store = enrolled_store(tmp_path, **CLOSE)
+    assert closest_call(store, {"tanner"}) is None
+
+
+def test_the_threshold_never_goes_above_one(tmp_path):
+    store = enrolled_store(tmp_path, tanner=[(1, 0, 0)] * 3, ryan=[(1, 0, 0)] * 3)
+    assert separated(Thresholds(), closest_call(store, {"tanner", "ryan"})).accept == 1.0
+
+
+BORDERLINE = (1, -0.8, 0)  # 0.78 against tanner, 0.11 against ryan
+
+
+def test_identify_sends_a_borderline_turn_as_unknown_once_the_threshold_is_raised(tmp_path):
+    store = enrolled_store(tmp_path, **CLOSE)
+    ids = SpeakerId(QueuedEmbedder([BORDERLINE, BORDERLINE]), store)
+    assert ids.identify(b"", 2.0, None, {"tanner"}).key == "tanner"
+    alone_among_two = ids.identify(b"", 2.0, None, {"tanner", "ryan"})
+    assert alone_among_two.key is None
+    assert alone_among_two.score == pytest.approx(0.78, abs=0.005)
+    assert ids.thresholds.accept == 0.45
+
+
+def test_a_clear_turn_is_still_recognised_with_the_threshold_raised(tmp_path):
+    store = enrolled_store(tmp_path, **CLOSE)
+    ids = SpeakerId(QueuedEmbedder([(1, -0.3, 0)]), store)
+    assert ids.identify(b"", 2.0, None, {"tanner", "ryan"}).key == "tanner"
+
+
+def test_the_raise_is_logged_once_and_again_when_it_changes(tmp_path, caplog):
+    store = enrolled_store(tmp_path, **CLOSE)
+    ids = SpeakerId(QueuedEmbedder([BORDERLINE] * 3), store)
+    with caplog.at_level(logging.INFO):
+        ids.identify(b"", 2.0, None, {"tanner", "ryan"})
+        ids.identify(b"", 2.0, None, {"tanner", "ryan"})
+        raised = [r.message for r in caplog.records if "accept threshold is raised" in r.message]
+        assert raised == ["The voices of ryan and tanner score up to 0.71 against each other, so the accept threshold is raised from 0.45 to 0.81"]
+        store.forget("ryan")
+        ids.identify(b"", 2.0, None, {"tanner", "ryan"})
+    back = [r.message for r in caplog.records if "back to" in r.message]
+    assert back == ["The enrolled voices are far enough apart, so the accept threshold is back to 0.45"]
+
+
+def test_a_person_whose_own_sentences_fall_below_the_raised_threshold_is_warned_about(tmp_path, caplog):
+    # Ryan's own sentences are spread out, so one of them scores 0.72 against his voiceprint, under the raised 0.81.
+    store = enrolled_store(tmp_path, tanner=[(1, 0, 0)] * 3, ryan=[(1, 1, 0), (1, 1, 0), (1, 1, 3)])
+    ids = SpeakerId(QueuedEmbedder([BORDERLINE]), store)
+    with caplog.at_level(logging.INFO):
+        ids.identify(b"", 2.0, None, {"tanner", "ryan"})
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings == ["ryan's own enrolment sentences score as low as 0.72, below the accept threshold of 0.81, so ryan will sometimes be Unknown Speaker"]

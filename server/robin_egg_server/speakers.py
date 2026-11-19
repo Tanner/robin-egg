@@ -243,6 +243,45 @@ def scores(embedding: np.ndarray, store: VoiceprintStore, keys: set[str]) -> lis
     return sorted(ranked, key=lambda kv: kv[1], reverse=True)
 
 
+# How far above the closest call between two enrolled voices the accept threshold is kept.
+SEPARATION_GAP = 0.10
+
+
+@dataclass
+class ClosestCall:
+    """The enrolment sentence that sounds most like somebody else's voiceprint."""
+
+    speaker: str
+    other: str
+    score: float
+
+
+def closest_call(store: VoiceprintStore, keys: set[str]) -> ClosestCall | None:
+    """The highest score any enrolment sentence of one wanted person gets against another's voiceprint.
+
+    The worst single sentence counts, not the average: one sentence that sounds like the other
+    person is the one that gets a turn given to the wrong name. None with fewer than two people.
+    """
+    centroids = {key: vp.centroid() for key, vp in store.prints.items() if key in keys}
+    closest: ClosestCall | None = None
+    for speaker in sorted(centroids):
+        for sentence in store.prints[speaker].enrolled:
+            for other in sorted(centroids):
+                if other == speaker:
+                    continue
+                score = float(_unit(np.asarray(sentence, dtype=np.float32)) @ centroids[other])
+                if closest is None or score > closest.score:
+                    closest = ClosestCall(speaker, other, score)
+    return closest
+
+
+def separated(t: Thresholds, call: ClosestCall | None) -> Thresholds:
+    """These thresholds, with accept raised to stay SEPARATION_GAP above the closest call. It is never lowered."""
+    if call is None:
+        return t
+    return replace(t, accept=min(1.0, max(t.accept, call.score + SEPARATION_GAP)))
+
+
 @dataclass
 class Match:
     key: str | None
@@ -291,6 +330,7 @@ class SpeakerId:
     def __init__(self, embedder: SpeakerEmbedder, store: VoiceprintStore, thresholds: Thresholds | None = None) -> None:
         self.embedder, self.store = embedder, store
         self.thresholds = thresholds or Thresholds()
+        self._accept = self.thresholds.accept  # what the last turn used, so a change is logged once
 
     def identify(self, pcm16: bytes, seconds: float, previous: Match | None, keys: set[str]) -> Match:
         # Someone dropped from the people list since the last turn must not be carried forward.
@@ -298,10 +338,38 @@ class SpeakerId:
             previous = None
         embedding = self.embedder.embed(pcm16)
         ranked = scores(embedding, self.store, keys)
-        m = decide(ranked, seconds, self.thresholds, previous)
+        m = decide(ranked, seconds, self._thresholds_for(keys), previous)
         m.embedding = embedding
         LOG.info("%s", _describe(m, ranked))
         return m
+
+    def _thresholds_for(self, keys: set[str]) -> Thresholds:
+        """The thresholds for a turn among these people: accept goes up when two of their voices are close."""
+        call = closest_call(self.store, keys)
+        t = separated(self.thresholds, call)
+        if round(t.accept, 2) != round(self._accept, 2):
+            self._log_accept(t.accept, call, keys)
+        self._accept = t.accept
+        return t
+
+    def _log_accept(self, accept: float, call: ClosestCall | None, keys: set[str]) -> None:
+        if call is None or accept <= self.thresholds.accept:
+            LOG.info("The enrolled voices are far enough apart, so the accept threshold is back to %.2f", self.thresholds.accept)
+            return
+        first, second = sorted((call.speaker, call.other))
+        LOG.info(
+            "The voices of %s and %s score up to %.2f against each other, so the accept threshold is raised from %.2f to %.2f",
+            first, second, call.score, self.thresholds.accept, accept,
+        )
+        for key in sorted(k for k in self.store.prints if k in keys):
+            vp = self.store.prints[key]
+            centroid = vp.centroid()
+            lowest = min((float(_unit(np.asarray(v, dtype=np.float32)) @ centroid) for v in vp.enrolled), default=1.0)
+            if lowest < accept:
+                LOG.warning(
+                    "%s's own enrolment sentences score as low as %.2f, below the accept threshold of %.2f, so %s will sometimes be %s",
+                    key, lowest, accept, key, UNKNOWN_SPEAKER,
+                )
 
     def learn(self, m: Match) -> None:
         if m.key is None or m.embedding is None or not should_learn(m, self.thresholds):

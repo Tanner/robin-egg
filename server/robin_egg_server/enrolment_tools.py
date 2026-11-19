@@ -8,7 +8,7 @@ from dataclasses import replace
 import numpy as np
 
 from .enrolment_audio import EnrolmentAudio
-from .speakers import EVAL_THRESHOLDS, SpeakerEmbedder, Thresholds, VoiceprintStore, _speech_seconds, _unit, decide
+from .speakers import EVAL_THRESHOLDS, ClosestCall, SpeakerEmbedder, Thresholds, VoiceprintStore, _speech_seconds, _unit, decide, separated
 
 LOG = logging.getLogger("robin.enrolment_tools")
 
@@ -113,12 +113,15 @@ def evaluate_enrolment(audio: EnrolmentAudio, embedder: SpeakerEmbedder, thresho
 
     lines += ["", "Closest calls, with every sentence:"]
     results = _held_out(voices, None)
+    closest: ClosestCall | None = None
     for speaker in voices:
         own = [by_person[speaker] for who, _, by_person in results if who == speaker and speaker in by_person]
         lowest = f"at least {_two_places(min(own))} against {speaker}" if own else f"nothing against {speaker}, who has one sentence"
         others = [key for key in voices if key != speaker]
         for other in others:
             highest = max(by_person[other] for who, _, by_person in results if who == speaker)
+            if closest is None or highest > closest.score:
+                closest = ClosestCall(speaker, other, highest)
             lines.append(f"{speaker}'s sentences scored at most {_two_places(highest)} against {other} and {lowest}.")
         if not others:
             lines.append(f"{speaker}'s sentences scored {lowest}.")
@@ -130,5 +133,11 @@ def evaluate_enrolment(audio: EnrolmentAudio, embedder: SpeakerEmbedder, thresho
         lines.append(f"No threshold from {EVAL_THRESHOLDS[0]:.2f} to {EVAL_THRESHOLDS[-1]:.2f} kept everyone apart.")
     else:
         lines.append(f"Lowest accept threshold with nobody taken for someone else: {apart:.2f}")
+    if closest is not None:
+        accept = separated(thresholds, closest).accept
+        if accept > thresholds.accept:
+            lines.append(f"The server would raise its accept threshold to {accept:.2f} for these voices.")
+        else:
+            lines.append(f"The server would leave its accept threshold at {accept:.2f} for these voices.")
     lines.append("These sentences were read aloud in one sitting, so everyday speech will score lower than this.")
     return "\n".join(lines)
