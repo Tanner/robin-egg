@@ -612,3 +612,28 @@ def test_a_title_does_not_end_a_sentence():
     assert asyncio.run(collect("I spoke to Dr. Smith about it today. She agreed with Mrs. Jones.")) == [
         "I spoke to Dr. Smith about it today.", "She agreed with Mrs. Jones.",
     ]
+
+
+@pytest.mark.parametrize("reply_to, posted", [(124, "124"), (None, None), ("124", None), (True, None), (0, None)])
+def test_reply_to_is_posted_only_for_a_row_id(reply_to, posted):
+    async def one():
+        fake = FakeRobinAssistant([answer("Okay.")])
+        brain = RobinBrain(await fake.start(), "robin")
+        try:
+            async for _ in brain.reply("yes", user="tanner", reply_to=reply_to):
+                pass
+            return fake.requests[0]["fields"]
+        finally:
+            await brain.close()
+            await fake.stop()
+
+    assert asyncio.run(one()).get("reply_to") == posted
+
+
+def test_the_echo_brain_takes_reply_to_and_ignores_it():
+    from robin_egg_server.brain import EchoBrain
+
+    async def one():
+        return [piece async for piece in EchoBrain().reply("hello", user="tanner", reply_to=124)]
+
+    assert asyncio.run(one()) == ["I heard: hello"]

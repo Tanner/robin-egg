@@ -33,7 +33,7 @@ class RobinTooSlow(RobinUnavailable):
 
 
 class Brain(Protocol):
-    def reply(self, heard: str, user: str) -> AsyncIterator[str]: ...
+    def reply(self, heard: str, user: str, reply_to: int | None = None) -> AsyncIterator[str]: ...
 
 
 class EchoBrain:
@@ -43,7 +43,7 @@ class EchoBrain:
         self.accepted_id: int | None = None
         self.reply_ids: list[int] = []
 
-    async def reply(self, heard: str, user: str) -> AsyncIterator[str]:
+    async def reply(self, heard: str, user: str, reply_to: int | None = None) -> AsyncIterator[str]:
         yield f"I heard: {heard}"
 
 
@@ -103,11 +103,15 @@ class RobinBrain:
         self.accepted_id: int | None = None  # the row robin-assistant stored the last message as
         self.reply_ids: list[int] = []  # the rows of the last turn's replies, in the order they came
 
-    async def reply(self, heard: str, user: str) -> AsyncIterator[str]:
+    async def reply(self, heard: str, user: str, reply_to: int | None = None) -> AsyncIterator[str]:
+        """`reply_to` is the row of a message Robin sent that this answers, so Robin is shown that message with the answer."""
         import httpx2
 
         self.accepted_id, self.reply_ids = None, []
         fields = {"text": heard, "chat": "speaker", "device": "speaker", "wait": "1", "user": user, "send_id": secrets.token_urlsafe(16)}
+        # robin-assistant refuses the whole message for a reply_to that is not a positive row id.
+        if _row_id(reply_to) is not None and reply_to > 0:
+            fields["reply_to"] = str(reply_to)
         deadline = time.monotonic() + self.timeout_s
         replies = 0
         outcome = None

@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import inspect
 import logging
 import math
 import time
@@ -137,6 +138,7 @@ class Turn:
     log: TurnRecord = field(default_factory=TurnRecord)  # what the turn log will say about this turn
     reply_text: str = ""  # Robin's replies as they were handed to the voice, one after another
     reply_ends: list[tuple[int, int]] = field(default_factory=list)  # each reply's row id, and where its words end in reply_text
+    answering_id: int | None = None  # the row of the message Robin sent that this turn answers
     voiced: list[tuple[str, float]] = field(default_factory=list)  # each sentence of the replies, and where its audio ends in the reply
     asked_robin: bool = False  # this turn's words went to Robin
     answered: bool = False  # Robin's answer came to its end
@@ -162,6 +164,7 @@ class Robin:
         enrol_offer: EnrolOffer | None = None,
     ) -> None:
         self.stt, self.brain, self.tts, self.web = stt, brain, tts, web
+        self._brain_takes_reply_to = takes_reply_to(brain)
         self.E = events  # aioesphomeapi.VoiceAssistantEventType
         self.opts = opts or Options()
         self.speakers, self.people, self.commands = speakers, people, commands
@@ -198,6 +201,7 @@ class Robin:
         self._proactive_stopped_by = ""  # why the message being spoken was cut short
         self._answer_wanted = False  # the message being spoken asked the egg to listen once it has played
         self._answering: str | None = None  # the message the egg's next run answers, as the log names it
+        self._answering_id: int | None = None  # its row, when robin-assistant numbered it, for the reply_to of that run
         self.proactive_sound = load_sound(self.opts.proactive_sound or PROACTIVE_CHIME)
         self.quiet = QuietMode(self.opts.quiet_state, morning_hour=self.opts.speaking_hours[0])
         self.urgent_sound = load_sound(self.opts.urgent_sound or URGENT_CHIME)
@@ -260,6 +264,7 @@ class Robin:
             with tagged(previous_turn.tag):
                 self._report_unfinished(previous_turn, "interrupted by the wake word", behind_s=-FOLLOW_UP_EARLY_S if follow_up else digests.PLAYED_MARGIN_S)
         answering, self._answering = self._answering if follow_up else None, None
+        answering_id, self._answering_id = self._answering_id if follow_up else None, None
         if not follow_up:
             self.last_match = None  # a new conversation never inherits the last speaker
             self._unsure_streak = 0
@@ -272,7 +277,7 @@ class Robin:
         tag = f"t{self._turn_count}"
         reply = ReplyAudio()
         url = self.web.add(reply, tag)
-        self.turn = Turn(make_vad(self.opts.vad, cfg), reply, url, wake_word_phrase, follow_up, tag=tag)
+        self.turn = Turn(make_vad(self.opts.vad, cfg), reply, url, wake_word_phrase, follow_up, tag=tag, answering_id=answering_id)
         with tagged(self.turn.tag):
             if answering:
                 LOG.info("Answer to message %s: listening for %.0f s", answering, cfg.no_speech_timeout_s)
@@ -443,7 +448,8 @@ class Robin:
                 ended = "voice_command"
                 return
             t.cue = self._thinking_cue(t, t0)
-            spoken = await self._speak(self._tracking_replies(t, self.brain.reply(heard, user=match.user)), t.reply, turn=t, t0=t0, voiced=t.voiced)
+            answers = {"reply_to": t.answering_id} if t.answering_id is not None and self._brain_takes_reply_to else {}
+            spoken = await self._speak(self._tracking_replies(t, self.brain.reply(heard, user=match.user, **answers)), t.reply, turn=t, t0=t0, voiced=t.voiced)
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
             cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))
@@ -1277,6 +1283,7 @@ class Robin:
         self._follow_up_pending = True
         self._playback_until = time.monotonic()
         self._answering = msg.describe()
+        self._answering_id = msg.id if isinstance(msg.id, int) and not isinstance(msg.id, bool) else None
         self.last_match = None  # nobody has spoken yet, so there is no speaker to inherit
         LOG.info("Listening for an answer to message %s without the wake word", msg.describe())
 
@@ -1432,6 +1439,14 @@ class Robin:
     def _egg_connected(self, connected: bool) -> None:
         if self.room_context is not None:
             self.room_context.egg_connected(connected)
+
+
+def takes_reply_to(brain: Any) -> bool:
+    """Whether the brain's reply takes reply_to. A brain written before it, as some tests have, is asked without it."""
+    try:
+        return "reply_to" in inspect.signature(brain.reply).parameters
+    except (AttributeError, TypeError, ValueError):
+        return False
 
 
 def in_hours(hour: int, hours: tuple[int, int]) -> bool:

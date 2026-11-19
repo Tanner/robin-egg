@@ -181,3 +181,74 @@ def test_answering_is_for_questions_by_default_and_can_be_changed():
     assert parse_args(base).answer_messages == "questions"
     assert parse_args(base + ["--answer-messages", "always"]).answer_messages == "always"
     assert parse_args(base + ["--answer-messages", "off"]).answer_messages == "off"
+
+
+# ---- saying which message an answer is for ----
+
+
+class ReplyToBrain:
+    """Records which message each run says it answers."""
+
+    def __init__(self) -> None:
+        self.reply_tos: list[object] = []
+
+    async def reply(self, heard: str, user: str, reply_to: int | None = None):
+        self.reply_tos.append(reply_to)
+        yield "Okay."
+
+
+def test_the_answer_to_a_question_says_which_message_it_answers():
+    brain = ReplyToBrain()
+    speak_first([message(124, QUESTION, "Dentist reminder")], [speech()], ["yes please"], brain)
+    assert brain.reply_tos == [124]
+
+
+def test_the_answer_to_a_digest_is_for_its_last_message():
+    from test_digest import BINS, RECYCLING, always, waiting_together
+
+    brain = ReplyToBrain()
+    question = SpeakerMessage(12, QUESTION, "Dentist reminder")
+    waiting_together([BINS, RECYCLING, question], always(), utterances=[speech()], texts=["yes please"], brain=brain, runs=2)
+    assert brain.reply_tos == [12]
+
+
+def test_a_turn_started_by_the_wake_word_answers_no_message():
+    from test_server import converse
+
+    brain = ReplyToBrain()
+    asyncio.run(converse([speech()], FakeSTT(["what's the time"]), brain, ToneTTS(), Options(follow_up="off")))
+    assert brain.reply_tos == [None]
+
+
+def robin_answers(message_id: object):
+    """A question with this id, answered through RobinBrain; returns the egg and what was posted to robin-assistant."""
+    from robin_egg_server.brain import RobinBrain
+    from test_robin_brain import FakeRobinAssistant, answer
+
+    async def scenario():
+        fake = FakeRobinAssistant([answer("Okay, I'll remind you at nine.")])
+        brain = RobinBrain(await fake.start(), "robin", timeout_s=5)
+        go = asyncio.Event()
+        opts = Options(follow_up="off", speaking_hours=(0, 24))
+        try:
+            egg, _, _ = await egg_with_speaker([[until(go), message(message_id, QUESTION)]], [b"", speech()], ["yes please"], brain, opts, after_the_opening_run(go, 2))
+        finally:
+            await brain.close()
+            await fake.stop()
+        return egg, [r["fields"] for r in fake.requests if r["line"].startswith("POST")]
+
+    return asyncio.run(scenario())
+
+
+def test_robin_is_told_which_message_the_answer_is_for():
+    egg, posts = robin_answers(124)
+    (post,) = posts
+    assert post["reply_to"] == "124" and post["text"] == "yes please"
+    assert egg.runs[1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Okay, I'll remind you at nine."
+
+
+def test_a_message_whose_id_is_not_a_number_is_answered_with_no_reply_to():
+    egg, posts = robin_answers("abc")
+    (post,) = posts
+    assert "reply_to" not in post
+    assert egg.runs[1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Okay, I'll remind you at nine."  # the turn still works
