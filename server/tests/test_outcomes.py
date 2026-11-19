@@ -554,6 +554,30 @@ def test_a_reply_lost_because_the_egg_disconnected_is_reported_dropped():
     assert sent == [(124, "dropped", "the egg disconnected"), (125, "dropped", "the egg disconnected")]
 
 
+def test_a_reply_the_wake_word_stops_after_tts_end_the_firmware_way_is_reported_dropped():
+    """After TTS_END the firmware sends no stop request: only announce-finished, long before the reply could have played."""
+
+    async def scenario(egg, robin):
+        await reply_sent(egg)
+        await eventually(lambda: egg._playout is not None)
+        egg.wake()
+        await eventually(lambda: robin.outcomes.sent)
+
+    egg = FakeEgg([speech()], wake_stops=True)
+    sent = turn_reports(IdBrain([DENTIST, REMINDER]), scenario, egg=egg)
+    assert sent == [(124, "dropped", "the egg stopped playing it partway"), (125, "dropped", "the egg stopped playing it partway")]
+    assert len(egg.runs) == 1
+
+
+def test_a_reply_played_to_its_end_on_the_firmware_sends_no_report():
+    async def scenario(egg, robin):
+        await reply_sent(egg)
+        await asyncio.wait_for(egg.done.wait(), 20)
+
+    egg = FakeEgg([speech()], wake_stops=True)
+    assert turn_reports(IdBrain([DENTIST, REMINDER]), scenario, egg=egg) == []
+
+
 class PlaysInRealTime(FakeEgg):
     """Reopens its mic for a follow-up only once the reply has played, as the real egg does.
 
