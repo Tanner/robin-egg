@@ -694,8 +694,12 @@ class Robin:
                 if new:
                     t.reply_ends.append((new[-1], start + len(d.rstrip())))
                 yield d
-        finally:
+        except GeneratorExit:
+            raise  # closed after it was abandoned, when the brain's ids may already be the next turn's
+        except BaseException:
             self._report_silent_replies(list(getattr(self.brain, "reply_ids", None) or [])[seen:])
+            raise
+        self._report_silent_replies(list(getattr(self.brain, "reply_ids", None) or [])[seen:])
         t.answered = True
 
     def _report_silent_replies(self, rids: list[int]) -> None:

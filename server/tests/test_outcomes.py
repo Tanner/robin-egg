@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 import urllib.request
+from types import SimpleNamespace
 
 import pytest
 from aioesphomeapi import VoiceAssistantEventType
@@ -791,3 +792,20 @@ def test_every_follow_up_logs_how_far_it_was_from_the_replys_estimated_end(caplo
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("The egg reopened its mic"))
     seconds = float(line.split()[5])
     assert line.endswith("before the reply's estimated end") and 1.5 < seconds < 2.5  # it reopened 2 s early
+
+
+def test_a_reply_stream_closed_after_the_next_turn_began_reports_none_of_that_turns_replies():
+    """An abandoned reply stream may only be closed later, when the brain already holds the next turn's ids."""
+
+    async def scenario():
+        brain = LinkBrain([(124, "Okay.")])
+        robin = Robin(FakeSTT([]), brain, ToneTTS(), AudioServer(), VoiceAssistantEventType, Options())
+        robin.outcomes = reports = Reports()
+        turn = SimpleNamespace(asked_robin=False, reply_text="", reply_ends=[], answered=False)
+        replies = robin._tracking_replies(turn, brain.reply("when is the dentist", "Unknown Speaker"))
+        await anext(replies)
+        brain.reply_ids = [130, 131]  # the next turn has begun
+        await replies.aclose()
+        return reports.sent
+
+    assert asyncio.run(scenario()) == []
