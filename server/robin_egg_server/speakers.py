@@ -408,7 +408,9 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m robin_egg_server.speakers", description="Measure how well enrolled voices are recognised, and rebuild their voiceprints")
     sub = p.add_subparsers(dest="command", required=True)
     ev = sub.add_parser("evaluate", help="Score WAV clips from the egg against the enrolled voiceprints")
-    ev.add_argument("dir", type=Path, help="A folder holding <person>/*.wav and unknown/*.wav, saved with --save-audio")
+    ev.add_argument("dir", type=Path, nargs="?", help="A folder holding <person>/*.wav and unknown/*.wav, saved with --save-audio")
+    ev.add_argument("--enrolment", action="store_true", help="Test the saved enrolment sentences against each other instead of a folder of clips")
+    ev.add_argument("--enrolment-audio", type=Path, default=Path("~/.robin-egg/enrolment").expanduser(), help="Where the sentences from each enrolment are kept as audio, for --enrolment")
     ev.add_argument("--voiceprints", type=Path, default=Path("~/.robin-egg/voiceprints.json").expanduser(), help="Where the enrolled voiceprints are kept")
     ev.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model")
     rb = sub.add_parser("rebuild", help="Remake voiceprints from the saved enrolment audio, with the current speaker model. Stop the server first")
@@ -430,6 +432,14 @@ def main(argv: list[str] | None = None) -> int:
         print(rebuild(EnrolmentAudio(args.enrolment_audio), embedder, store, MIN_GOOD_SENTENCES))
         return 0
 
+    if args.enrolment == (args.dir is not None):
+        p.error("give a folder of clips to score, or --enrolment to test the saved enrolment sentences, but not both")
+    if args.enrolment:
+        from .enrolment_audio import EnrolmentAudio
+        from .enrolment_tools import evaluate_enrolment
+
+        print(evaluate_enrolment(EnrolmentAudio(args.enrolment_audio), SherpaEmbedder(args.speaker_model), Thresholds()))
+        return 0
     if not args.dir.is_dir():
         p.error(f"{args.dir} is not a folder")
     store = VoiceprintStore(args.voiceprints, Path(args.speaker_model).name)

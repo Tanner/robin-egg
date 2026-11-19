@@ -8,8 +8,8 @@ from __future__ import annotations
 import numpy as np
 
 from robin_egg_server.enrolment_audio import EnrolmentAudio
-from robin_egg_server.enrolment_tools import rebuild
-from robin_egg_server.speakers import Voiceprint, VoiceprintStore
+from robin_egg_server.enrolment_tools import evaluate_enrolment, rebuild
+from robin_egg_server.speakers import EVAL_THRESHOLDS, Thresholds, VoiceprintStore
 
 MODEL = "model.onnx"
 RESTART = "Restart the server so it loads these voiceprints."
@@ -128,3 +128,108 @@ def test_rebuild_tells_you_to_restart_the_server(tmp_path):
 def test_rebuild_that_changes_nobody_does_not_ask_for_a_restart(tmp_path):
     audio, store = setup(tmp_path, {"ryan": [RYAN] * 3})
     assert RESTART not in rebuild(audio, FakeEmbedder(VOICES), store, 8)
+
+
+# ---- the held-out test of enrolled voices against each other ----
+
+CAVEAT = "These sentences were read aloud in one sitting, so everyday speech will score lower than this."
+SOUNDS_LIKE_TANNER = 3
+CLOSE_VOICES = {**VOICES, SOUNDS_LIKE_TANNER: unit(1, 0.2, 0), 4: unit(0, 0, 1)}
+
+
+def tables(report: str) -> dict[str, dict[float, tuple[int, int, int]]]:
+    """Each table in the report, by its heading: accept threshold to (right, wrong, unknown)."""
+    found: dict[str, dict[float, tuple[int, int, int]]] = {}
+    heading = None
+    for line in report.splitlines():
+        if line.startswith("Voiceprints built from"):
+            heading = line
+            found[heading] = {}
+        elif heading is not None and line[:1].isdigit():
+            accept, right, wrong, unknown = line.split()
+            found[heading][float(accept)] = (int(right), int(wrong), int(unknown))
+        elif not line.strip() or line.startswith("accept"):
+            continue
+        else:
+            heading = None
+    return found
+
+
+EVERY = "Voiceprints built from every sentence"
+
+
+def test_a_sentence_is_never_scored_against_a_voiceprint_that_contains_it(tmp_path):
+    audio, _ = setup(tmp_path, {"tanner": [TANNER] * 9 + [4]})
+    report = evaluate_enrolment(audio, FakeEmbedder(CLOSE_VOICES), Thresholds())
+    # Scored against a voiceprint that included it, the odd sentence would get 0.11, not 0.00.
+    assert "tanner's sentences scored at least 0.00 against tanner." in report
+    assert tables(report)[EVERY][0.30] == (9, 0, 1)
+
+
+def test_two_distinct_voices_are_never_mixed_up(tmp_path):
+    audio, _ = setup(tmp_path, {"tanner": [TANNER] * 10, "ryan": [RYAN] * 9})
+    report = evaluate_enrolment(audio, FakeEmbedder(VOICES), Thresholds())
+    assert report.splitlines()[0] == "Held-out test on saved enrolment sentences: ryan (9), tanner (10)."
+    for table in tables(report).values():
+        assert all(row == (19, 0, 0) for row in table.values())
+        assert sorted(table) == EVAL_THRESHOLDS
+    assert "tanner's sentences scored at most 0.00 against ryan and at least 1.00 against tanner." in report
+    assert "ryan's sentences scored at most 0.00 against tanner and at least 1.00 against ryan." in report
+    assert "Lowest accept threshold with nobody taken for someone else: 0.30" in report
+
+
+def test_a_sentence_that_sounds_like_someone_else_is_counted_wrong(tmp_path):
+    audio, _ = setup(tmp_path, {"tanner": [TANNER] * 10, "ryan": [RYAN] * 9 + [SOUNDS_LIKE_TANNER]})
+    report = evaluate_enrolment(audio, FakeEmbedder(CLOSE_VOICES), Thresholds())
+    for table in tables(report).values():
+        assert all(wrong == 1 for _, wrong, _ in table.values())
+    assert "ryan's sentences scored at most 0.98 against tanner" in report
+    assert "No threshold from 0.30 to 0.70 kept everyone apart." in report
+    assert "Lowest accept threshold" not in report
+
+
+def test_smaller_voiceprints_get_their_own_table(tmp_path):
+    audio, _ = setup(tmp_path, {"tanner": [TANNER] * 10, "ryan": [RYAN] * 10})
+    report = evaluate_enrolment(audio, FakeEmbedder(VOICES), Thresholds())
+    assert list(tables(report)) == [
+        "Voiceprints built from 4 sentences",
+        "Voiceprints built from 6 sentences",
+        "Voiceprints built from 8 sentences",
+        EVERY,
+    ]
+
+
+def test_a_smaller_voiceprint_uses_only_the_first_sentences(tmp_path):
+    # Ryan's first four sentences sound like Tanner. A 4-sentence voiceprint for Ryan is made of only those,
+    # so it sits too close to Tanner's to call any of Tanner's ten. With every sentence it is far enough away.
+    audio, _ = setup(tmp_path, {"tanner": [TANNER] * 10, "ryan": [SOUNDS_LIKE_TANNER] * 4 + [RYAN] * 6})
+    report = evaluate_enrolment(audio, FakeEmbedder(CLOSE_VOICES), Thresholds())
+    small, every = tables(report)["Voiceprints built from 4 sentences"], tables(report)[EVERY]
+    assert small[0.30][2] >= 10
+    assert every[0.30][0] >= 10
+    assert small[0.30][0] < every[0.30][0]
+
+
+def test_one_person_only_says_what_it_cannot_show(tmp_path):
+    audio, _ = setup(tmp_path, {"tanner": [TANNER] * 10})
+    report = evaluate_enrolment(audio, FakeEmbedder(VOICES), Thresholds())
+    assert "Audio from only one person, so this does not show how often two of you would be mixed up." in report
+    assert "Lowest accept threshold" not in report
+    assert "tanner's sentences scored at least 1.00 against tanner." in report
+
+
+def test_no_audio_says_there_is_nothing_to_test(tmp_path):
+    audio, _ = setup(tmp_path, {})
+    report = evaluate_enrolment(audio, FakeEmbedder(VOICES), Thresholds())
+    assert report == f"No saved enrolment audio in {tmp_path / 'enrolment'}, so there is nothing to test."
+
+
+def test_sentences_the_model_cannot_use_are_left_out(tmp_path):
+    audio, _ = setup(tmp_path, {"tanner": [TANNER] * 9 + [255], "ryan": [RYAN] * 9})
+    report = evaluate_enrolment(audio, FakeEmbedder(VOICES), Thresholds())
+    assert report.splitlines()[0] == "Held-out test on saved enrolment sentences: ryan (9), tanner (9)."
+
+
+def test_the_report_ends_with_the_read_aloud_caveat(tmp_path):
+    audio, _ = setup(tmp_path, {"tanner": [TANNER] * 10, "ryan": [RYAN] * 10})
+    assert evaluate_enrolment(audio, FakeEmbedder(VOICES), Thresholds()).splitlines()[-1] == CAVEAT

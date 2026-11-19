@@ -460,3 +460,34 @@ def test_the_rebuild_command_remakes_voiceprints_from_saved_audio(tmp_path, monk
     store = VoiceprintStore(tmp_path / "v.json", "m.onnx")
     store.load()
     assert set(store.prints) == {"tanner"}
+
+
+def test_the_evaluate_command_can_test_the_saved_enrolment_sentences(tmp_path, monkeypatch, capsys):
+    from robin_egg_server import speakers as speakers_module
+    from robin_egg_server.enrolment_audio import EnrolmentAudio
+
+    class OneVoice:
+        def __init__(self, model_path: str) -> None:
+            self.name = Path(model_path).name
+
+        def embed(self, pcm16: bytes) -> np.ndarray:
+            return unit(1, 0, 0)
+
+    monkeypatch.setattr(speakers_module, "SherpaEmbedder", OneVoice)
+    audio = EnrolmentAudio(tmp_path / "enrolment")
+    audio.stage("tanner", {i: b"\x01\x00" * 16000 for i in range(1, 9)})
+    audio.commit("tanner")
+    code = speakers_module.main(["evaluate", "--enrolment", "--speaker-model", "m.onnx", "--enrolment-audio", str(tmp_path / "enrolment")])
+    assert code == 0
+    assert "Held-out test on saved enrolment sentences: tanner (8)." in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("args", [["evaluate"], ["evaluate", "clips", "--enrolment"]])
+def test_the_evaluate_command_wants_a_folder_or_the_enrolment_sentences_not_both(tmp_path, monkeypatch, capsys, args):
+    from robin_egg_server import speakers as speakers_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "clips").mkdir()
+    with pytest.raises(SystemExit):
+        speakers_module.main(args)
+    assert "--enrolment" in capsys.readouterr().err
