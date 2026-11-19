@@ -282,3 +282,22 @@ Not part of this plan, noted so it is not lost.
 The egg server decides whether a message may be spoken: speaking hours, quiet asked for by voice, the presence rule, holding for morning, and "what did I miss?". Those are policy, and they would sit better in robin-assistant. Robin would know it is quiet hours before choosing to speak, and would text straight away. "What did I miss?" would be an ordinary question answered from the chat. The egg server would keep only what it alone can know: the mic is muted, the egg is busy or offline, playback failed.
 
 That move is a medium-sized migration of code built and tested this week, on both sides. The outcome report in this plan is needed either way, since playback can still fail, so nothing here is thrown away by doing it later.
+
+## What changed while building piece 1
+
+Piece 1 was built on 2026-11-18 on robin-assistant's `speaker-chat` branch. Where the build differs from the design above:
+
+- **Stray rows do not stop startup.** A failed start of the web method stops the whole Robin process, not one agent. So when chat 2 already holds rows the first time the flag is on, the agent logs an error naming them and runs with the speaker chat off. A one-row table, `web_speaker_chat`, records the first successful start, so the check never runs again once the chat has real rows.
+- **The flag has a checkbox in the admin form,** on the web method card. A test there requires every config key to have a form field.
+- **The badge does not exclude `web:2`.** It counts approval requests, not cards, so a spoken turn's approval counts once whether or not it is mirrored.
+- **A failed text fallback is retried.** Delivering the text is its own tracked step on the row (`delivered`). A send that throws, or reaches no method, is retried by the minute check and after a restart, never two at once, and given up after a day with an error.
+- **`meta.speaker` has more fields** than listed: `sentTo`, `declined`, `notice`, `delivered` and `abandoned`. A fallback copy carries `meta.fallbackOf`. A sender names another fallback chat with `metadata.speakerFallback`.
+- **A row falls back when every speaker still connected that was sent it has declined it.** The minute check covers a speaker that has gone.
+- **`held` on a reply a live wait took** falls back like `dropped`.
+- **The first lines of a fallback text** are "Not said on the speaker: <reason>.", "Not said on the speaker, because no speaker was connected." and "Sent to the speaker, but it may not have been heard."
+- **The phone-approval sentence** is in its own note, `SPEAKER_CHAT_TURN_NOTE`, used only in `web:2` turns, so a speaker turn in the plain chat keeps the old prompt.
+- **The location mirror** carries `requestId`, the original card's row id, and the page answers that id. A mirror is needed: a browser answers by itself only with Always or Never stored, its tab in front and the page used in the last two minutes.
+- **A card on the Speaker page** shows "Answer this in the web chat." where its buttons would be.
+- **`/presence` and `/seen` refuse the name `speaker`** as well as the id. `GET /speaker` answers 404 for any `chat` value except `speaker`.
+- **The outcome route answers `{id, state}`.**
+- **Not built yet,** both waiting for piece 3: the "a chime played" first line, and the Speaker page showing which chat sent a `Speak` message and its note.
