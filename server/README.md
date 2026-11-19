@@ -47,7 +47,13 @@ Speaker recognition needs a voice embedding model (WeSpeaker ResNet34, about 25 
 mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx
 ```
 
-Voiceprints are tied to the model that made them. If you change the model, everyone has to be enrolled again.
+Voiceprints are tied to the model that made them. After changing the model, stop the server, rebuild the voiceprints from the saved enrolment audio, and start it again:
+
+```sh
+.venv/bin/python -m robin_egg_server.speakers rebuild --speaker-model models/NEW_MODEL.onnx
+```
+
+Anyone who enrolled before 19 November 2026 has no saved audio and has to enrol once more. See [Rebuilding voiceprints](#rebuilding-voiceprints).
 
 Use Python 3.14 for the venv for now. faster-whisper's onnxruntime dependency has no Python 3.15 build yet.
 
@@ -333,6 +339,25 @@ While someone in the household has no voiceprint, the server offers enrolment to
 
 Voiceprints are kept in `~/.robin-egg/voiceprints.json`. They hold no audio.
 
+The sentences of each enrolment are kept as audio beside them, in `~/.robin-egg/enrolment/<person>/`, one WAV per sentence Robin accepted, named by the sentence's number. They let voiceprints be rebuilt and tested without anyone enrolling again.
+
+- Only a finished enrolment is kept. One that is stopped, runs out of good sentences or sounds like someone else writes nothing.
+- Enrolling again replaces the person's audio. "Forget my voice" deletes it along with the voiceprint.
+- The folders and files are readable only by the account that runs the server.
+- No other audio is kept. Everyday turns are not saved, and what a voiceprint learns from them is numbers only.
+- `--enrolment-audio DIR` changes where they are kept.
+
+### Telling two voices apart
+
+The server names a speaker only when their score is at least the accept threshold, 0.45 by default. When two enrolled people sound alike, it raises that threshold on its own.
+
+- On each turn it scores every enrolment sentence of each enrolled person against every other enrolled person's voiceprint. The highest score is the closest call.
+- The threshold for the turn is the higher of 0.45 and the closest call plus 0.10. It never goes below 0.45, so the only cost of a raise is more turns sent as Unknown Speaker.
+- Only people robin-assistant lists count.
+- The log says when the threshold changes: `The voices of ryan and tanner score up to 0.41 against each other, so the accept threshold is raised from 0.45 to 0.51`. A warning follows if someone's own enrolment sentences score below the new threshold, because that person will sometimes be Unknown Speaker.
+- With one person enrolled there is nothing to compare, and the threshold stays at 0.45.
+- The check that refuses an enrolment for sounding like someone else keeps using 0.45.
+
 ## When it is unsure what it heard
 
 Whisper reports how sure it was of each transcript, and the server logs those numbers on the "Heard" line. If they fall outside the limits, the egg says "Sorry, I didn't catch that." and reopens its mic, and nothing is sent to Robin. This reopens the mic whatever `--follow-up` is set to.
@@ -402,6 +427,37 @@ Then run, from `server/`:
 It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json` (`--voiceprints` and `--speaker-model` change that). For each threshold from 0.30 to 0.70 it counts clips judged right, given to the wrong person, and sent as Unknown Speaker, with clips under 2 s apart from longer ones. The last line suggests the lowest threshold that gave no clip to the wrong person. With no clips there is no suggestion, and if the clips lack an `unknown/` folder or cover only one person, the report says what the suggestion does not show. Only 16 kHz mono 16-bit WAV files are read; others are skipped with a warning. These clips are audio the server otherwise never keeps, so delete the folder when you are done.
 
 The server deletes its own captures after 24 hours: files named `capture-*.wav` directly in the `--save-audio` folder, checked at startup and every hour, with a log line saying how many went. Clips moved into the per-person folders, or anywhere else, are left alone, so sort them within a day. To collect clips over a longer stretch, start with `--save-audio-hours 0`, which keeps every capture until you delete it, or give it a longer limit in hours.
+
+### Testing enrolled voices against each other
+
+To see how far apart the enrolled voices are, run, from `server/`:
+
+```sh
+.venv/bin/python -m robin_egg_server.speakers evaluate --enrolment
+```
+
+It reads the saved enrolment audio (`--enrolment-audio` and `--speaker-model` change where from and with which model) and needs no voiceprints file.
+
+- Every sentence is scored against everyone, using voiceprints built from the audio alone. A person's own voiceprint is built without the sentence being scored, so no sentence is graded against itself.
+- For each threshold from 0.30 to 0.70 it counts sentences judged right, given to the wrong person, and sent as Unknown Speaker.
+- There are four tables, for voiceprints built from 4, 6 and 8 sentences and from every sentence. They show what a shorter enrolment would cost.
+- "Closest calls" gives, for each pair, the highest score one person's sentences got against the other's voiceprint and the lowest they got against their own. The wider the gap between those two numbers, the safer the pair.
+- The last lines give the lowest threshold at which nobody was taken for someone else, and the threshold the server would use for these voices.
+
+These sentences were read aloud in one sitting, so everyday speech scores lower than this. Treat the report as the best case.
+
+### Rebuilding voiceprints
+
+`rebuild` remakes voiceprints from the saved enrolment audio with the current speaker model. Stop the server first: it holds voiceprints in memory and would write the old ones back.
+
+```sh
+.venv/bin/python -m robin_egg_server.speakers rebuild
+```
+
+- Each person with saved audio gets a fresh voiceprint. What it had learned from everyday turns is dropped, and it learns again from there.
+- Someone with fewer than 8 usable sentences is left as they were.
+- Someone with no saved audio keeps their voiceprint if the current model made it. After a model change they have to enrol again.
+- `--voiceprints`, `--speaker-model` and `--enrolment-audio` change the files it works on.
 
 ## Finding the end of speech
 
@@ -519,6 +575,7 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 | `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice" and checking with "who am I?". Not used with `--echo`. |
 | `--offer-enrolment`, `--no-offer-enrolment` | on | After three questions from the same unrecognised voice, end the reply with a hint to say "learn my voice". Only while someone in the household has no voiceprint, and at most once a day. |
 | `--voiceprints` | `~/.robin-egg/voiceprints.json` | Where the enrolled voiceprints are kept. |
+| `--enrolment-audio DIR` | `~/.robin-egg/enrolment` | Where the sentences from each enrolment are kept as audio. |
 | `--speaker-model` | `models/wespeaker_en_voxceleb_resnet34_LM.onnx` | Another speaker embedding model. Changing it means everyone enrols again. |
 | `--recognition-light`, `--no-recognition-light` | on | Show a recognised speaker's colour on the LED ring while Robin thinks and replies. Needs speaker recognition. |
 | `--led-colours` | `~/.robin-egg/led-colours.json` | The ring colour for each person, by robin-assistant user key. |
@@ -583,7 +640,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - The closing sound. In the firmware source, the start-streaming event moves the egg from thinking to playing a reply, and the end of the run then lets it go idle once the sound has played. That is the same path as a short spoken reply, but a reply with no words is untested on the egg. The firmware may also show its replying light for the second the sound plays. If the egg gets stuck or misbehaves after a wake-up where nobody spoke, use `--no-closing-cue`.
 - Follow-ups. The server sets `continue_conversation`, and the firmware should reopen its mic with no wake word.
 - Answering a message Robin sent on its own. The server sends the announcement with `start_conversation`, and the firmware source says the egg then starts a run with no wake word once the announcement has played. Unchecked on the egg: that the mic does reopen, that it does not pick up the tail of the message through the speaker, that 5 s is long enough to react to a message nobody was expecting, and that silence ends with the light going back to idle. In the firmware source the wake word during a message only stops it and clears the reopening, so the mic should stay closed after a barge-in.
-- Speaker recognition. The thresholds come from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some.
+- Speaker recognition. The thresholds start from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some. The automatic raise for close voices and its 0.10 gap have only seen hand-made vectors, never two real enrolled voices. Run `evaluate --enrolment` once two people have enrolled.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
 - Quiet by voice. The phrases have only been matched against typed transcripts, not what Whisper writes for real speech from the egg's mic, such as how it spells times ("7 p.m.", "7:30", "seven thirty").
 - Room facts. The posts have only met the fake robin-assistant, not the real `/api/context` route, and nobody has yet read how Robin uses them in a real answer. Whether a Wi-Fi blip on the real egg makes `egg_connection` flap between `disconnected` and `connected` is unknown.
@@ -636,6 +693,8 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce`, `/quiet` and `/status` |
 | `robin_egg_server/health.py` | What `/status` reports, the text when the egg goes missing, and clearing old mic captures |
 | `robin_egg_server/enrol_offer.py` | When to offer enrolment to a voice that keeps going unrecognised |
+| `robin_egg_server/enrolment_audio.py` | The sentences of each enrolment kept as audio, one folder per person |
+| `robin_egg_server/enrolment_tools.py` | Rebuilding voiceprints from that audio, and the held-out test of enrolled voices against each other |
 | `robin_egg_server/turn_log.py` | The turn log: one line per turn and per message Robin sends, with no audio or words |
 | `robin_egg_server/stats.py` | The `stats` command that summarises the turn log |
 | `robin_egg_server/waiting.py` | Message waiting: the held messages, the ring's waiting light, and "what did I miss?" |
