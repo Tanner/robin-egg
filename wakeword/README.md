@@ -21,7 +21,24 @@ Record on an iPhone with Voice Memos, with Audio Quality set to **Lossless** and
 | `tanner_positive.m4a`, `ryan_positive.m4a` | "Hey Robin", said in varied ways: quiet, loud, fast, sleepy, across the room, the next room, facing away | ~40 each |
 | `tanner_negative.m4a`, `ryan_negative.m4a` | "Hey Ryan", "Robin" alone, "robbing", "Hey Rob", "Hey Robert", ordinary sentences that include "Robin" | ~20 each |
 
-Any filename that contains `negative` is used as a don't-wake set. Every other file counts as "Hey Robin". The memos each round trained on are kept in `recordings/` here, so any round can be retrained or tested again. Upload the top-level files to Drive. `recordings/originals/` holds the untouched memos for files that were rebuilt without bad takes. Recording through the egg's own mics would match what the wake word hears, but it needs new code, so it waits until v1 shows whether phone takes are good enough.
+Any filename that contains `negative` is used as a don't-wake set. Every other file counts as "Hey Robin". The memos each round trained on are kept in `recordings/` here, so any round can be retrained or tested again. Upload the top-level files to Drive. `recordings/originals/` holds the untouched memos for files that were rebuilt without bad takes.
+
+### Through the egg's mics
+
+Phone takes don't sound like the egg's mics. If the egg misses someone whose phone takes pass, record that person through the egg with `record_from_egg.py`. It saves one WAV in `recordings/`, in the same form as a Voice Memo.
+
+1. Stop the Robin Egg Server. The egg sends its audio to one program at a time.
+2. Start the recorder from the repo root. The name works like a Voice Memo's: put `negative` in it for a don't-wake set.
+
+   ```sh
+   server/.venv/bin/python wakeword/record_from_egg.py 192.168.1.41 ryan_egg_positive
+   ```
+
+3. Someone the egg already hears says "Hey Robin" once. That opens the microphone, and it stays open for 120 seconds (`--seconds` changes that).
+4. After the listening sound, wait a moment, then say the takes with about 2 seconds of quiet between them. Everyone else stays quiet.
+5. The recorder prints how many takes it found. Start the server again.
+
+Say the takes at your everyday speed, from the places you normally talk to the egg. Upload the WAV to Drive with the other recordings.
 
 The cut clips are written back to `MyDrive/robin_wakeword/recordings_cut/` so you can listen to them. Deleting a bad cut there does nothing, because every run cuts the memos in `recordings/` again. To drop a take, rebuild the memo without it: join the good takes with a second of silence between them and save it as a WAV under the same name. Keep the original memo in `recordings/originals/`. The notebook skips folders. A bad take in a "Hey Robin" memo matters most: a breath, a click, or half of a split take teaches the model to wake on it. Stray sounds in a don't-wake memo do no harm.
 
