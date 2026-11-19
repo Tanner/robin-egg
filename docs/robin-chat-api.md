@@ -97,6 +97,8 @@ Rules:
 
 ### Which chat
 
+Superseded on 2026-11-18: the egg now talks in the speaker chat, with `chat=speaker` on its posts and on the speaker stream, `reply_to` on an answer to a message, outcome reports and late replies. See the [robin-assistant](superpowers/specs/2026-11-18-speaker-chat-robin-assistant-design.md) and [egg server](superpowers/specs/2026-11-18-speaker-chat-egg-server-design.md) designs, and `server/README.md`. What follows is the earlier design, kept for its reasons.
+
 The egg posts to the plain web chat, the same one the phone uses. It names no `chat`, `project` or `thread`, and with no target the route uses the plain chat. Decided 2026-11-16: the egg does not get a project. Egg and phone conversations share one context, so something asked out loud can be followed up on the phone.
 
 Sharing the chat with the phone has costs, accepted for v1:
@@ -171,6 +173,8 @@ Done in this repo once the robin-assistant side lands.
 Small. One brain class, a silent-end path in `egg.py`, its options and the fake.
 
 ## The speaker stream: Robin speaking first
+
+Since 2026-11-18 the egg listens with `?chat=speaker` and gets the speaker chat's rows, including late replies, and reports each message's outcome. See [Which chat](#which-chat).
 
 Added 2026-11-16. robin-assistant's design is `docs/superpowers/specs/2026-11-16-speaker-stream-design.md` in that repo.
 

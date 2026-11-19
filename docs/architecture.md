@@ -43,7 +43,7 @@ Why start with the API: it needs no changes to robin-assistant, and it is enough
 
 Why that will not be the final design. Each of these is fixed by a native `voice` Method, which gets its own context such as `voice:egg`:
 
-- Egg conversations land in the shared `web:1` chat with browser use.
+- Egg conversations landed in the shared `web:1` chat with browser use. Since 2026-11-18 they have a speaker chat of their own, `web:2`, which the web UI shows read-only: see [decisions.md](decisions.md).
 - Nothing marks a row as the reply to a given post. Matching by timing is a guess.
 - Replies are written for a screen: markdown, cards, several messages.
 - Robin cannot choose between speaking and texting. With a Method, the scheduler's delivery code can target the egg on purpose.

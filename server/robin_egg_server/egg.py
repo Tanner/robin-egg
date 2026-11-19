@@ -1035,7 +1035,7 @@ class Robin:
             with tagged(msg.tag):  # the speaking task started here keeps the tag
                 waited = time.monotonic() - arrived
                 if waited > self.opts.proactive_max_age_s:
-                    # A reminder spoken hours late, when the egg comes back, is worse than one left in the chat.
+                    # A reminder spoken hours late, when the egg comes back, is worse than one robin-assistant sends as a text.
                     LOG.info("Dropped message %s: it waited %.0f s for the egg, longer than the %.0f s allowed", msg.describe(), waited, self.opts.proactive_max_age_s)
                     self._message_outcome(msg, "dropped, it waited too long for the egg")
                     continue
