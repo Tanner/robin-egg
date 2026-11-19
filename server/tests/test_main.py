@@ -11,6 +11,8 @@ import socket
 import pytest
 
 from robin_egg_server import __main__ as main_module
+from pathlib import Path
+
 from robin_egg_server.__main__ import parse_args, wait_for_local_ip
 
 
@@ -65,3 +67,8 @@ def test_a_robin_assistant_too_old_for_the_speaker_chat_stops_the_server_before_
     assert "too old" in str(err)
     assert fake.speaker_connects == []
     assert not any("/speaker" in r["line"] for r in fake.requests)
+
+
+def test_enrolment_audio_is_kept_beside_the_voiceprints_unless_told_otherwise(tmp_path):
+    assert parse_args(["egg.local", "--echo"]).enrolment_audio == str(Path("~/.robin-egg/enrolment").expanduser())
+    assert parse_args(["egg.local", "--echo", "--enrolment-audio", str(tmp_path)]).enrolment_audio == str(tmp_path)

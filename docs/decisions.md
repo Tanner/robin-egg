@@ -57,7 +57,7 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | Decision | Why |
 | --- | --- |
 | A voice the server cannot identify is "Unknown Speaker", with a limited set of skills. No "household" fallback | Unsure means unknown, not one of us |
-| Keep no audio. A debug switch keeps it for 24 hours | Privacy |
+| Keep no audio, except the sentences of an enrolment, which "forget my voice" deletes. A debug switch keeps turn audio for 24 hours | Privacy. Enrolment audio lets voiceprints be rebuilt and tested without anyone enrolling again (changed 2026-11-19) |
 | v1 prototype has no presence sensor. mmWave and light sensor come later | Keep v1 small |
 | Add the `voice` Method to robin-assistant after build step 3 | The server works end to end first |
 | robin-assistant port and `[users]` keys get set up when integration starts | Not needed before then |

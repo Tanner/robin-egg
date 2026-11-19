@@ -162,15 +162,18 @@ class VoiceprintStore:
         self.path = path
         self.model_name = model_name
         self.prints: dict[str, Voiceprint] = {}
+        self.foreign: list[str] = []  # people the file holds voiceprints for from a different model
 
     def load(self) -> None:
         self.prints = {}
+        self.foreign = []
         if not self.path.exists():
             return
         try:
             data = json.loads(self.path.read_text())
             if data["model"] != self.model_name:
                 LOG.warning("Ignoring the voiceprints in %s: saved by a different model, re-enrol", self.path)
+                self.foreign = sorted(data["people"])
                 return
             self.prints = {
                 key: Voiceprint(
@@ -187,6 +190,18 @@ class VoiceprintStore:
     # Each change is written to disk before it is kept in memory, so a failed write leaves the two agreeing.
     def replace(self, key: str, enrolled: list[np.ndarray]) -> None:
         self._commit({**self.prints, key: Voiceprint(list(enrolled), [], date.today().isoformat())})
+
+    def replace_many(self, enrolled: dict[str, list[np.ndarray]]) -> None:
+        """Give each of these people a fresh voiceprint in one write, keeping the day they first enrolled.
+
+        Their learning pools are emptied. Everyone else is left as they are.
+        """
+        today = date.today().isoformat()
+        fresh = {
+            key: Voiceprint(list(vectors), [], self.prints[key].enrolled_on if key in self.prints else today)
+            for key, vectors in enrolled.items()
+        }
+        self._commit({**self.prints, **fresh})
 
     def learn(self, key: str, embedding: np.ndarray, cap: int) -> None:
         vp = self.prints.get(key)
@@ -231,6 +246,45 @@ def scores(embedding: np.ndarray, store: VoiceprintStore, keys: set[str]) -> lis
     return sorted(ranked, key=lambda kv: kv[1], reverse=True)
 
 
+# How far above the closest call between two enrolled voices the accept threshold is kept.
+SEPARATION_GAP = 0.10
+
+
+@dataclass
+class ClosestCall:
+    """The enrolment sentence that sounds most like somebody else's voiceprint."""
+
+    speaker: str
+    other: str
+    score: float
+
+
+def closest_call(store: VoiceprintStore, keys: set[str]) -> ClosestCall | None:
+    """The highest score any enrolment sentence of one wanted person gets against another's voiceprint.
+
+    The worst single sentence counts, not the average: one sentence that sounds like the other
+    person is the one that gets a turn given to the wrong name. None with fewer than two people.
+    """
+    centroids = {key: vp.centroid() for key, vp in store.prints.items() if key in keys}
+    closest: ClosestCall | None = None
+    for speaker in sorted(centroids):
+        for sentence in store.prints[speaker].enrolled:
+            for other in sorted(centroids):
+                if other == speaker:
+                    continue
+                score = float(_unit(np.asarray(sentence, dtype=np.float32)) @ centroids[other])
+                if closest is None or score > closest.score:
+                    closest = ClosestCall(speaker, other, score)
+    return closest
+
+
+def separated(t: Thresholds, call: ClosestCall | None) -> Thresholds:
+    """These thresholds, with accept raised to stay SEPARATION_GAP above the closest call. It is never lowered."""
+    if call is None:
+        return t
+    return replace(t, accept=min(1.0, max(t.accept, call.score + SEPARATION_GAP)))
+
+
 @dataclass
 class Match:
     key: str | None
@@ -246,14 +300,21 @@ class Match:
         return self.key if self.key is not None else UNKNOWN_SPEAKER
 
 
-def decide(ranked: list[tuple[str, float]], seconds: float, t: Thresholds, previous: Match | None) -> Match:
+def decide(
+    ranked: list[tuple[str, float]], seconds: float, t: Thresholds, previous: Match | None, base_accept: float | None = None
+) -> Match:
+    """Who spoke, from the scores. base_accept is the accept threshold before any raise for close voices."""
     best, s1 = ranked[0] if ranked else (None, -1.0)
     other, s2 = ranked[1] if len(ranked) > 1 else (None, -1.0)
 
-    confident = best is not None and s1 >= t.accept and s1 - s2 >= t.margin and seconds >= t.min_judge_s
-    if confident:
+    clear = best is not None and s1 - s2 >= t.margin and seconds >= t.min_judge_s
+    if clear and s1 >= t.accept:
         return Match(best, s1, other, s2, seconds, False, None)
     if previous is not None and previous.key is not None:
+        # A raised threshold must only turn a name into Unknown Speaker. Without this, a follow-up that
+        # is clearly someone else by the unraised threshold would be kept for whoever spoke last.
+        if clear and best != previous.key and base_accept is not None and s1 >= base_accept:
+            return Match(None, s1, other, s2, seconds, False, None)
         prev_score = next((s for k, s in ranked if k == previous.key), -1.0)
         if seconds >= t.min_judge_s and prev_score < t.reject_inherited:
             return Match(None, s1, other, s2, seconds, False, None)
@@ -279,6 +340,7 @@ class SpeakerId:
     def __init__(self, embedder: SpeakerEmbedder, store: VoiceprintStore, thresholds: Thresholds | None = None) -> None:
         self.embedder, self.store = embedder, store
         self.thresholds = thresholds or Thresholds()
+        self._accept = self.thresholds.accept  # what the last turn used, so a change is logged once
 
     def identify(self, pcm16: bytes, seconds: float, previous: Match | None, keys: set[str]) -> Match:
         # Someone dropped from the people list since the last turn must not be carried forward.
@@ -286,10 +348,38 @@ class SpeakerId:
             previous = None
         embedding = self.embedder.embed(pcm16)
         ranked = scores(embedding, self.store, keys)
-        m = decide(ranked, seconds, self.thresholds, previous)
+        m = decide(ranked, seconds, self._thresholds_for(keys), previous, base_accept=self.thresholds.accept)
         m.embedding = embedding
         LOG.info("%s", _describe(m, ranked))
         return m
+
+    def _thresholds_for(self, keys: set[str]) -> Thresholds:
+        """The thresholds for a turn among these people: accept goes up when two of their voices are close."""
+        call = closest_call(self.store, keys)
+        t = separated(self.thresholds, call)
+        if round(t.accept, 2) != round(self._accept, 2):
+            self._log_accept(t.accept, call, keys)
+        self._accept = t.accept
+        return t
+
+    def _log_accept(self, accept: float, call: ClosestCall | None, keys: set[str]) -> None:
+        if call is None or accept <= self.thresholds.accept:
+            LOG.info("The enrolled voices are far enough apart, so the accept threshold is back to %.2f", self.thresholds.accept)
+            return
+        first, second = sorted((call.speaker, call.other))
+        LOG.info(
+            "The voices of %s and %s score up to %.2f against each other, so the accept threshold is raised from %.2f to %.2f",
+            first, second, call.score, self.thresholds.accept, accept,
+        )
+        for key in sorted(k for k in self.store.prints if k in keys):
+            vp = self.store.prints[key]
+            centroid = vp.centroid()
+            lowest = min((float(_unit(np.asarray(v, dtype=np.float32)) @ centroid) for v in vp.enrolled), default=1.0)
+            if lowest < accept:
+                LOG.warning(
+                    "%s's own enrolment sentences score as low as %.2f, below the accept threshold of %.2f, so %s will sometimes be %s",
+                    key, lowest, accept, key, UNKNOWN_SPEAKER,
+                )
 
     def learn(self, m: Match) -> None:
         if m.key is None or m.embedding is None or not should_learn(m, self.thresholds):
@@ -317,7 +407,7 @@ EVAL_THRESHOLDS = [round(0.30 + 0.05 * i, 2) for i in range(9)]
 SHORT_CLIP_S = 2.0
 
 
-def _read_clip(path: Path) -> bytes | None:
+def read_clip(path: Path) -> bytes | None:
     """The clip's samples, or None with a warning when it is not 16 kHz mono 16-bit, the format --save-audio writes."""
     try:
         with wave.open(str(path), "rb") as w:
@@ -347,7 +437,7 @@ def evaluate(root: Path, ids: SpeakerId) -> str:
     for folder in sorted(p for p in root.iterdir() if p.is_dir()):
         truth = None if folder.name == "unknown" else folder.name
         for path in sorted(folder.glob("*.wav")):
-            pcm = _read_clip(path)
+            pcm = read_clip(path)
             if pcm is None:
                 continue
             try:
@@ -393,15 +483,45 @@ def evaluate(root: Path, ids: SpeakerId) -> str:
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    p = argparse.ArgumentParser(prog="python -m robin_egg_server.speakers", description="Measure how well enrolled voices are recognised")
+    p = argparse.ArgumentParser(prog="python -m robin_egg_server.speakers", description="Measure how well enrolled voices are recognised, and rebuild their voiceprints")
     sub = p.add_subparsers(dest="command", required=True)
     ev = sub.add_parser("evaluate", help="Score WAV clips from the egg against the enrolled voiceprints")
-    ev.add_argument("dir", type=Path, help="A folder holding <person>/*.wav and unknown/*.wav, saved with --save-audio")
+    ev.add_argument("dir", type=Path, nargs="?", help="A folder holding <person>/*.wav and unknown/*.wav, saved with --save-audio")
+    ev.add_argument("--enrolment", action="store_true", help="Test the saved enrolment sentences against each other instead of a folder of clips")
+    ev.add_argument("--enrolment-audio", type=Path, default=Path("~/.robin-egg/enrolment").expanduser(), help="Where the sentences from each enrolment are kept as audio, for --enrolment")
     ev.add_argument("--voiceprints", type=Path, default=Path("~/.robin-egg/voiceprints.json").expanduser(), help="Where the enrolled voiceprints are kept")
     ev.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model")
+    rb = sub.add_parser("rebuild", help="Remake voiceprints from the saved enrolment audio, with the current speaker model. Stop the server first")
+    rb.add_argument("--voiceprints", type=Path, default=Path("~/.robin-egg/voiceprints.json").expanduser(), help="Where the enrolled voiceprints are kept")
+    rb.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model")
+    rb.add_argument("--enrolment-audio", type=Path, default=Path("~/.robin-egg/enrolment").expanduser(), help="Where the sentences from each enrolment are kept as audio")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
+    if args.command == "rebuild":
+        # Imported here because both modules import this one.
+        from .commands import MIN_GOOD_SENTENCES
+        from .enrolment_audio import EnrolmentAudio
+        from .enrolment_tools import rebuild
+
+        embedder = SherpaEmbedder(args.speaker_model)
+        store = VoiceprintStore(args.voiceprints, embedder.name)
+        store.load()
+        audio = EnrolmentAudio(args.enrolment_audio)
+        audio.tidy()
+        print(rebuild(audio, embedder, store, MIN_GOOD_SENTENCES))
+        return 0
+
+    if args.enrolment == (args.dir is not None):
+        p.error("give a folder of clips to score, or --enrolment to test the saved enrolment sentences, but not both")
+    if args.enrolment:
+        from .enrolment_audio import EnrolmentAudio
+        from .enrolment_tools import evaluate_enrolment
+
+        audio = EnrolmentAudio(args.enrolment_audio)
+        audio.tidy()
+        print(evaluate_enrolment(audio, SherpaEmbedder(args.speaker_model), Thresholds()))
+        return 0
     if not args.dir.is_dir():
         p.error(f"{args.dir} is not a folder")
     store = VoiceprintStore(args.voiceprints, Path(args.speaker_model).name)
