@@ -17,7 +17,7 @@ from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server import digest as digests
 from robin_egg_server import outcomes as outcomes_module
-from robin_egg_server.brain import EchoBrain
+from robin_egg_server.brain import EchoBrain, QuietTurn
 from robin_egg_server.egg import Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.outcomes import OutcomeClient, outcome_of
@@ -593,6 +593,37 @@ def test_a_reply_the_wake_word_cuts_off_while_robin_is_still_answering_is_report
     sent = turn_reports(brain, scenario)
     assert sent == [(124, "dropped", "interrupted by the wake word")]  # 125 never came, so there is nothing to report for it
 
+
+
+class LinkBrain:
+    """Like RobinBrain when a reply is only a link or a table: its id comes, with no words to say."""
+
+    def __init__(self, replies: list[tuple[int, str]]) -> None:
+        self.replies = replies
+        self.accepted_id: int | None = None
+        self.reply_ids: list[int] = []
+
+    async def reply(self, heard: str, user: str, reply_to: int | None = None):
+        self.accepted_id, self.reply_ids = 101, []
+        for rid, text in self.replies:
+            self.reply_ids.append(rid)
+            if text:
+                yield text + "\n"
+        if not any(text for _, text in self.replies):
+            raise QuietTurn()
+
+
+@pytest.mark.parametrize("replies, silent", [
+    ([(124, ""), (125, "Okay.")], 124),
+    ([(124, "Okay."), (125, "")], 125),
+    ([(124, "")], 124),
+])
+def test_a_reply_with_nothing_to_say_aloud_is_reported_dropped(replies, silent):
+    async def scenario(egg, robin):
+        await eventually(lambda: robin.turn is not None and robin.turn.task is not None and robin.turn.task.done())
+
+    sent = turn_reports(LinkBrain(replies), scenario)
+    assert sent == [(silent, "dropped", "it had nothing to say aloud")]
 
 class FailsOn(ToneTTS):
     def __init__(self, word: str) -> None:

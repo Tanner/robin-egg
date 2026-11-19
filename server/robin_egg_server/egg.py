@@ -664,21 +664,45 @@ class Robin:
         self.send(E.VOICE_ASSISTANT_RUN_END)
 
     async def _tracking_replies(self, t: Turn, deltas: AsyncIterator[str]) -> AsyncIterator[str]:
-        """Passes Robin's replies on, noting where each reply's words end, so a reply cut short can be named."""
+        """Passes Robin's replies on, noting where each reply's words end, so a reply cut short can be named.
+
+        A reply with nothing to say aloud, such as one that is only a link, brings no words.
+        It is reported at once, so robin-assistant sends it as a text.
+        """
         seen = 0
         t.asked_robin = True
-        async for d in deltas:
-            start = len(t.reply_text)
-            t.reply_text += d
-            ids = list(getattr(self.brain, "reply_ids", None) or [])
-            new, seen = ids[seen:], len(ids)
-            t.reply_ends += [(rid, start) for rid in new[:-1]]  # a reply with nothing to say
-            if new:
-                t.reply_ends.append((new[-1], start + len(d.rstrip())))
-            yield d
-        ids = list(getattr(self.brain, "reply_ids", None) or [])
-        t.reply_ends += [(rid, len(t.reply_text)) for rid in ids[seen:]]
+        try:
+            async for d in deltas:
+                start = len(t.reply_text)
+                t.reply_text += d
+                ids = list(getattr(self.brain, "reply_ids", None) or [])
+                new, seen = ids[seen:], len(ids)
+                self._report_silent_replies(new[:-1])
+                if new:
+                    t.reply_ends.append((new[-1], start + len(d.rstrip())))
+                yield d
+        finally:
+            self._report_silent_replies(list(getattr(self.brain, "reply_ids", None) or [])[seen:])
         t.answered = True
+
+    def _report_silent_replies(self, rids: list[int]) -> None:
+        if not rids:
+            return
+        one = len(rids) == 1
+        LOG.info("Robin's %s %s had nothing to say aloud, so robin-assistant is told to send %s as a text",
+                 "reply" if one else "replies", digests.listed([str(r) for r in rids]), "it" if one else "them")
+        self._report_not_spoken(rids, "it had nothing to say aloud")
+
+    def _report_not_spoken(self, rids: list[int], why: str) -> None:
+        """Reports each of these replies dropped, and remembers them, so none is also spoken when it comes late."""
+        self._unfinished_replies.extend(rids)
+        if self.outcomes is None:
+            return
+        for rid in rids:
+            try:
+                self.outcomes.report(rid, DROPPED, why)
+            except Exception:  # noqa: BLE001 - a report is never a reason to fail what the egg is doing
+                LOG.exception("Could not report that Robin's reply %s was not spoken", rid)
 
     def _abandon(self, t: Turn, how: str) -> None:
         """Remembers how a turn ended that gave up before Robin's answer came, for when the answer comes late."""
@@ -720,15 +744,10 @@ class Robin:
         if not unspoken:
             return
         t.reply_ends = [(rid, end) for rid, end in t.reply_ends if end <= done]
-        self._unfinished_replies.extend(unspoken)
         one = len(unspoken) == 1
         LOG.info("Robin's %s %s %s not spoken to the end (%s), so robin-assistant is told to send %s as a text",
                  "reply" if one else "replies", digests.listed([str(r) for r in unspoken]), "was" if one else "were", why, "it" if one else "them")
-        for rid in unspoken:
-            try:
-                self.outcomes.report(rid, DROPPED, why)
-            except Exception:  # noqa: BLE001 - a report is never a reason to fail what the egg is doing
-                LOG.exception("Could not report that Robin's reply %s was not spoken to the end", rid)
+        self._report_not_spoken(unspoken, why)
 
     async def _apologise(self, t: Turn, err: Exception) -> None:
         """Says the turn failed, after whatever part of the reply was already spoken.
