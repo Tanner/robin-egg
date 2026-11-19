@@ -27,18 +27,11 @@ The cut clips are written back to `MyDrive/robin_wakeword/recordings_cut/` so yo
 
 ## Load it into the firmware
 
-Copy `hey_robin.json` and `hey_robin.tflite` next to the device YAML (in the same folder), then add the model to the list. Put it **first**, because only the first model is turned on at first boot:
+Copy `hey_robin.json` and `hey_robin.tflite` into `firmware/`, next to `robin-egg.yaml`, then build and flash as usual. The device YAML already lists the model.
 
-```yaml
-micro_wake_word:
-  models:
-    - model: hey_robin.json
-      id: hey_robin
-    - model: https://github.com/OHF-Voice/micro-wake-word-models/releases/download/okay_nabu_20241226.3/okay_nabu.json
-      id: okay_nabu
-```
+Only the first model in the list is turned on at first boot, so "Hey Robin" has to come first. A device YAML can only add to the end of the list that the formatBCE core package (`core/voice-assistant.yaml`) defines. `robin-egg.yaml` therefore removes the core's models by id and lists them again after `hey_robin`. If a formatBCE release adds or renames a model, update that list to match.
 
-The formatBCE core package (`core/voice-assistant.yaml`) defines the list. A device YAML can override it. The firmware has a sensitivity setting for each model, and `probability_cutoff` in the manifest is the default.
+The firmware has a sensitivity setting for each model, and `probability_cutoff` in the manifest is the default.
 
 If the boot log shows a tensor arena error, raise `tensor_arena_size` in `hey_robin.json`.
 

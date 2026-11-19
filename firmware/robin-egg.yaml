@@ -37,6 +37,35 @@ packages:
 esphome:
   name_add_mac_suffix: true
 
+# "Hey Robin", trained in wakeword/. Only the first model in the list is on at
+# first boot, and a device file can only add to the end of the base firmware's
+# list. So the base models are taken out and listed again after "Hey Robin".
+# Keep them: the base firmware refers to each one by id.
+micro_wake_word:
+  models:
+    - id: !remove okay_nabu
+    - id: !remove kenobi
+    - id: !remove hey_jarvis
+    - id: !remove hey_mycroft
+    - id: !remove stop
+    - id: !remove snooze
+    - model: hey_robin.json
+      id: hey_robin
+    - model: https://github.com/OHF-Voice/micro-wake-word/releases/download/okay_nabu_20241226.3/okay_nabu.json
+      id: okay_nabu
+    - model: https://raw.githubusercontent.com/formatBCE/Respeaker-Lite-ESPHome-integration/${satellite_core_ref}/microwakeword/models/v2/kenobi.json
+      id: kenobi
+    - model: hey_jarvis
+      id: hey_jarvis
+    - model: hey_mycroft
+      id: hey_mycroft
+    - model: https://github.com/OHF-Voice/micro-wake-word/releases/download/stop/stop.json
+      id: stop
+      internal: true
+    - model: https://raw.githubusercontent.com/formatBCE/Respeaker-Lite-ESPHome-integration/${satellite_core_ref}/microwakeword/models/v2/snooze.json
+      id: snooze
+      internal: true
+
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
