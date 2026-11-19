@@ -147,6 +147,7 @@ class Turn:
     answered: bool = False  # Robin's answer came to its end
     read_out: list[tuple[SpeakerMessage, int]] = field(default_factory=list)  # held messages read out, and where each one's words end in reply_text
     settle: asyncio.TimerHandle | None = None  # reports the read-out spoken once it should have played, if nothing says otherwise first
+    finish_seen: bool = False  # the egg has reported this turn's reply finished; a later report is some other announcement's
 
 
 class Robin:
@@ -334,14 +335,17 @@ class Robin:
         """The egg reports every reply finished too, also one the wake word stopped after TTS_END, which sends no stop request."""
         LOG.debug("Announcement finished: %s", result)
         t = self.turn
-        if t is None or not t.play_end:
+        if t is None or not t.play_end or t.finish_seen:
             return
+        t.finish_seen = True
         left = t.play_end - time.monotonic()
         if left > FOLLOW_UP_EARLY_S:
             with tagged(t.tag):
                 LOG.info("The egg reported the reply finished %.2f s before its estimated end, so it was stopped partway", left)
                 self._report_unfinished(t, "the egg stopped playing it partway")
         else:
+            with tagged(t.tag):
+                LOG.info("The egg reported the reply finished %.2f s %s its estimated end", abs(left), "before" if left > 0 else "after")
             self._settle_read_out(t, math.inf)
 
     # ---- the turn ----
