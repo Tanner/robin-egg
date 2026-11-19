@@ -561,7 +561,7 @@ The egg talks in robin-assistant's speaker chat, not in the plain web chat the p
 
 A late answer is dropped only when the person stopped every turn it answers. A late reply whose id was already reported as not spoken to the end is not spoken again.
 
-**Answering a message.** The run that follows a message Robin sent on its own, when the egg reopens its mic for an answer, is posted with `reply_to=<the message's id>`. robin-assistant shows Robin the message with the answer, so a bare "yes" arrives with its question. After several messages spoken as one announcement it is the last one's id. A turn started by the wake word has no `reply_to`, and neither does a message whose id is not a number, since robin-assistant refuses the whole question for a bad one.
+**Answering a message.** The run that follows a message Robin sent on its own, when the egg reopens its mic for an answer, is posted with `reply_to=<the message's id>`. robin-assistant shows Robin the message with the answer, so a bare "yes" arrives with its question. After several messages spoken as one announcement it is the last one's id. When speech-to-text is unsure and Robin asks for the answer again, the answer that follows still carries the `reply_to`. A message the egg stopped partway does not reopen the mic, so nothing after it carries one. A turn started by the wake word has no `reply_to`, and neither does a message whose id is not a number, since robin-assistant refuses the whole question for a bad one.
 
 **On the bench**, with the real egg and a real robin-assistant, before daily use:
 

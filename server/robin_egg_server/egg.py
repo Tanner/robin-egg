@@ -141,6 +141,7 @@ class Turn:
     reply_text: str = ""  # Robin's replies as they were handed to the voice, one after another
     reply_ends: list[tuple[int, int]] = field(default_factory=list)  # each reply's row id, and where its words end in reply_text
     answering_id: int | None = None  # the row of the message Robin sent that this turn answers
+    answering: str | None = None  # that message, as the log names it
     voiced: list[tuple[str, float]] = field(default_factory=list)  # each sentence of the replies, and where its audio ends in the reply
     asked_robin: bool = False  # this turn's words went to Robin
     answered: bool = False  # Robin's answer came to its end
@@ -286,7 +287,7 @@ class Robin:
         tag = f"t{self._turn_count}"
         reply = ReplyAudio()
         url = self.web.add(reply, tag)
-        self.turn = Turn(make_vad(self.opts.vad, cfg), reply, url, wake_word_phrase, follow_up, tag=tag, answering_id=answering_id)
+        self.turn = Turn(make_vad(self.opts.vad, cfg), reply, url, wake_word_phrase, follow_up, tag=tag, answering_id=answering_id, answering=answering)
         with tagged(self.turn.tag):
             if answering:
                 LOG.info("Answer to message %s: listening for %.0f s", answering, cfg.no_speech_timeout_s)
@@ -618,6 +619,7 @@ class Robin:
         await self._speak(_once(UNSURE), t.reply, turn=t, t0=t0)
         LOG.info('Robin: "%s"', UNSURE)
         await self._finish_reply(t, UNSURE, cont=True)
+        self._answering, self._answering_id = t.answering, t.answering_id  # the repeat still answers the same message
         return True
 
     async def _identify(self, t: Turn) -> tuple[Match, float]:

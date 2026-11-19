@@ -16,6 +16,7 @@ from aioesphomeapi import VoiceAssistantEventType
 from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.__main__ import parse_args
+from robin_egg_server.confidence import UNSURE
 from robin_egg_server.egg import FAILED_TURN, Options, Robin
 from robin_egg_server.fake_egg import FakeEgg, skip_played
 from robin_egg_server.logs import TagFilter
@@ -253,3 +254,19 @@ def test_a_message_whose_id_is_not_a_number_is_answered_with_no_reply_to():
     (post,) = posts
     assert "reply_to" not in post
     assert egg.runs[1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Okay, I'll remind you at nine."  # the turn still works
+
+
+def test_the_answer_after_a_request_to_say_it_again_still_says_which_message_it_answers():
+    from test_confidence import GARBLED, SURE, ScoredSTT
+
+    brain = ReplyToBrain()
+    go = asyncio.Event()
+    then = after_the_opening_run(go, runs=3)
+
+    async def scenario(egg, robin, tts, handled):
+        robin.stt = ScoredSTT([("yes plea", GARBLED), ("yes please", SURE)])
+        await then(egg, robin, tts, handled)
+
+    egg, robin, tts = asyncio.run(egg_with_speaker([[until(go), message(124, QUESTION, "Dentist reminder")]], [b"", speech(), speech()], [], brain, Options(follow_up="off", speaking_hours=(0, 24)), scenario))
+    assert tts.said[-2:] == [UNSURE, "Okay."]
+    assert brain.reply_tos == [124]
