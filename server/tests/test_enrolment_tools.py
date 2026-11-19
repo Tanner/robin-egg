@@ -90,7 +90,19 @@ def test_rebuild_after_a_model_change_restores_people_with_audio_only(tmp_path):
     assert store.prints == {}
     report = rebuild(audio, FakeEmbedder(VOICES), store, 8)
     assert set(store.prints) == {"tanner"}
-    assert "ryan" not in report
+    assert "ryan needs to enrol again: no saved audio, and their voiceprint was made by a different speaker model." in report
+
+
+def test_rebuild_after_a_model_change_says_who_could_not_be_rebuilt(tmp_path):
+    audio, old = setup(tmp_path, {"tanner": [TANNER] * 8, "ryan": [RYAN] * 5 + [255] * 4})
+    old.replace("tanner", [VOICES[TANNER]] * 8)
+    old.replace("ryan", [VOICES[RYAN]] * 8)
+    store = VoiceprintStore(tmp_path / "voiceprints.json", "newer-model.onnx")
+    store.load()
+    report = rebuild(audio, FakeEmbedder(VOICES), store, 8)
+    assert set(store.prints) == {"tanner"}
+    assert "ryan needs to enrol again: only 5 of 9 saved sentences could be used, and 8 are needed." in report
+    assert "Left ryan as they were" not in report
 
 
 def test_rebuild_leaves_someone_with_too_few_usable_sentences(tmp_path):

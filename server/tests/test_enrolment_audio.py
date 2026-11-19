@@ -100,3 +100,45 @@ def test_a_key_that_is_not_a_plain_folder_name_is_refused(tmp_path, key):
     with pytest.raises(ValueError):
         audio.delete(key)
     assert not (tmp_path / "x").exists()
+
+
+def names(path) -> list[str]:
+    return sorted(p.name for p in path.iterdir())
+
+
+def test_tidy_finishes_a_swap_that_was_cut_off_between_its_two_steps(tmp_path, caplog):
+    # The old folder was moved aside and the new one never moved in: the new sentences are the right ones.
+    root = tmp_path / "enrolment"
+    audio = EnrolmentAudio(root)
+    saved(audio, "tanner", {1: pcm(1.0)})
+    (root / "tanner").rename(root / ".tanner.old")
+    audio.stage("tanner", {2: pcm(2.0)})
+    with caplog.at_level(logging.INFO):
+        audio.tidy()
+    assert names(root) == ["tanner"]
+    assert audio.clips("tanner") == [pcm(2.0)]
+    assert "tanner" in caplog.text
+
+
+def test_tidy_removes_leftovers_beside_a_folder_that_is_in_place(tmp_path):
+    root = tmp_path / "enrolment"
+    audio = EnrolmentAudio(root)
+    saved(audio, "tanner", {1: pcm(1.0)})
+    saved(audio, "ryan", {1: pcm(1.0)})
+    audio.stage("tanner", {2: pcm(2.0)})
+    (root / ".ryan.old").mkdir()
+    audio.tidy()
+    assert names(root) == ["ryan", "tanner"]
+    assert audio.clips("tanner") == [pcm(1.0)]
+
+
+def test_tidy_removes_a_first_enrolment_that_was_never_put_in_place(tmp_path):
+    root = tmp_path / "enrolment"
+    audio = EnrolmentAudio(root)
+    audio.stage("tanner", {1: pcm(1.0)})
+    audio.tidy()
+    assert names(root) == []
+
+
+def test_tidy_with_no_folder_is_quiet(tmp_path):
+    EnrolmentAudio(tmp_path / "enrolment").tidy()

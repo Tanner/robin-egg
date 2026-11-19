@@ -31,6 +31,7 @@ def rebuild(audio: EnrolmentAudio, embedder: SpeakerEmbedder, store: VoiceprintS
     """Remake the voiceprint of everyone with saved enrolment audio, using this embedder. Returns the report to print.
 
     People in the store with no saved audio are left as they are, and so is anyone with too few usable sentences.
+    Voiceprints from a different model cannot be kept, so the report names whoever has to enrol again.
     """
     people = audio.people()
     if not people:
@@ -44,8 +45,13 @@ def rebuild(audio: EnrolmentAudio, embedder: SpeakerEmbedder, store: VoiceprintS
             rebuilt[key] = vectors
             lines.append(f"Rebuilt {key} from {len(vectors)} saved sentences.")
         else:
-            lines.append(f"Left {key} as they were: only {len(vectors)} of {len(clips)} saved sentences could be used, and {min_clips} are needed.")
+            short = f"only {len(vectors)} of {len(clips)} saved sentences could be used, and {min_clips} are needed."
+            lines.append(f"Left {key} as they were: {short}" if key in store.prints or key not in store.foreign else f"{key} needs to enrol again: {short}")
     lines += [f"Kept {key} as they were: no saved audio." for key in sorted(set(store.prints) - set(people))]
+    lines += [
+        f"{key} needs to enrol again: no saved audio, and their voiceprint was made by a different speaker model."
+        for key in sorted(set(store.foreign) - set(people))
+    ]
     if rebuilt:
         store.replace_many(rebuilt)
         lines.append("Restart the server so it loads these voiceprints.")

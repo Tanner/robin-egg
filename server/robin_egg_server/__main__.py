@@ -271,7 +271,9 @@ def build(args: argparse.Namespace):
         store.load()
         speakers = SpeakerId(embedder, store)
         people = People(brain.people)
-        commands = VoiceCommands(people, store, speakers.thresholds, EnrolmentAudio(Path(args.enrolment_audio).expanduser()))
+        enrolment_audio = EnrolmentAudio(Path(args.enrolment_audio).expanduser())
+        enrolment_audio.tidy()
+        commands = VoiceCommands(people, store, speakers.thresholds, enrolment_audio)
         if args.recognition_light:
             ring = LedRing()
             colours = PersonColours.load(Path(args.led_colours).expanduser())

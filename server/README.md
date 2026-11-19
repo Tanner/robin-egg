@@ -345,6 +345,7 @@ The sentences of each enrolment are kept as audio beside them, in `~/.robin-egg/
 - Enrolling again replaces the person's audio. "Forget my voice" deletes it along with the voiceprint.
 - The folders and files are readable only by the account that runs the server.
 - No other audio is kept. Everyday turns are not saved, and what a voiceprint learns from them is numbers only.
+- At startup the server finishes a save that was cut off partway, for example by a crash, and removes what it left behind. The log says so.
 - `--enrolment-audio DIR` changes where they are kept.
 
 ### Telling two voices apart
@@ -355,6 +356,7 @@ The server names a speaker only when their score is at least the accept threshol
 - The threshold for the turn is the higher of 0.45 and the closest call plus 0.10. It never goes below 0.45, so the only cost of a raise is more turns sent as Unknown Speaker.
 - Only people robin-assistant lists count.
 - The log says when the threshold changes: `The voices of ryan and tanner score up to 0.41 against each other, so the accept threshold is raised from 0.45 to 0.51`. A warning follows if someone's own enrolment sentences score below the new threshold, because that person will sometimes be Unknown Speaker.
+- A follow-up that is clearly someone else by 0.45, but under the raised threshold, is sent as Unknown Speaker. It is not kept for whoever spoke last.
 - With one person enrolled there is nothing to compare, and the threshold stays at 0.45.
 - The check that refuses an enrolment for sounding like someone else keeps using 0.45.
 
@@ -456,7 +458,7 @@ These sentences were read aloud in one sitting, so everyday speech scores lower 
 
 - Each person with saved audio gets a fresh voiceprint. What it had learned from everyday turns is dropped, and it learns again from there.
 - Someone with fewer than 8 usable sentences is left as they were.
-- Someone with no saved audio keeps their voiceprint if the current model made it. After a model change they have to enrol again.
+- Someone with no saved audio keeps their voiceprint if the current model made it. After a model change they have to enrol again. The report names them.
 - `--voiceprints`, `--speaker-model` and `--enrolment-audio` change the files it works on.
 
 ## Finding the end of speech

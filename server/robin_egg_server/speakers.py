@@ -162,15 +162,18 @@ class VoiceprintStore:
         self.path = path
         self.model_name = model_name
         self.prints: dict[str, Voiceprint] = {}
+        self.foreign: list[str] = []  # people the file holds voiceprints for from a different model
 
     def load(self) -> None:
         self.prints = {}
+        self.foreign = []
         if not self.path.exists():
             return
         try:
             data = json.loads(self.path.read_text())
             if data["model"] != self.model_name:
                 LOG.warning("Ignoring the voiceprints in %s: saved by a different model, re-enrol", self.path)
+                self.foreign = sorted(data["people"])
                 return
             self.prints = {
                 key: Voiceprint(
@@ -297,14 +300,21 @@ class Match:
         return self.key if self.key is not None else UNKNOWN_SPEAKER
 
 
-def decide(ranked: list[tuple[str, float]], seconds: float, t: Thresholds, previous: Match | None) -> Match:
+def decide(
+    ranked: list[tuple[str, float]], seconds: float, t: Thresholds, previous: Match | None, base_accept: float | None = None
+) -> Match:
+    """Who spoke, from the scores. base_accept is the accept threshold before any raise for close voices."""
     best, s1 = ranked[0] if ranked else (None, -1.0)
     other, s2 = ranked[1] if len(ranked) > 1 else (None, -1.0)
 
-    confident = best is not None and s1 >= t.accept and s1 - s2 >= t.margin and seconds >= t.min_judge_s
-    if confident:
+    clear = best is not None and s1 - s2 >= t.margin and seconds >= t.min_judge_s
+    if clear and s1 >= t.accept:
         return Match(best, s1, other, s2, seconds, False, None)
     if previous is not None and previous.key is not None:
+        # A raised threshold must only turn a name into Unknown Speaker. Without this, a follow-up that
+        # is clearly someone else by the unraised threshold would be kept for whoever spoke last.
+        if clear and best != previous.key and base_accept is not None and s1 >= base_accept:
+            return Match(None, s1, other, s2, seconds, False, None)
         prev_score = next((s for k, s in ranked if k == previous.key), -1.0)
         if seconds >= t.min_judge_s and prev_score < t.reject_inherited:
             return Match(None, s1, other, s2, seconds, False, None)
@@ -338,7 +348,7 @@ class SpeakerId:
             previous = None
         embedding = self.embedder.embed(pcm16)
         ranked = scores(embedding, self.store, keys)
-        m = decide(ranked, seconds, self._thresholds_for(keys), previous)
+        m = decide(ranked, seconds, self._thresholds_for(keys), previous, base_accept=self.thresholds.accept)
         m.embedding = embedding
         LOG.info("%s", _describe(m, ranked))
         return m
@@ -497,7 +507,9 @@ def main(argv: list[str] | None = None) -> int:
         embedder = SherpaEmbedder(args.speaker_model)
         store = VoiceprintStore(args.voiceprints, embedder.name)
         store.load()
-        print(rebuild(EnrolmentAudio(args.enrolment_audio), embedder, store, MIN_GOOD_SENTENCES))
+        audio = EnrolmentAudio(args.enrolment_audio)
+        audio.tidy()
+        print(rebuild(audio, embedder, store, MIN_GOOD_SENTENCES))
         return 0
 
     if args.enrolment == (args.dir is not None):
@@ -506,7 +518,9 @@ def main(argv: list[str] | None = None) -> int:
         from .enrolment_audio import EnrolmentAudio
         from .enrolment_tools import evaluate_enrolment
 
-        print(evaluate_enrolment(EnrolmentAudio(args.enrolment_audio), SherpaEmbedder(args.speaker_model), Thresholds()))
+        audio = EnrolmentAudio(args.enrolment_audio)
+        audio.tidy()
+        print(evaluate_enrolment(audio, SherpaEmbedder(args.speaker_model), Thresholds()))
         return 0
     if not args.dir.is_dir():
         p.error(f"{args.dir} is not a folder")

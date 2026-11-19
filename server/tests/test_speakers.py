@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import wave
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -597,3 +598,39 @@ def test_a_person_whose_own_sentences_fall_below_the_raised_threshold_is_warned_
     warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert warnings == ["ryan's own enrolment sentences score as low as 0.72, below the accept threshold of 0.81, so ryan will sometimes be Unknown Speaker"]
+
+
+def test_a_follow_up_the_default_threshold_would_give_to_someone_else_is_not_kept_for_the_last_speaker():
+    # Tanner spoke last. Ryan follows up: clearly Ryan by the default threshold, but under the raised one.
+    ranked = [("ryan", 0.58), ("tanner", 0.46)]
+    raised = replace(Thresholds(), accept=0.60)
+    m = decide(ranked, 2.0, raised, identified("tanner"), base_accept=0.45)
+    assert (m.key, m.inherited) == (None, False)
+
+
+def test_a_follow_up_nobody_else_claims_is_still_kept_for_the_last_speaker_with_the_threshold_raised():
+    raised = replace(Thresholds(), accept=0.60)
+    m = decide([("tanner", 0.52), ("ryan", 0.20)], 2.0, raised, identified("tanner"), base_accept=0.45)
+    assert (m.key, m.inherited) == ("tanner", True)
+    close = decide([("ryan", 0.50), ("tanner", 0.46)], 2.0, raised, identified("tanner"), base_accept=0.45)
+    assert (close.key, close.inherited) == ("tanner", True)  # too close to call either way, as before the raise
+
+
+def test_identify_does_not_give_the_other_persons_follow_up_to_the_last_speaker(tmp_path):
+    store = enrolled_store(tmp_path, **CLOSE)
+    other_person = (0.5, 1, 0.9)  # 0.74 against ryan, 0.35 against tanner; the raised threshold is 0.81
+    ids = SpeakerId(QueuedEmbedder([other_person]), store)
+    m = ids.identify(b"", 2.0, identified("tanner"), {"tanner", "ryan"})
+    assert (m.key, m.inherited) == (None, False)
+
+
+def test_load_remembers_who_was_saved_by_a_different_model(tmp_path):
+    old = VoiceprintStore(tmp_path / "v.json", MODEL)
+    old.replace("tanner", [unit(1, 0, 0)])
+    old.replace("ryan", [unit(0, 1, 0)])
+    store = VoiceprintStore(tmp_path / "v.json", "newer.onnx")
+    store.load()
+    assert store.prints == {}
+    assert store.foreign == ["ryan", "tanner"]
+    old.load()
+    assert old.foreign == []

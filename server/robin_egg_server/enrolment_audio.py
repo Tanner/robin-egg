@@ -76,6 +76,27 @@ class EnrolmentAudio:
             if folder.exists():
                 shutil.rmtree(folder)
 
+    def tidy(self) -> None:
+        """Clear up after a swap that was cut off, for example by a crash. Never raises.
+
+        A new set with the old one moved aside and nothing in place was cut off between the two
+        steps of commit, after the voiceprint was saved, so the new set is put in place. Any other
+        leftover is removed: it is a set whose voiceprint was not saved, or an old set already replaced.
+        """
+        if not self.root.is_dir():
+            return
+        try:
+            for staged in sorted(self.root.glob(".*.new")):
+                key = staged.name[1 : -len(".new")]
+                if self._old(key).exists() and not self._folder(key).exists():
+                    os.replace(staged, self._folder(key))
+                    LOG.info("Put the enrolment audio for %s in place: an earlier save was cut off partway", key)
+            for leftover in sorted([*self.root.glob(".*.new"), *self.root.glob(".*.old")]):
+                shutil.rmtree(leftover)
+                LOG.info("Removed leftover enrolment audio in %s from a save that was cut off", leftover)
+        except (OSError, ValueError) as err:
+            LOG.warning("Could not tidy the enrolment audio in %s (%s)", self.root, err)
+
     def _folder(self, key: str) -> Path:
         if not key or key.startswith(".") or Path(key).name != key:
             raise ValueError(f"{key!r} cannot be used as a folder name for enrolment audio")
