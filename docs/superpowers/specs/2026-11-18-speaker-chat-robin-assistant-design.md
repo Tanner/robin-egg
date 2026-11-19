@@ -45,7 +45,7 @@ A reserved web chat id, `WEB_SPEAKER_CHAT_ID = 2`, context `web:2`. Project and 
 
 **Device.** Every message into the speaker chat is `device=speaker`, whatever the form says. The device row is then pushed once per session and never flips, and the steered-message and exact-repeat cases in [robin-chat-api.md](../../robin-chat-api.md) cannot happen there.
 
-**Shown read-only in the web UI.** A "Speaker" item in the "..." menu opens the speaker chat as a page of its own. To confirm: that the menu meant is the agent menu (`chat/web/src/AgentMenu.tsx`), which lists Activity, Routines, Library and Skills today. The item is there only when `speakerChat` is true.
+**Shown read-only in the web UI.** A "Speaker" item in the "..." menu opens the speaker chat as a page of its own. The menu is the agent menu (`chat/web/src/AgentMenu.tsx`), which lists Activity, Routines, Library and Skills today. The item is there only when `speakerChat` is true.
 
 - The page is the transcript with no composer. Nothing on it replies, reacts, edits or answers a card.
 - Each row shows who spoke. A row Robin sent to the speaker shows its outcome from the meta: spoken, not spoken with the reason, or pending. A row sent with `Speak` also shows which chat sent it and its handoff note.
