@@ -57,13 +57,15 @@ Say "Hey Robin" each time, the way the line describes.
 29. Calling out, as if the egg is far away
 30. Facing away from the doorway
 
-**With noise in the room**
+**From other spots in the room**
 
-31. With the TV or music on at normal volume
-32. With the TV or music on, loudly
-33. With the TV or music on, from across the room
-34. With the tap running or the dishwasher on
-35. With the TV or music on, facing away
+Keep the TV, music and taps off. The notebook adds background noise itself, and sound between takes would be cut out as takes.
+
+31. Standing in the doorway
+32. Sitting on the floor
+33. From behind the phone
+34. From the far corner, quietly
+35. From the far corner, loudly
 
 **Anything goes**
 
