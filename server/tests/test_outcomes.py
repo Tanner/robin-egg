@@ -6,22 +6,28 @@ A message reported spoken is never sent as a text, so a wrong "spoken" loses it.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import threading
 import time
 import urllib.request
 
 import pytest
+import soundfile as sf
+from aioesphomeapi import VoiceAssistantEventType
+from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server import digest as digests
 from robin_egg_server import outcomes as outcomes_module
-from robin_egg_server.egg import Options
+from robin_egg_server.brain import EchoBrain
+from robin_egg_server.egg import Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.outcomes import OutcomeClient, outcome_of
 from robin_egg_server.speaker_stream import SpeakerMessage
+from robin_egg_server.web import AudioServer
 from test_digest import BINS, BINS_SAID, RECYCLING, TAXI, always, waiting_together
 from test_robin_brain import FakeRobinAssistant
-from test_server import SlowBrain, ToneTTS, speech
+from test_server import FakeSTT, SlowBrain, ToneTTS, speech
 from test_speaker_stream import eventually
 from test_waiting import ask, with_egg
 
@@ -352,3 +358,188 @@ def test_announce_sends_no_report():
 
     fake = asyncio.run(scenario())
     assert fake.outcome_posts == []
+
+
+# ---- replies that were not finished ----
+
+
+class IdBrain:
+    """Answers like RobinBrain: one piece per reply, each with its row id. One list of replies per turn."""
+
+    def __init__(self, *turns: list[tuple[int, str]], pause_s: float = 0.0) -> None:
+        self.turns, self.pause_s = list(turns), pause_s
+        self.accepted_id: int | None = None
+        self.reply_ids: list[int] = []
+        self.asked = 0
+
+    async def reply(self, heard: str, user: str):
+        self.asked += 1
+        self.accepted_id, self.reply_ids = 100 + self.asked, []
+        for i, (rid, text) in enumerate(self.turns.pop(0) if self.turns else [(900 + self.asked, "Okay.")]):
+            if i:
+                await asyncio.sleep(self.pause_s)
+            self.reply_ids.append(rid)
+            yield text + "\n"
+
+
+DENTIST = (124, "Your dentist is at ten tomorrow morning.")
+REMINDER = (125, "Shall I set a reminder for nine?")
+
+
+def turn_reports(brain, scenario, opts: Options | None = None, tts=None, texts=("when is the dentist", "stop"), egg: FakeEgg | None = None):
+    """One question to the egg, the scenario while it is answered, and the reports sent.
+
+    It waits for the last reply to finish playing, so stopping the server cuts nothing short.
+    """
+    reports = Reports()
+
+    async def run():
+        nonlocal egg
+        egg = egg or FakeEgg([speech()])
+        port = await egg.start()
+        web = AudioServer()
+        await web.start("127.0.0.1", 0, "127.0.0.1")
+        robin = Robin(FakeSTT(list(texts)), brain, tts or ToneTTS(), web, VoiceAssistantEventType, opts or Options(speaking_hours=ALWAYS, follow_up="off"))
+        robin.outcomes = reports
+        stop = asyncio.Event()
+        server = asyncio.create_task(robin.run_forever("127.0.0.1", port, stop=stop))
+        try:
+            await scenario(egg, robin)
+            await eventually(lambda: time.monotonic() > robin._playback_until + 0.7 and (robin.turn is None or robin.turn.task is None or robin.turn.task.done()))
+            await asyncio.sleep(0.2)  # a late report would show up here
+        finally:
+            stop.set()
+            await server
+            await web.stop()
+            await egg.stop()
+
+    asyncio.run(run())
+    return reports.sent
+
+
+async def reply_sent(egg) -> None:
+    """Until the egg has been sent the whole of the first turn's reply."""
+    await eventually(lambda: egg.runs and pb.VOICE_ASSISTANT_RUN_END in egg.runs[-1].types())
+
+
+def test_the_echo_brain_has_no_ids():
+    brain = EchoBrain()
+    assert brain.accepted_id is None and brain.reply_ids == []
+
+
+def test_a_reply_the_wake_word_cuts_off_as_it_starts_is_reported_dropped():
+    async def scenario(egg, robin):
+        await reply_sent(egg)
+        egg.utterances.append(speech())
+        egg.wake()  # straight away: nothing of the reply has played
+        await eventually(lambda: len(egg.runs) == 2 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[1].types())
+
+    sent = turn_reports(IdBrain([DENTIST, REMINDER]), scenario)
+    assert sent == [(124, "dropped", "interrupted by the wake word"), (125, "dropped", "interrupted by the wake word")]
+
+
+def test_only_the_replies_the_wake_word_cut_off_are_reported():
+    async def scenario(egg, robin):
+        await reply_sent(egg)
+        await asyncio.sleep(max(0.0, robin._playback_until - 0.8 - time.monotonic()))  # partway through the second reply
+        egg.utterances.append(speech())
+        egg.wake()
+        await eventually(lambda: len(egg.runs) == 2 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[1].types())
+
+    sent = turn_reports(IdBrain([DENTIST, REMINDER]), scenario)
+    assert sent == [(125, "dropped", "interrupted by the wake word")]
+
+
+def test_a_reply_the_wake_word_cuts_off_while_robin_is_still_answering_is_reported():
+    brain = IdBrain([DENTIST, REMINDER], pause_s=3.0)
+
+    async def scenario(egg, robin):
+        await eventually(lambda: brain.reply_ids == [124])
+        egg.utterances.append(speech())
+        egg.wake()
+        await eventually(lambda: len(egg.runs) == 2 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[1].types())
+
+    sent = turn_reports(brain, scenario)
+    assert sent == [(124, "dropped", "interrupted by the wake word")]  # 125 never came, so there is nothing to report for it
+
+
+class FailsOn(ToneTTS):
+    def __init__(self, word: str) -> None:
+        super().__init__()
+        self.word = word
+
+    def synthesize(self, text: str):
+        if self.word in text:
+            raise RuntimeError("Piper crashed")
+        return super().synthesize(text)
+
+
+def test_a_reply_lost_to_a_voice_failure_is_reported_dropped():
+    async def scenario(egg, robin):
+        await reply_sent(egg)
+        await eventually(lambda: robin.turn.task.done())
+
+    sent = turn_reports(IdBrain([DENTIST, REMINDER]), scenario, tts=FailsOn("reminder"))
+    assert sent == [(125, "dropped", "the voice failed")]
+
+
+def test_a_reply_lost_because_the_egg_disconnected_is_reported_dropped():
+    async def scenario(egg, robin):
+        await reply_sent(egg)
+        egg.drop()  # while the reply plays
+        await eventually(lambda: len(robin.outcomes.sent) == 2)
+
+    sent = turn_reports(IdBrain([DENTIST, REMINDER]), scenario)
+    assert sent == [(124, "dropped", "the egg disconnected"), (125, "dropped", "the egg disconnected")]
+
+
+class PlaysInRealTime(FakeEgg):
+    """Reopens its mic for a follow-up only once the reply would have finished playing, as the real egg does."""
+
+    def __init__(self, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        self._following = False
+
+    async def _on_event(self, t: int, data: dict[str, str]) -> None:
+        self._following = t == pb.VOICE_ASSISTANT_RUN_END
+        await super()._on_event(t, data)
+        self._following = False
+
+    def _start_run(self, wake_word: str) -> None:
+        if not self._following:
+            return super()._start_run(wake_word)
+        run = self.runs[-1]
+        audio = run.streamed or run.final
+        ends = (run.first_byte_at or time.monotonic()) + (sf.info(io.BytesIO(audio)).duration if audio else 0.0)
+
+        async def later() -> None:
+            await asyncio.sleep(max(0.0, ends - time.monotonic()) + 0.05)
+            FakeEgg._start_run(self, wake_word)
+
+        self._later = asyncio.get_running_loop().create_task(later())
+
+
+@pytest.mark.parametrize("follow_up", ["off", "always"])
+def test_a_reply_spoken_to_the_end_sends_no_report(follow_up):
+    async def scenario(egg, robin):
+        await reply_sent(egg)
+        await eventually(lambda: time.monotonic() > robin._playback_until + 0.7 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[-1].types())
+        egg.utterances.append(speech())
+        egg.wake()  # a new question once the answer has played
+        await eventually(lambda: any(pb.VOICE_ASSISTANT_STT_END in r.types() and r.data(pb.VOICE_ASSISTANT_STT_END).get("text") == "thanks" for r in egg.runs))
+
+    egg = PlaysInRealTime([speech()])
+    sent = turn_reports(IdBrain([DENTIST, REMINDER]), scenario, Options(speaking_hours=ALWAYS, follow_up=follow_up), texts=["when is the dentist", "thanks"], egg=egg)
+    assert sent == []
+    if follow_up == "always":
+        assert len(egg.runs) >= 3  # the follow-up after the answer did open, and nobody spoke in it
+
+
+def test_the_wake_word_during_a_reply_that_asked_for_a_follow_up_is_reported():
+    async def scenario(egg, robin):
+        await eventually(lambda: len(egg.runs) == 2 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[1].types())
+
+    # The second run starts with the wake word as soon as the reply is sent, long before it could have played.
+    egg = FakeEgg([speech(), speech()], wake_words=["Okay Nabu", "Okay Nabu"])
+    sent = turn_reports(IdBrain([DENTIST, REMINDER]), scenario, Options(speaking_hours=ALWAYS, follow_up="questions"), egg=egg)  # the reply ends in a question, "Okay." does not
+    assert sent == [(124, "dropped", "interrupted by the wake word"), (125, "dropped", "interrupted by the wake word")]

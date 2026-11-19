@@ -35,6 +35,9 @@ class Brain(Protocol):
 class EchoBrain:
     """Repeats what it heard. Tests speech-to-text and the voice with no robin-assistant."""
 
+    accepted_id: int | None = None
+    reply_ids: list[int] = []
+
     async def reply(self, heard: str, user: str) -> AsyncIterator[str]:
         yield f"I heard: {heard}"
 
@@ -92,10 +95,13 @@ class RobinBrain:
         self.url, self.timeout_s, self.people_timeout_s = url.rstrip("/"), timeout_s, people_timeout_s
         # No read timeout from the client: the overall deadline below covers a silent server.
         self.client = httpx2.AsyncClient(timeout=httpx2.Timeout(10.0, read=None))
+        self.accepted_id: int | None = None  # the row robin-assistant stored the last message as
+        self.reply_ids: list[int] = []  # the rows of the last turn's replies, in the order they came
 
     async def reply(self, heard: str, user: str) -> AsyncIterator[str]:
         import httpx2
 
+        self.accepted_id, self.reply_ids = None, []
         fields = {"text": heard, "chat": "speaker", "device": "speaker", "wait": "1", "user": user, "send_id": secrets.token_urlsafe(16)}
         deadline = time.monotonic() + self.timeout_s
         replies = 0
@@ -126,7 +132,11 @@ class RobinBrain:
                         raise RobinUnavailable(f"Robin did not finish answering within {self.timeout_s:.0f} s") from None
                     if name == "accepted":
                         LOG.debug("robin-assistant accepted the message as row %s", data.get("id"))
+                        if _row_id(data.get("id")) is not None:
+                            self.accepted_id = data["id"]
                     elif name == "reply":
+                        if _row_id(data.get("id")) is not None:
+                            self.reply_ids.append(data["id"])
                         text = strip_markdown(str(data.get("text", "")))
                         if text:
                             replies += 1
@@ -203,6 +213,11 @@ class RobinBrain:
 
     async def close(self) -> None:
         await self.client.aclose()
+
+
+def _row_id(value: object) -> int | None:
+    """A row id as robin-assistant numbers them, or None for anything else."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 async def sse_events(lines: AsyncIterator[str]) -> AsyncIterator[tuple[str, dict]]:

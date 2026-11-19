@@ -222,6 +222,26 @@ def test_posts_as_a_speaker_and_yields_each_reply_separately():
     assert f["user"] == "Unknown Speaker"
 
 
+def test_robin_brain_keeps_the_accepted_id_and_each_reply_id():
+    async def scenario():
+        fake = FakeRobinAssistant([answer("One.", "Two."), answer("Three.")])
+        brain = RobinBrain(await fake.start(), "robin")
+        try:
+            async for _ in brain.reply("first", user="tanner"):
+                pass
+            first = (brain.accepted_id, list(brain.reply_ids))
+            async for _ in brain.reply("second", user="tanner"):
+                assert brain.reply_ids == [124]  # filled as each reply arrives, from a fresh start
+            return first, (brain.accepted_id, brain.reply_ids)
+        finally:
+            await brain.close()
+            await fake.stop()
+
+    first, second = asyncio.run(scenario())
+    assert first == (123, [124, 125])
+    assert second == (123, [124])
+
+
 def test_each_turn_gets_its_own_send_id_and_its_own_user():
     async def two():
         fake = FakeRobinAssistant([answer("One."), answer("Two.")])

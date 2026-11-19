@@ -24,6 +24,7 @@ import asyncio
 import base64
 import contextlib
 import logging
+import math
 import time
 import wave
 from dataclasses import dataclass, field
@@ -32,7 +33,7 @@ from typing import Any, AsyncIterator, Protocol
 
 from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, describe_level, load_sound
 from . import whoami
-from .brain import Brain, QuietTurn, sentences, strip_markdown
+from .brain import Brain, QuietTurn, RobinUnavailable, sentences, strip_markdown
 from .confidence import UNSURE, Confidence, ConfidenceLimits
 from . import digest as digests
 from .digest import Digest, Part
@@ -42,7 +43,7 @@ from .enrol_offer import ENROL_OFFER, EnrolOffer
 from .logs import tagged
 from .quiet import QuietMode
 from .mic_mute import MicMute
-from .outcomes import outcome_of
+from .outcomes import DROPPED, outcome_of
 from .morning_mention import MorningMention
 from .repeat import DEFAULT_WINDOW_S, NOTHING_TO_REPEAT, LastSaid
 from .presence import Presence, SpokenTo, absence
@@ -68,6 +69,8 @@ NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 # After a reply that asked for a follow-up, how long past its end to wait for the egg to reopen its mic.
 FOLLOW_UP_GRACE_S = 3.0
+# How much sooner than the clock says a reply ends the egg may still reopen its mic for a follow-up to it.
+FOLLOW_UP_EARLY_S = 0.25
 RECONNECT_DELAY_S = 2.0  # the first wait before trying the egg again; doubles up to 30 s
 ANNOUNCE_WAIT_S = 60.0  # how long /announce waits for the egg to be idle before giving up
 
@@ -130,6 +133,9 @@ class Turn:
     task: asyncio.Task | None = None
     cue: ThinkingCue | None = None  # the thinking sound, on turns that ask Robin
     log: TurnRecord = field(default_factory=TurnRecord)  # what the turn log will say about this turn
+    reply_text: str = ""  # Robin's replies as they were handed to the voice, one after another
+    reply_ends: list[tuple[int, int]] = field(default_factory=list)  # each reply's row id, and where its words end in reply_text
+    voiced: list[tuple[str, float]] = field(default_factory=list)  # each sentence of the replies, and where its audio ends in the reply
 
 
 class Robin:
@@ -240,6 +246,11 @@ class Robin:
         reopened = time.monotonic() <= self._playback_until + FOLLOW_UP_GRACE_S
         follow_up = self._follow_up_pending and (not wake_word_phrase or reopened)
         self._follow_up_pending = False
+        if previous_turn is not None:
+            # The egg reopens its mic for a follow-up only once it has played the reply, so a
+            # follow-up that comes clearly sooner is the wake word cutting the reply short.
+            with tagged(previous_turn.tag):
+                self._report_unfinished(previous_turn, "interrupted by the wake word", behind_s=-FOLLOW_UP_EARLY_S if follow_up else digests.PLAYED_MARGIN_S)
         answering, self._answering = self._answering if follow_up else None, None
         if not follow_up:
             self.last_match = None  # a new conversation never inherits the last speaker
@@ -285,6 +296,7 @@ class Robin:
             if abort:
                 LOG.info("The egg cancelled the turn")
                 t.listening = False
+                self._report_unfinished(t, "the egg cancelled the turn")
                 if t.task is not None:
                     t.task.cancel()
                 else:
@@ -422,7 +434,7 @@ class Robin:
                 ended = "voice_command"
                 return
             t.cue = self._thinking_cue(t, t0)
-            spoken = await self._speak(self.brain.reply(heard, user=match.user), t.reply, turn=t, t0=t0)
+            spoken = await self._speak(self._tracking_replies(t, self.brain.reply(heard, user=match.user)), t.reply, turn=t, t0=t0, voiced=t.voiced)
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
             cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))
@@ -451,6 +463,8 @@ class Robin:
             ended = "quiet"
         except Exception as err:  # noqa: BLE001 - the person in the room must hear that it failed
             LOG.exception("The turn failed")
+            # What was voiced before the failure still plays, ahead of the apology.
+            self._report_unfinished(t, "robin-assistant stopped partway" if isinstance(err, RobinUnavailable) else "the voice failed", played_s=math.inf)
             ended = "failed"
             t.log.outcome = FAILED
             self._reset_commands()  # the apology ends the conversation
@@ -612,7 +626,58 @@ class Robin:
         await t.reply.close()
         self.send(E.VOICE_ASSISTANT_TTS_END, {"url": t.url})
         self._playback_until = t.play_end if t.playing else time.monotonic() + t.reply.seconds
+        t.play_end = self._playback_until
         self.send(E.VOICE_ASSISTANT_RUN_END)
+
+    async def _tracking_replies(self, t: Turn, deltas: AsyncIterator[str]) -> AsyncIterator[str]:
+        """Passes Robin's replies on, noting where each reply's words end, so a reply cut short can be named."""
+        seen = 0
+        async for d in deltas:
+            start = len(t.reply_text)
+            t.reply_text += d
+            ids = list(getattr(self.brain, "reply_ids", None) or [])
+            new, seen = ids[seen:], len(ids)
+            t.reply_ends += [(rid, start) for rid in new[:-1]]  # a reply with nothing to say
+            if new:
+                t.reply_ends.append((new[-1], start + len(d.rstrip())))
+            yield d
+        ids = list(getattr(self.brain, "reply_ids", None) or [])
+        t.reply_ends += [(rid, len(t.reply_text)) for rid in ids[seen:]]
+
+    def _played_s(self, t: Turn, now: float, behind_s: float = digests.PLAYED_MARGIN_S) -> float:
+        """About how far into the turn's reply the egg has played, taking it to be `behind_s` behind the clock."""
+        if not t.play_end:
+            return 0.0
+        return t.reply.seconds - max(0.0, t.play_end + behind_s - now)
+
+    def _report_unfinished(self, t: Turn, why: str, played_s: float | None = None, behind_s: float = digests.PLAYED_MARGIN_S) -> None:
+        """Reports each of Robin's replies in this turn that the egg did not speak to the end, so it arrives as a text.
+
+        A reply counts as spoken only once every sentence up to its end has played. When the
+        egg cannot tell where one reply ends, the replies from the one being spoken onward
+        are reported. Each reply is reported at most once.
+        """
+        if self.outcomes is None or not t.reply_ends:
+            return
+        played = self._played_s(t, time.monotonic(), behind_s) if played_s is None else played_s
+        done = pos = 0
+        for sentence, ends_s in t.voiced:
+            at = t.reply_text.find(sentence, pos)
+            if at < 0 or ends_s > played:
+                break
+            done = pos = at + len(sentence)
+        unspoken = [rid for rid, end in t.reply_ends if end > done]
+        if not unspoken:
+            return
+        t.reply_ends = [(rid, end) for rid, end in t.reply_ends if end <= done]
+        one = len(unspoken) == 1
+        LOG.info("Robin's %s %s %s not spoken to the end (%s), so robin-assistant is told to send %s as a text",
+                 "reply" if one else "replies", digests.listed([str(r) for r in unspoken]), "was" if one else "were", why, "it" if one else "them")
+        for rid in unspoken:
+            try:
+                self.outcomes.report(rid, DROPPED, why)
+            except Exception:  # noqa: BLE001 - a report is never a reason to fail what the egg is doing
+                LOG.exception("Could not report that Robin's reply %s was not spoken to the end", rid)
 
     async def _apologise(self, t: Turn, err: Exception) -> None:
         """Says the turn failed, after whatever part of the reply was already spoken.
@@ -630,10 +695,11 @@ class Robin:
             self.send(self.E.VOICE_ASSISTANT_ERROR, {"code": "robin-error", "message": str(err)[:200] or type(err).__name__})
             self.send(self.E.VOICE_ASSISTANT_RUN_END)
 
-    async def _speak(self, deltas: Any, reply: ReplyAudio, turn: Turn | None = None, t0: float | None = None) -> list[str]:
+    async def _speak(self, deltas: Any, reply: ReplyAudio, turn: Turn | None = None, t0: float | None = None, voiced: list[tuple[str, float]] | None = None) -> list[str]:
         """Turns streamed text into audio, one sentence at a time, while the LLM keeps writing.
 
         With a turn and streaming on, the egg is told to start playing at the first sentence.
+        `voiced`, when given, gets each sentence and where its audio ends in the reply.
         """
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         spoken: list[str] = []
@@ -648,6 +714,8 @@ class Robin:
                     await self._end_thinking(turn)  # the thinking sound ends where the first sentence begins
                 before = reply.seconds
                 await reply.push(samples, rate)
+                if voiced is not None:
+                    voiced.append((s, reply.seconds))
                 if turn is not None and turn.playing:
                     # Audio made after the egg ran dry plays from now, not from where the last piece ended.
                     turn.play_end = max(turn.play_end, time.monotonic()) + reply.seconds - before
@@ -1268,6 +1336,8 @@ class Robin:
                 self._follow_up_pending = False
                 if turn is not None:
                     turn.listening = False
+                    with tagged(turn.tag):
+                        self._report_unfinished(turn, "the egg server stopped" if stop.is_set() else "the egg disconnected")
                     if turn.task is not None:
                         turn.task.cancel()
                     else:
