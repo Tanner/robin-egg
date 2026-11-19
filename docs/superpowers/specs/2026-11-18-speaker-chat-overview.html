@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Speaker chat plan</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --panel: #ffffff; --ink: #1f2328; --muted: #5d6570; --line: #e3e0d8;
+    --accent: #2f7f86; --accent-soft: #e4f1f1; --warn: #9a5b12; --warn-soft: #fbf0dc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15181b; --panel: #1c2024; --ink: #e6e8ea; --muted: #9aa3ad; --line: #2c3238;
+      --accent: #6cc0c7; --accent-soft: #1d3336; --warn: #e2b46a; --warn-soft: #33290f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 820px; margin: 0 auto; padding: 40px 16px 72px; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 20px; margin: 44px 0 12px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 0 0 4px; }
+  p { margin: 0 0 12px; }
+  .sub { color: var(--muted); margin-bottom: 20px; }
+  a { color: var(--accent); }
+  code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+  .note { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 10px 14px; margin: 16px 0; font-size: 15px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; font-size: 15px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { white-space: nowrap; font-weight: 600; }
+  ul { margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .size { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 600; white-space: nowrap; }
+  footer { margin-top: 48px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Speaker chat plan</h1>
+  <p class="sub">Written 2026-11-18 for review. The short version of the two design docs, without code references.</p>
+  <p>Detail: <a href="2026-11-18-speaker-chat-robin-assistant-design.md">robin-assistant side</a> and <a href="2026-11-18-speaker-chat-egg-server-design.md">egg server side</a>.</p>
+  <div class="note">Both design docs have been through two reviews against the code. No code has been written.</div>
+
+  <h2>The problem</h2>
+  <p>The egg talks in the plain web chat, the one the phone uses. So every reminder and task result Robin writes there is spoken, and everything said to the egg shows up in the web chat.</p>
+
+  <h2>The idea</h2>
+  <p>Speech gets its own chat. Robin knows about both.</p>
+  <div class="wrap"><table>
+    <tr><th></th><th>Web chat</th><th>Speaker chat</th></tr>
+    <tr><td>How you use it</td><td>Type on the phone or computer</td><td>Talk to the egg</td></tr>
+    <tr><td>What Robin does there</td><td>Writes text</td><td>Says it aloud</td></tr>
+    <tr><td>Where you see it</td><td>The chat page</td><td>A read-only Speaker page, under the "..." menu</td></tr>
+    <tr><td>Can you type into it</td><td>Yes</td><td>No</td></tr>
+  </table></div>
+
+  <h2>How it behaves</h2>
+  <div class="cards">
+    <div class="card"><h3>Robin knows both chats</h3><p>Before each turn Robin gets what was said in the other chat since this chat's last turn, up to 10 messages. A tool reads further back. Talk to the egg at 9, type at noon, talk to the egg at 6, and the 6 o'clock turn knows about noon.</p></div>
+    <div class="card"><h3>Speaking is a choice</h3><p>Nothing in the web chat is spoken unless Robin chose that. Robin has a <code>Speak</code> tool in the web chat and in a one-person Telegram chat. Projects, threads and Telegram groups do not get it.</p></div>
+    <div class="card"><h3>A note that is not spoken</h3><p>When Robin speaks from another chat, it also writes background for whoever answers: where the message came from, why, and what an answer would need. "Yes, tell them five minutes" then makes sense to Robin.</p></div>
+    <div class="card"><h3>The answer is reported back</h3><p>When someone answers a spoken message, the chat that sent it is told who answered and what was said.</p></div>
+    <div class="card"><h3>Unheard becomes text</h3><p>The egg server already decides whether it may speak: speaking hours, a muted mic, quiet asked for by voice, being offline. Now it reports the result, and anything not spoken is delivered as text. An answer you interrupt arrives as text too.</p></div>
+    <div class="card"><h3>Approvals go to the phone</h3><p>A spoken turn that needs an approval or a location puts the card in the web chat, and Robin says so aloud.</p></div>
+    <div class="card"><h3>Guests</h3><p>The speaker chat only gets web chat content when the voice is a recognised household member.</p></div>
+  </div>
+
+  <h2>One field for how a task is delivered</h2>
+  <p>Today a task has <code>deliver</code> (now or later) and <code>urgent</code>. This plan would have added two more. They become one field.</p>
+  <div class="wrap"><table>
+    <tr><th>deliver</th><th>What happens when the task fires</th></tr>
+    <tr><td><code>text</code></td><td>Written to the chat now</td></tr>
+    <tr><td><code>text_later</code></td><td>Held until you are next around</td></tr>
+    <tr><td><code>speak</code></td><td>Said aloud within speaking hours, after a chime</td></tr>
+    <tr><td><code>speak_urgent</code></td><td>Said aloud at any hour, ahead of anything waiting, and texted at the same time</td></tr>
+    <tr><td><code>chime</code></td><td>The egg chimes and the words arrive as text</td></tr>
+  </table></div>
+  <p style="margin-top:12px">A reminder set by voice defaults to <code>speak</code>. One set by typing defaults to <code>text</code>. Either can ask for the other, so "text me that at five" works when said to the egg. Stored tasks are migrated once. Jobs defined in the config get the same field. The Routines page shows all five choices, and lists reminders set by voice.</p>
+
+  <h2>What changes for you on day one</h2>
+  <ul>
+    <li>What you say to the egg stops appearing in the web chat. It appears on the Speaker page.</li>
+    <li>Reminders and task results you set up by typing stop being spoken. They stay text.</li>
+    <li>Every existing reminder becomes text, including the ones set by voice, because they all belong to the web chat today. You tell Robin which should be spoken.</li>
+    <li>Scheduled jobs with no chat, which the egg speaks today, become text unless their config says <code>speak</code>.</li>
+  </ul>
+
+  <h2>Order of work</h2>
+  <p>In robin-assistant, four pieces. Each can ship alone, and nothing changes until the agent's config turns the speaker chat on.</p>
+  <div class="wrap"><table>
+    <tr><th>Piece</th><th>What</th><th>Complexity</th></tr>
+    <tr><td>1</td><td>The speaker chat, its read-only page, late answers, outcome reports and the text fallback</td><td><span class="size">Medium to large</span></td></tr>
+    <tr><td>2</td><td>Each chat sees the other, and the tool to read back</td><td><span class="size">Medium</span></td></tr>
+    <tr><td>3</td><td><code>Speak</code> and the single <code>deliver</code> field, with the task migration and the Routines page</td><td><span class="size">Large</span></td></tr>
+    <tr><td>4</td><td>Reporting answers back</td><td><span class="size">Small</span></td></tr>
+  </table></div>
+  <p style="margin-top:16px">In the egg server, three pieces, deployed together. There is no option to switch between the old path and the new one.</p>
+  <div class="wrap"><table>
+    <tr><th>Piece</th><th>What</th><th>Complexity</th></tr>
+    <tr><td>1</td><td>Post to the speaker chat, follow its stream, check at startup that robin-assistant supports it</td><td><span class="size">Small</span></td></tr>
+    <tr><td>2</td><td>Report what became of each message and each unfinished answer</td><td><span class="size">Small to medium</span></td></tr>
+    <tr><td>3</td><td>Late answers, and saying which message an answer is for</td><td><span class="size">Small</span></td></tr>
+  </table></div>
+  <p style="margin-top:12px">The egg server change is deployed only after robin-assistant's piece 2. With piece 1 alone the two chats would know nothing of each other.</p>
+
+  <h2>Preventing regressions</h2>
+  <ul>
+    <li>With the speaker chat off in robin-assistant, every request and response there is what it is today, and its existing test suite must pass unchanged. The egg server always uses the speaker chat, so robin-assistant goes first, and going back means reverting the egg server change.</li>
+    <li>Each new behaviour has named tests in the design docs, including the cases the first review found: reloads and crashes with messages pending, two speakers that disagree, an answer cut off mid-sentence, a spoken turn that needs an approval.</li>
+    <li>The task migration keeps reading the old fields for one release, so a reminder cannot be lost between the migration and a restart.</li>
+    <li>A bench check with the real egg comes before daily use: ask a question, type in the web chat, have Robin speak from the web chat, mute the mic, interrupt an answer, answer a spoken question.</li>
+  </ul>
+
+  <h2>Decided</h2>
+  <ul>
+    <li>Speech has its own chat. This reverses the 2026-11-16 decision to share the web chat.</li>
+    <li>The two chats share recent messages, not one merged history.</li>
+    <li>The speaker chat is visible in the web UI, read-only.</li>
+    <li>Projects and threads cannot speak.</li>
+    <li>One <code>deliver</code> field, and stored tasks are migrated to it.</li>
+    <li>The speaker chat gets no goals and no projects index.</li>
+    <li>The speaker chat's history is summarised and cleared after an hour with no spoken turn.</li>
+    <li>The egg server has no option to switch back to the web chat.</li>
+    <li>A message the egg holds outside speaking hours is texted at once. The egg may still read it out in the morning.</li>
+    <li>An urgent message is always spoken and texted, so it cannot be said to an empty house and lost.</li>
+    <li>The other chat's messages reach Robin as tagged content in the user's turn, marked as a record. They are not given the authority of a system message.</li>
+  </ul>
+
+  <h2>Later</h2>
+  <p>Speaking hours, quiet, presence, holding for morning and "what did I miss?" are rules, and they live in the egg server. They would sit better in Robin, which could then choose text up front. That is a separate, medium-sized move, noted and not planned here.</p>
+
+  <footer>Robin Egg, docs/superpowers/specs</footer>
+</main>
+</body>
+</html>

@@ -16,15 +16,15 @@ Most of the work is on the robin-assistant side. Here it is a target field, a st
 
 ### The switch
 
-A new option, `--speaker-chat`, off at first. With it off the server behaves as it does today, against any robin-assistant. With it on:
+There is no option for this. The egg server always uses the speaker chat, and the plain-chat path is removed. Both programs are ours and run on one Mac mini, so a second path would only be code to keep working and never use. Going back means reverting the egg server change.
 
 - `RobinBrain.reply` (`server/robin_egg_server/brain.py:95-146`) adds `chat=speaker` to the form. `device=speaker`, `wait=1`, `user` and `send_id` stay.
 - `SpeakerStream` (`server/robin_egg_server/speaker_stream.py:63`) connects to `/api/chat/:agent/speaker?chat=speaker`.
-- At startup `RobinBrain.check` (`brain.py:168-193`) already fetches `GET /api/chat/:agent`. It now reads `speakerChat` from the answer. A missing key means a robin-assistant that is too old, and `false` means the agent has no `speaker_chat = true`. Either way the server exits with a message that names the config key. It does not fall back to the plain chat, since that would quietly bring back the behaviour this option exists to remove. If robin-assistant is down it warns and starts, as today.
+- At startup `RobinBrain.check` (`brain.py:168-193`) already fetches `GET /api/chat/:agent`. It now reads `speakerChat` from the answer. A missing key means a robin-assistant that is too old, and `false` means the agent has no `speaker_chat = true`. Either way the server exits with a message that names the config key. If robin-assistant is down it warns and starts, as today.
 
 The check matters more than it looks. An old robin-assistant ignores the stream's `chat` parameter and would serve the plain chat's stream, and it answers the post with 400, which would fail every voice turn.
 
-The default flips to on after the bench check below, and the option is removed once the plain-chat path has been unused for a while.
+So robin-assistant goes first: its pieces 1 and 2 land and `speaker_chat = true` is set before this change is deployed.
 
 ### Reporting what became of a message
 
@@ -79,29 +79,29 @@ The `Brain` protocol's `reply(heard, user)` gains an optional `reply_to`. `EchoB
 
 ### Wording
 
-The README and several log lines say a missed message is "still in the chat". With the option on, the truth is "robin-assistant sends it as a text instead". Change the log lines to say which applies.
+The README and several log lines say a missed message is "still in the chat". The truth is now "robin-assistant sends it as a text instead". Change them.
 
 ## Not in this plan
 
 - Choosing between several speaker chats or naming a project. There is one speaker chat.
 - Skipping held messages that someone already read on the phone. robin-assistant's `/seen` route is there for it, and it is a separate change.
-- Any change to `/announce`, the health alert (`server/robin_egg_server/health.py`), speaking hours, quiet, presence, or the priorities. They act on a message exactly as before. robin-assistant renames its task fields, but the stream still sends `priority: "urgent"` and `"low"`.
+- Any change to `/announce`, the health alert (`server/robin_egg_server/health.py`), speaking hours, quiet, presence, or the priorities. They act on a message exactly as before. robin-assistant renames its task fields, but the stream's `priority` field keeps its two values, `"urgent"` and `"low"`. robin-assistant sends `"urgent"` today and starts sending `"low"` with this work.
 - Moving the speaking rules to robin-assistant. Speaking hours, quiet, presence and "what did I miss?" stay here for now. The robin-assistant doc notes the move under "Later".
 
 ## Order of work
 
-1. `--speaker-chat`, the form field, the stream parameter and the startup check.
+1. The form field, the stream parameter and the startup check.
 2. Outcome reports, for messages and for unfinished replies.
 3. `late` on the stream, and `reply_to`.
 
-Piece 1 needs robin-assistant's piece 1. Turn the option on for daily use only once robin-assistant's piece 2 has landed, so the two chats know about each other.
+Piece 1 needs robin-assistant's pieces 1 and 2, so the two chats know about each other from the first day. Develop all three pieces on a branch and deploy them together.
 
 ## Preventing regressions
 
-- With `--speaker-chat` off, every request the server makes is byte-for-byte what it makes today. The existing suite must pass unchanged. `tests/test_robin_brain.py` and `tests/test_speaker_stream.py` assert on the fake robin-assistant's requests, and those assertions stay as they are.
+- The requests change on purpose, so the tests that assert on them change with them. `tests/test_robin_brain.py` and `tests/test_speaker_stream.py` are updated to expect `chat=speaker` and the stream parameter. Every other test must pass unchanged, since nothing about when or how the egg speaks is touched.
 - The fake robin-assistant in those tests gains the speaker chat: it accepts `chat=speaker`, serves the stream with the parameter, records outcome posts, and can answer 404 "Unknown chat".
 - New tests:
-  - With the option on, the post carries `chat=speaker` and the stream URL carries the parameter. With it off, neither does.
+  - The post carries `chat=speaker` and the stream URL carries the parameter.
   - Startup exits with the message when `speakerChat` is false and when the key is missing. Startup with robin-assistant down warns and carries on.
   - Each outcome produces the right report, driven by the existing scenarios: outside speaking hours, quiet asked for by voice, mic muted, nobody present, waited too long, interrupted, the egg disconnected, a failed announcement, a low-priority chime.
   - A digest of three reports each message. A digest cut short reports the one heard and the one cut, and not the one put back in the queue.
@@ -111,15 +111,15 @@ Piece 1 needs robin-assistant's piece 1. Turn the option on for daily use only o
   - A reply cut off by the wake word, by a voice failure and by a disconnect is reported `dropped` with its row id. A reply spoken to the end sends no report.
   - A late reply is spoken after a timeout, dropped and reported after a wake-word interruption, and spoken when no turn matches.
   - The run after a message that asked a question carries `reply_to`. A wake-word turn does not, and neither does a message whose id is not an integer.
-- A bench check with the real egg and a real robin-assistant before the default flips: ask a question and confirm it appears on the Speaker page and not in the web chat, type in the web chat and confirm the egg stays silent, have Robin speak from the web chat, mute the mic and confirm the message arrives as text, interrupt an answer and confirm the rest arrives as text, and answer a spoken question without the wake word.
+- A bench check with the real egg and a real robin-assistant before this is deployed for daily use: ask a question and confirm it appears on the Speaker page and not in the web chat, type in the web chat and confirm the egg stays silent, have Robin speak from the web chat, mute the mic and confirm the message arrives as text, interrupt an answer and confirm the rest arrives as text, and answer a spoken question without the wake word.
 - At the flip, existing reminders go quiet. Every task stored so far belongs to the plain chat, including the ones set by voice. Ask Robin to list the scheduled tasks and say which should be spoken.
-- Update [decisions.md](../../decisions.md) (the shared-chat row), [robin-chat-api.md](../../robin-chat-api.md) ("Which chat" and the speaker stream section), [architecture.md](../../architecture.md) and `server/README.md` when the default flips, not before.
+- Update [decisions.md](../../decisions.md) (the shared-chat row), [robin-chat-api.md](../../robin-chat-api.md) ("Which chat" and the speaker stream section), [architecture.md](../../architecture.md) and `server/README.md` in the same change.
 
 ## Complexity
 
-Small to medium. Piece 1 is two strings and a startup check behind an option. Piece 2 is one background client and a helper called from two places, plus the reply ids. Piece 3 is one optional field in each direction and a short memory of how recent turns ended. The care is in the outcome mapping, because a message wrongly reported `spoken` is lost for good, and in the late-reply rule, because speaking an answer the person interrupted is worse than texting it.
+Small to medium. Piece 1 is two strings and a startup check. Piece 2 is one background client and a helper called from two places, plus the reply ids. Piece 3 is one optional field in each direction and a short memory of how recent turns ended. The care is in the outcome mapping, because a message wrongly reported `spoken` is lost for good, and in the late-reply rule, because speaking an answer the person interrupted is worse than texting it.
 
 ## Open questions
 
 - Should a late answer after a timeout be spoken with the chime, or with a short lead-in such as "About your question earlier"? Needs living with.
-- Should `held` be reported at all, given that robin-assistant then texts it and the egg may also read it out in the morning? See the same question on the robin-assistant side.
+- Settled 2026-11-18: `held` is reported, and robin-assistant texts the message at once. The egg may still read it out in the morning.
