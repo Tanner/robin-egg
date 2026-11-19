@@ -26,7 +26,7 @@ from robin_egg_server.web import AudioServer
 from test_digest import BINS, BINS_SAID, RECYCLING, TAXI, always, waiting_together
 from test_robin_brain import FakeRobinAssistant
 from test_server import FakeSTT, SlowBrain, ToneTTS, speech
-from test_speaker_stream import eventually
+from test_speaker_stream import egg_with_speaker, eventually
 from test_waiting import ask, with_egg
 
 ALWAYS = (0, 24)
@@ -203,6 +203,67 @@ def test_a_message_the_wake_word_cuts_off_is_reported_dropped():
 
     sent = fate_of(SpeakerMessage(5, "Your package has arrived."), Options(speaking_hours=ALWAYS, follow_up="off"), egg=FakeEgg([], announce_seconds=5.0), texts=["stop"], during=barge_in)
     assert sent == [(5, "dropped", "the wake word interrupted it")]
+
+
+def test_a_message_the_wake_word_stops_the_firmware_way_is_reported_dropped():
+    """On the egg the wake word only stops the announcement, which then reports finished with success."""
+
+    async def barge_in(egg, robin):
+        await asyncio.wait_for(egg.announcing.wait(), 10)
+        egg.wake()
+
+    egg = FakeEgg([], wake_stops=True, announce_seconds=30.0)
+    sent = fate_of(SpeakerMessage(5, "Your package has arrived."), Options(speaking_hours=ALWAYS, follow_up="off"), egg=egg, during=barge_in)
+    assert sent == [(5, "dropped", "the egg stopped playing it partway")]
+    assert len(egg.runs) == 1  # the wake word started no run of its own
+
+
+def test_a_question_the_wake_word_stops_is_not_answered_with_reply_to():
+    async def barge_in(egg, robin):
+        await asyncio.wait_for(egg.announcing.wait(), 10)
+        egg.wake()
+        await eventually(lambda: robin._proactive_task.done())
+        assert robin._answering_id is None and not robin._follow_up_pending
+
+    sent = fate_of(SpeakerMessage(5, "Shall I order more milk?"), Options(speaking_hours=ALWAYS, follow_up="off"), egg=FakeEgg([], wake_stops=True, announce_seconds=30.0), during=barge_in)
+    assert sent == [(5, "dropped", "the egg stopped playing it partway")]
+
+
+def test_a_message_played_to_its_end_on_the_firmware_is_reported_spoken():
+    sent = fate_of(SpeakerMessage(5, "The bins go out."), Options(speaking_hours=ALWAYS), egg=FakeEgg([], wake_stops=True))
+    assert sent == [(5, "spoken", "")]
+
+
+def test_a_digest_the_wake_word_stops_the_firmware_way_reports_only_what_was_heard_as_spoken(caplog):
+    reports = Reports()
+    spoken: list = []
+
+    async def scenario(egg, robin, tts, handled):
+        robin.outcomes = reports
+        say_digest = robin._say_digest
+
+        def noting(digest):
+            spoken.append(digest)
+            return say_digest(digest)
+
+        robin._say_digest = noting
+        await asyncio.wait_for(egg.done.wait(), 10)
+        await eventually(lambda: robin._busy_reason() is None)
+        for msg in (BINS, RECYCLING, TAXI):
+            await robin.proactive(msg)
+        await asyncio.wait_for(egg.announcing.wait(), 10)
+        (digest,) = spoken
+        second = digest.parts[1]
+        middle = digest.started + digests.PLAYED_MARGIN_S + (second.starts_s + second.ends_s) / 2
+        await asyncio.sleep(max(0.0, middle - time.monotonic()))
+        egg.wake()
+        await eventually(lambda: len(reports.sent) == 3)
+        await asyncio.sleep(0.3)  # a message put back in the queue would be announced here
+
+    with caplog.at_level(logging.INFO, logger="robin"):
+        egg, *_ = asyncio.run(egg_with_speaker([[]], [b""], [], SlowBrain([]), always(), scenario, announce_seconds=30.0, wake_stops=True))
+    assert reports.sent == [(7, "spoken", "in one announcement"), (8, "dropped", "the egg stopped playing it partway"), (9, "dropped", "the egg stopped before it was reached")]
+    assert len(egg.announcements) == 1 and len(egg.runs) == 1
 
 
 def test_a_message_the_egg_disconnects_from_is_reported_dropped():

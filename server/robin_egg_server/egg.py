@@ -30,7 +30,7 @@ import wave
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Protocol
+from typing import Any, AsyncIterator, Callable, Protocol
 
 from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, describe_level, load_sound
 from . import whoami
@@ -72,6 +72,8 @@ FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 FOLLOW_UP_GRACE_S = 3.0
 # How much sooner than the clock says a reply ends the egg may still reopen its mic for a follow-up to it.
 FOLLOW_UP_EARLY_S = 1.0  # a guess until the reopen timing in the log is read on the real egg
+# An announcement the egg reports finished this much sooner than its audio could play was stopped partway.
+ANNOUNCE_EARLY_S = 0.5  # a guess until the finish timing in the log is read on the real egg
 RECONNECT_DELAY_S = 2.0  # the first wait before trying the egg again; doubles up to 30 s
 ANNOUNCE_WAIT_S = 60.0
 ABANDONED_KEPT = 8  # how many turns that ended before Robin's answer came are remembered, for late answers  # how long /announce waits for the egg to be idle before giving up
@@ -145,6 +147,8 @@ class Turn:
 
 class Robin:
     """Runs voice turns for one egg."""
+
+    played_clock: Callable[[], float] = staticmethod(time.monotonic)  # what announcements are timed by, against their audio length
 
     def __init__(
         self,
@@ -1094,14 +1098,23 @@ class Robin:
             self.last_said.remember(text)
             listen = self.opts.answer_messages == "always" or (self.opts.answer_messages == "questions" and text.rstrip().endswith("?"))
             self._answer_wanted = listen
+            sent = self.played_clock()
             try:
                 result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=text[:480], start_conversation=listen)
             finally:
                 self._answer_wanted = False
             spoken = getattr(result, "success", True)
-            if listen and spoken:
+            took = self.played_clock() - sent
+            # The egg reports a message stopped by the wake word as finished, so only the time it took tells the two apart.
+            stopped = spoken and took < reply.seconds - ANNOUNCE_EARLY_S
+            if listen and spoken and not stopped:
                 self._expect_answer(msg)
+        if stopped:
+            LOG.info("Stopped message %s partway: the egg reported it finished %.2f s after it was sent, before its %.2f s of audio could play", msg.describe(), took, reply.seconds)
+            self._message_outcome(msg, "interrupted, the egg stopped playing it partway")
+            return
         LOG.info("Spoke message %s (%s)", msg.describe(), "finished" if spoken else "the egg reported a failure")
+        LOG.info("The egg reported message %s finished %.2f s after it was sent, for %.2f s of audio", msg.describe(), took, reply.seconds)
         self._message_outcome(msg, "spoken" if spoken else "failed, the egg reported a failure")
 
     # ---- several waiting messages as one announcement ----
@@ -1172,14 +1185,21 @@ class Robin:
                 listen = digest.wants_answer(self.opts.answer_messages)
                 self._answer_wanted = listen
                 digest.started = time.monotonic()
+                sent = self.played_clock()
                 try:
                     result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=digest.text[:480], start_conversation=listen)
                 finally:
                     self._answer_wanted = False
                 spoken = getattr(result, "success", True)
-                if listen and spoken:
+                took = self.played_clock() - sent
+                stopped = spoken and took < reply.seconds - ANNOUNCE_EARLY_S
+                if listen and spoken and not stopped:
                     self._expect_answer(digest.messages[-1])
+            if stopped:
+                self._digest_stopped(digest, took, reply.seconds)
+                return
             LOG.info("Spoke messages %s as one announcement (%s)", digest.names(), "finished" if spoken else "the egg reported a failure")
+            LOG.info("The egg reported the announcement finished %.2f s after it was sent, for %.2f s of audio", took, reply.seconds)
             self._digest_outcome([(m, "spoken, in one announcement" if spoken else "failed, the egg reported a failure") for m in digest.messages])
 
     def _digest_ended(self, digest: Digest, task: asyncio.Task) -> None:
@@ -1214,6 +1234,29 @@ class Robin:
             elif task.exception() is not None:
                 LOG.error("Could not speak messages %s", digest.names(), exc_info=task.exception())
                 self._digest_outcome([(m, "failed, the egg server could not speak it") for m in digest.messages])
+
+    def _digest_stopped(self, digest: Digest, took: float, seconds: float) -> None:
+        """Settles a digest the egg reported finished before it could have played: only what was heard in full was spoken.
+
+        The person stopped it, so the messages not reached are not spoken again; robin-assistant sends them as texts.
+        """
+        position = digest.position()
+        heard, cut, unreached = digest.split(position)
+        outcomes = [(p.msg, "spoken, in one announcement") for p in heard]
+        if cut is not None:
+            outcomes.append((cut.msg, "interrupted, the egg stopped playing it partway"))
+        outcomes += [(p.msg, "dropped, the egg stopped before it was reached") for p in unreached]
+        LOG.info(
+            "The egg stopped the announcement of messages %s about %.1f s in: it reported it finished %.2f s after it was sent, before its %.2f s of audio could play. Heard in full: %s. Cut short: %s. Not reached: %s",
+            digest.names(), position, took, seconds,
+            digests.listed([p.msg.describe() for p in heard]) if heard else "none",
+            cut.msg.describe() if cut is not None else "none",
+            digests.listed([p.msg.describe() for p in unreached]) if unreached else "none",
+        )
+        reached = [p.text for p in digest.parts if p not in unreached]
+        if unreached and reached:
+            self.last_said.remember(" ".join(reached))  # "say that again" is not asked for what nobody heard
+        self._digest_outcome(outcomes)
 
     def _digest_outcome(self, outcomes: list[tuple[SpeakerMessage, str]], waiting: list[SpeakerMessage] | None = None) -> None:
         """Each message gets its own line in the turn log; the room is told about the digest as one fact."""

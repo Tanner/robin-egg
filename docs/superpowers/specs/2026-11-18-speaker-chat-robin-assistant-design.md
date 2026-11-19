@@ -312,3 +312,32 @@ Piece 2 was built on 2026-11-18 on the same branch.
 - **`ReadChat` shows a pending speaker row** as "not spoken yet". The block still holds such rows back.
 - **The privacy sentence** is in `SPEAKER_CHAT_TURN_NOTE`, not in the `speaker` device prompt.
 - **`WEB_MAIN_CHAT_ID`** moved into `web-types.ts`, beside `otherChatOf`, the one helper that names the pair.
+
+## What changed while building pieces 3 and 4
+
+Built on 2026-11-18 on the same branch, then corrected after a review of the whole branch.
+
+- **The migration and the web UI landed together.** The Routines form and the Ideas page sent the old `now` and `later` values, so the server, the wire types and the chat app moved to the new values in one commit.
+- **The migration keeps a backup,** `tasks.toml.pre-deliver-migration`, never overwritten by a later run. It checks that the rewritten file reads back as the same tasks before saving. A task it cannot read for sure is left as it is with a warning.
+- **An urgent task in a project's chat with no `deliver` is left alone.** A routine with no `deliver` reports later and never read `urgent`, so the table's `"text"` would have made it report at once.
+- **Stored idea suggestions are not migrated.** The old words are read as the new values, in the store and in the parser.
+- **UpdateScheduledTask is swapped in per chat,** the way ShowCard is, not moved to the per-chat tools. The shared copy that fired jobs use never sets a speaker value.
+- **A chat that may not speak cannot edit a spoken task.** Not its words, its time, its trigger or its name. It may still change the delivery to a text value.
+- **A task's chat is checked again when its result is delivered.** A speaker value stored by a chat that may not speak, for example by a Telegram group while the speaker chat was off, is delivered as text. A job in the config is exempt.
+- **`speak_urgent`'s text copy** for a task in the speaker chat goes to the plain chat.
+- **A result with an image or a card is never spoken.** It is written as text, in the plain chat when the task belongs to the speaker chat.
+- **With the speaker chat turned off again,** a task stored in the speaker chat delivers its text to the plain chat.
+- **The "set up by voice" note** is one line in ScheduleTask's answer, not an entry appended to the speaker chat's history, which would wait on the turn's own lock.
+- **The no-speaker notice is never handed to a speaker stream,** so an old egg server following the plain chat cannot say it aloud.
+- **A row is re-read before it falls back, and two sweeps never run at once.** Before this a slow text could be sent twice, and a message reported spoken during a sweep could be texted anyway.
+- **A config job** may set any speaker value on any chat, and a spoken broadcast's row has the speaker chat as its origin, so an answer to it is reported nowhere.
+- **Piece 4 runs after the turn has settled,** once the reply is delivered and the speaker chat's lock is released. Each answer is reported once. The record's tag is `speaker-answer`.
+- **The Routines page labels** the five choices Now, Later, Spoken, Urgent and Chime.
+- **Both items listed as not built** under piece 1, the chime first line and the Speaker page showing where a message came from, are built.
+
+Known and left as they are:
+
+- With two speakers connected, declines are counted per report, not per speaker.
+- A `held` report on a `chime` row always produces the "a chime played" line.
+- A reply in flight at the moment a turn is cancelled counts as taken, and can be lost.
+- `Speak` is in the plain chat's tool list on turns Robin starts itself, such as a subagent waking it with web content.

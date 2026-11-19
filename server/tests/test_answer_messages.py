@@ -17,7 +17,7 @@ from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.__main__ import parse_args
 from robin_egg_server.egg import FAILED_TURN, Options, Robin
-from robin_egg_server.fake_egg import FakeEgg
+from robin_egg_server.fake_egg import FakeEgg, skip_played
 from robin_egg_server.logs import TagFilter
 from robin_egg_server.speaker_stream import SpeakerMessage
 from robin_egg_server.web import AudioServer
@@ -109,6 +109,7 @@ def test_the_mic_reopening_in_the_same_breath_as_the_message_ending_is_still_an_
         robin.client = client = Client()
         robin._proactive_task = task = asyncio.create_task(robin._say_proactive(SpeakerMessage(3, QUESTION)))
         await client.sent.wait()
+        skip_played(60.0)  # the message played to its end
         client.finished.set_result(SimpleNamespace(success=True))
         await robin.handle_start("c1", 0, None, "Okay Nabu")
         await asyncio.wait({task})

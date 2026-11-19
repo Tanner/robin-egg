@@ -375,9 +375,10 @@ async def run(args: argparse.Namespace) -> None:
 async def demo(args: argparse.Namespace, robin: Robin, web: AudioServer) -> None:
     from aioesphomeapi import api_pb2 as pb
 
-    from .fake_egg import FakeEgg, load_speech
+    from .fake_egg import FakeEgg, load_speech, played_clock
 
     egg = FakeEgg([load_speech(f) for f in args.demo], realtime=True)
+    robin.played_clock = played_clock
     port = await egg.start()
     await web.start("127.0.0.1", 0, "127.0.0.1")
     stop = asyncio.Event()

@@ -5,11 +5,18 @@ it fires a "wake word", streams 16 kHz mic audio over the API, starts fetching t
 reply URL as soon as the server says streaming has started, and reopens the mic
 for a follow-up when the server asks for one, or after an announcement sent with
 start_conversation. Used by the tests and by --demo.
+
+An announcement finishes as soon as announce_seconds have passed, but counts as having
+played for its whole audio: played_clock() moves on by the rest, so the server can time it
+against its length without the tests waiting in real time. A reply is only fetched, not
+played, unless the fake follows the firmware's wake word (wake_stops).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -59,6 +66,33 @@ def load_speech(path: str | Path) -> bytes:
     return (np.clip(x, -1, 1) * 32767).astype("<i2").tobytes()
 
 
+_played_ahead = 0.0  # how far the fake's announcements have moved played_clock() past the real clock
+
+
+def played_clock() -> float:
+    """The clock the server times announcements by, against the fake egg: real time plus the audio the fake skipped."""
+    return time.monotonic() + _played_ahead
+
+
+def reset_played_clock() -> None:
+    global _played_ahead
+    _played_ahead = 0.0
+
+
+def skip_played(seconds: float) -> None:
+    """Moves played_clock() on, as if the egg had spent `seconds` playing."""
+    global _played_ahead
+    _played_ahead += max(0.0, seconds)
+
+
+def audio_seconds(data: bytes) -> float:
+    """How long a FLAC file plays. 0 for anything that is not audio."""
+    try:
+        return sf.info(io.BytesIO(data)).duration
+    except Exception:  # noqa: BLE001 - an empty or cut-off file plays for no time
+        return 0.0
+
+
 def silence(seconds: float) -> bytes:
     rng = np.random.default_rng(0)
     return np.clip(rng.normal(0, 20, int(seconds * MIC_RATE)), -32768, 32767).astype("<i2").tobytes()
@@ -74,6 +108,7 @@ class Run:
     tts_end_at: float | None = None
     ring: list[tuple[float, float, float]] = field(default_factory=list)  # the LED ring's colour as each event arrived
     volume_at_playback: float | None = None  # the media player's volume when the reply started playing
+    stopped: bool = False  # the wake word stopped this run, so its mic does not reopen
 
     def types(self) -> list[int]:
         return [t for t, _ in self.events]
@@ -99,13 +134,18 @@ class FakeEgg:
         speaker_muted: bool = False,
         media_player_object_id: str = "media_player",
         announce_success: bool = True,
+        wake_stops: bool = False,
     ) -> None:
         """wake_words, when given, says how each run starts, one per utterance: a wake word
         starts that run even if the server did not ask for a follow-up, and None means a follow-up.
 
         muted is the microphone mute switch; speaker_muted is the media player's own mute.
         The media player starts at the firmware's first-boot volume, 0.5, and is listed under
-        the firmware's object id unless media_player_object_id names another."""
+        the firmware's object id unless media_player_object_id names another.
+
+        wake_stops makes the wake word do what the firmware does while the voice assistant is
+        busy: it only stops what is playing or running, and starts no run. The reply then plays
+        for as long as its audio, and every reply and announcement ends with announce-finished."""
         self.volume, self.speaker_muted = volume, speaker_muted
         self.media_player_object_id = media_player_object_id
         self.volumes_set: list[float] = []  # every volume the server asked for, in order
@@ -120,6 +160,10 @@ class FakeEgg:
         self.announce_success = announce_success  # what each finished announcement reports, as the firmware does when playback fails
         self.announcing = asyncio.Event()  # set while an announcement plays
         self._announce_cut = asyncio.Event()
+        self.wake_stops = wake_stops
+        self._active: Run | None = None  # the run the voice assistant is busy with, when wake_stops
+        self._reply_cut = asyncio.Event()
+        self._playout: asyncio.Task | None = None
         # The "LED Ring" light. Its colour is the accent of the voice animations; the firmware's stock one is purple.
         self.ring_rgb: tuple[float, float, float] = (1.0, 0.0, 1.0)
         self.ring = dict(RING_AT_BOOT)  # the light's own state: on, brightness, effect
@@ -249,6 +293,7 @@ class FakeEgg:
             await asyncio.wait_for(self._announce_cut.wait(), self.announce_seconds)
         except asyncio.TimeoutError:
             cut = False
+            skip_played(audio_seconds(body) - self.announce_seconds)  # played to its end
         self.announcing.clear()
         self.send(pb.VoiceAssistantAnnounceFinished(success=self.announce_success))
         if msg.start_conversation and not cut:
@@ -286,14 +331,41 @@ class FakeEgg:
         self._send_ring_state()
 
     def wake(self) -> None:
-        """Hear the wake word now, cutting off any announcement that is playing."""
-        self._announce_cut.set()
-        self._start_run(self.wake_word)
+        """Hear the wake word now. By default it cuts off any announcement and starts a run at once.
+
+        With wake_stops it follows the firmware: while an announcement or a run is going it
+        only stops it. Before TTS_END a run is stopped with a stop request, which the server
+        sees as handle_stop(True); after it, only the playing reply is stopped. Either way the
+        media player reports announce-finished with success, and the mic does not reopen.
+        """
+        if not self.wake_stops:
+            self._announce_cut.set()
+            self._start_run(self.wake_word)
+            return
+        if self.announcing.is_set():
+            self._announce_cut.set()
+            return
+        run = self._active
+        if run is None:
+            self._start_run(self.wake_word)
+            return
+        run.stopped = True
+        self._mic_open = False
+        if pb.VOICE_ASSISTANT_TTS_END not in run.types():
+            self.send(pb.VoiceAssistantRequest(start=False))
+        if self._playout is not None and not self._playout.done():
+            self._reply_cut.set()  # the play-out reports announce-finished
+            return
+        if self._fetch is not None:  # streaming had started, so the media player was playing it
+            self.send(pb.VoiceAssistantAnnounceFinished(success=True))
+        self._active = None
+        self.done.set()
 
     # ---- the voice run ----
 
     def _start_run(self, wake_word: str) -> None:
         self.runs.append(Run(wake_word))
+        self._active = self.runs[-1]
         self.send(pb.VoiceAssistantRequest(start=True, conversation_id="c1", wake_word_phrase=wake_word))
 
     async def _stream_mic(self) -> None:
@@ -325,21 +397,41 @@ class FakeEgg:
                 self._fetch = asyncio.create_task(self._fetch_reply(run, data["url"]))
         elif t == pb.VOICE_ASSISTANT_RUN_END:
             self._mic_open = False
+            played = self._fetch is not None
             if self._fetch is not None:
                 await self._fetch
                 self._fetch = None
                 url = run.data(pb.VOICE_ASSISTANT_TTS_END).get("url")
                 if url:
                     run.final = await asyncio.to_thread(self._get, url)
-            following = self.wake_words[len(self.runs)] if self.wake_words and len(self.runs) < len(self.wake_words) else None
-            if following is not None:
-                self._start_run(following)  # someone said the wake word instead of waiting
-            elif run.data(pb.VOICE_ASSISTANT_INTENT_END).get("continue_conversation") == "1":
-                # The firmware reopens its mic without listening for a wake word, but still
-                # reports the last one it heard, so a follow-up looks like a fresh wake word.
-                self._start_run(run.wake_word or self.wake_word)
-            else:
-                self.done.set()
+            if self.wake_stops and not run.stopped:
+                self._reply_cut.clear()
+                self._playout = asyncio.create_task(self._play_out(run, played))
+            elif not self.wake_stops:
+                self._after_run(run)
+
+    async def _play_out(self, run: Run, played: bool) -> None:
+        """Plays the rest of the reply, as the media player does, then ends the run as the firmware does."""
+        if played and run.first_byte_at is not None:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._reply_cut.wait(), max(0.0, run.first_byte_at + audio_seconds(run.final or run.streamed) - time.monotonic()))
+            self.send(pb.VoiceAssistantAnnounceFinished(success=True))
+        self._active = None
+        if run.stopped:
+            self.done.set()
+        else:
+            self._after_run(run)
+
+    def _after_run(self, run: Run) -> None:
+        following = self.wake_words[len(self.runs)] if self.wake_words and len(self.runs) < len(self.wake_words) else None
+        if following is not None:
+            self._start_run(following)  # someone said the wake word instead of waiting
+        elif run.data(pb.VOICE_ASSISTANT_INTENT_END).get("continue_conversation") == "1":
+            # The firmware reopens its mic without listening for a wake word, but still
+            # reports the last one it heard, so a follow-up looks like a fresh wake word.
+            self._start_run(run.wake_word or self.wake_word)
+        else:
+            self.done.set()
 
     async def _fetch_reply(self, run: Run, url: str) -> None:
         def get() -> bytes:
