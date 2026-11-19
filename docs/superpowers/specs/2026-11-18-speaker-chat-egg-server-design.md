@@ -123,3 +123,18 @@ Small to medium. Piece 1 is two strings and a startup check. Piece 2 is one back
 
 - Should a late answer after a timeout be spoken with the chime, or with a short lead-in such as "About your question earlier"? Needs living with.
 - Settled 2026-11-18: `held` is reported, and robin-assistant texts the message at once. The egg may still read it out in the morning.
+
+## What changed while building
+
+Built on 2026-11-18 in this repo, against the fake robin-assistant in the tests. Where the build differs from the design above:
+
+- **Judging whether a reply was spoken.** The egg notes where each reply's words end and where each sentence's audio ends, and counts a reply as spoken only once every sentence up to its end has played. Playback position comes from the server's clock, taking the egg to be 0.5 s behind it. When it cannot place a sentence it reports the reply as not spoken, which costs a duplicate text and never a lost message.
+- **Telling an interruption from a reopen.** The firmware sends the wake word phrase when it reopens the mic after a reply, so the phrase cannot tell the two apart. A reopen with no phrase means the reply was played. A reopen with a phrase more than 1 s before the reply's estimated end counts as the wake word cutting it. Within 1 s it counts as played, so the last second of an interrupted reply is not texted. The 1 s (`FOLLOW_UP_EARLY_S`) is a guess. Every reopen logs how far it was from the estimate, for example "The egg reopened its mic 0.31 s before the reply's estimated end", and the bench check reads that line to set the value.
+- **More reasons for an unfinished reply** than the three named: `the egg cancelled the turn`, `the egg server stopped` and `robin-assistant stopped partway`.
+- **One answer is never both spoken late and reported dropped.** The egg keeps the ids of the last 32 replies it reported unfinished, and skips a late message with one of those ids.
+- **A turn is remembered as abandoned only while its request to robin-assistant is still running.** A timeout is told apart from other failures by a new `RobinTooSlow` error.
+- **"What did I miss?"** sends its `spoken` report when the audio is handed to the egg, not when the egg confirms it played. Nothing can be lost there, because the message was already reported `held` and robin-assistant has texted it.
+- **`reply_to` is sent only for a positive integer,** so 0 and `true` are left out as well as strings.
+- **The fake brains in eight test files gained the `reply_to` parameter.** No assertion in an existing test changed, apart from the request assertions this work changes on purpose.
+- **Line numbers** in this document for `egg.py` and `brain.py` are from before the build.
+- **Not yet tried on the real egg:** outcome reports, the timing of unfinished replies, late replies and the reopen phrase. `server/README.md` lists them.
