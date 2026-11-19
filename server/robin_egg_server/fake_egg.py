@@ -284,6 +284,7 @@ class FakeEgg:
 
     async def _announce(self, msg) -> None:
         body = await asyncio.to_thread(self._get, msg.media_id)
+        seconds = audio_seconds(body)
         self.announcements.append((msg.text, body))
         self.start_conversations.append(msg.start_conversation)
         self._announce_cut.clear()
@@ -293,7 +294,7 @@ class FakeEgg:
             await asyncio.wait_for(self._announce_cut.wait(), self.announce_seconds)
         except asyncio.TimeoutError:
             cut = False
-            skip_played(audio_seconds(body) - self.announce_seconds)  # played to its end
+            skip_played(seconds - self.announce_seconds)  # played to its end
         self.announcing.clear()
         self.send(pb.VoiceAssistantAnnounceFinished(success=self.announce_success))
         if msg.start_conversation and not cut:
