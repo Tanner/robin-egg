@@ -4,7 +4,7 @@
 
 | Cue | Sound | Written to | Played by |
 | --- | --- | --- | --- |
-| Listening | A note that falls one step | `firmware/sounds/wake_word_triggered.flac` | The firmware, when it hears the wake word |
+| Listening | A note that falls one step | `firmware/sounds/wake_word_triggered.flac` and `server/robin_egg_server/sounds/listening.flac` | The firmware, when it hears the wake word. The server, at the end of a reply or message the egg listens again after |
 | Proactive message | The same step, then a lift to a higher note | `server/robin_egg_server/sounds/proactive.flac` | The server, before Robin speaks first |
 | Urgent message | The proactive phrase, played twice | `server/robin_egg_server/sounds/urgent.flac` | The server, before an urgent message |
 | Thinking | The listening notes an octave lower, rising one step, one note a second, as a 2 s loop | `server/robin_egg_server/sounds/thinking.flac` | The server, while Robin is slow to start answering |
@@ -21,4 +21,4 @@ python3 tools/egg-sounds/make_sounds.py
 
 The listening, proactive, urgent, mute, unmute and ready cues peak at -18 dBFS. The urgent cue insists by repeating, not by being louder, higher or faster. The thinking cue peaks at -24 dBFS, because it repeats for as long as Robin takes. The closing cue peaks at -24 dBFS too, because it follows every wake-up where nothing was said. The thinking cue's tail is folded back onto its start, so it loops with no seam. All of them are meant to be heard many times a day without grating, and to sound bird-inspired rather than like a bird, so a cat does not take notice. The listening cue stops once its tail is 40 dB down, because the egg starts listening as it ends.
 
-After changing the listening, mute or unmute cue, reflash the firmware. After changing the proactive, urgent, thinking, closing or ready cue, restart the server.
+After changing the listening cue, reflash the firmware and restart the server. After changing the mute or unmute cue, reflash the firmware. After changing the proactive, urgent, thinking, closing or ready cue, restart the server.

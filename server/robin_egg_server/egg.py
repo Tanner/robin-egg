@@ -66,6 +66,7 @@ PROACTIVE_CHIME = Path(__file__).parent / "sounds" / "proactive.flac"  # made by
 URGENT_CHIME = Path(__file__).parent / "sounds" / "urgent.flac"  # the cue before an urgent message
 READY_CHIME = Path(__file__).parent / "sounds" / "ready.flac"  # played each time the server connects to the egg
 CLOSING_CUE = Path(__file__).parent / "sounds" / "closing.flac"  # played when the egg stops listening without a reply
+LISTENING_CUE = Path(__file__).parent / "sounds" / "listening.flac"  # the wake word cue, ending anything the egg listens again after
 NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
 # After a reply that asked for a follow-up, how long past its end to wait for the egg to reopen its mic.
@@ -111,6 +112,7 @@ class Options:
     thinking_cue: bool = True  # a soft sound while Robin is slow to start answering; needs stream
     thinking_delay_s: float = 2.0  # how long after the end of speech before it starts
     closing_cue: bool = True  # a soft sound when the egg stops listening without a reply; needs stream
+    listening_cue: bool = True  # the wake word cue at the end of a reply or message the egg listens again after
     recognition_light: bool = True  # with a ring, show a recognised speaker's colour while Robin thinks and replies
     turn_log: Path | None = None  # one line per turn and per message Robin sends, for stats; off if None
     turn_log_names: bool = False  # also record who spoke each turn
@@ -216,6 +218,7 @@ class Robin:
         self._ready_task: asyncio.Task | None = None  # the ready sound being sent after a connect
         self.thinking_sound = load_sound(THINKING_CUE)
         self.closing_sound = load_sound(CLOSING_CUE)
+        self.listening_sound = load_sound(LISTENING_CUE)
         self.turn_log = TurnLog(self.opts.turn_log, names=self.opts.turn_log_names)
         self.waiting = MessageWaiting(self.opts.ring_file) if self.opts.message_waiting else None
         self.morning_mention = MorningMention() if self.waiting is not None and self.opts.morning_mention else None
@@ -671,6 +674,12 @@ class Robin:
 
     async def _finish_reply(self, t: Turn, reply_text: str, cont: bool) -> None:
         E = self.E
+        if cont and self.opts.listening_cue:
+            LOG.info("Ending the reply with the listening sound, because the egg listens again after it")
+            before = t.reply.seconds
+            await t.reply.push(self.listening_sound, REPLY_RATE, gap_s=0)
+            if t.playing:
+                t.play_end = max(t.play_end, time.monotonic()) + t.reply.seconds - before
         self._follow_up_pending = cont
         self.send(E.VOICE_ASSISTANT_INTENT_END, {"continue_conversation": "1" if cont else "0"})
         self.send(E.VOICE_ASSISTANT_TTS_START, {"text": reply_text[:480]})
@@ -913,19 +922,26 @@ class Robin:
             return f"outside speaking hours ({self._hours()})"
         return self.quiet.reason()
 
-    async def _announcement(self, text: str, chime: bool = False, urgent: bool = False) -> ReplyAudio:
+    async def _announcement(self, text: str, chime: bool = False, urgent: bool = False, listen: bool = False) -> ReplyAudio:
         """The whole announcement as one finished file, spoken sentence by sentence.
 
         A chime first, so Robin speaking unprompted does not startle anyone. An urgent
-        announcement gets the urgent cue in its place.
+        announcement gets the urgent cue in its place. One the egg listens for an answer
+        to ends with the listening sound.
         """
         reply = ReplyAudio()
         reply.gain = self.room.for_announcement()
         if chime:
             await reply.push(self.urgent_sound if urgent else self.proactive_sound, REPLY_RATE, gap_s=0.2)
         await self._speak(_once(text), reply)
+        await self._end_with_listening(reply, listen)
         await reply.close()
         return reply
+
+    async def _end_with_listening(self, reply: ReplyAudio, listen: bool) -> None:
+        if listen and self.opts.listening_cue:
+            LOG.info("Ending the message with the listening sound, because the egg listens for an answer after it")
+            await reply.push(self.listening_sound, REPLY_RATE, gap_s=0)
 
     async def _cue_alone(self) -> ReplyAudio:
         """The proactive cue with no words after it, for a low-priority message."""
@@ -1164,8 +1180,9 @@ class Robin:
             LOG.info("Dropped message %s: nothing to say once markdown is stripped", msg.describe())
             self._message_outcome(msg, "dropped, it had nothing to say")
             return
+        listen = self.opts.answer_messages == "always" or (self.opts.answer_messages == "questions" and text.rstrip().endswith("?"))
         async with self._speaker_lock:
-            reply = await self._announcement(text, chime=True, urgent=msg.urgent)
+            reply = await self._announcement(text, chime=True, urgent=msg.urgent, listen=listen)
             client = self.client
             if client is None:
                 LOG.info("Dropped message %s: the egg disconnected before it could be spoken", msg.describe())
@@ -1174,7 +1191,6 @@ class Robin:
             url = self.web.add(reply)
             LOG.info('Speaking message %s: "%s"', msg.describe(), text)
             self.last_said.remember(text)
-            listen = self.opts.answer_messages == "always" or (self.opts.answer_messages == "questions" and text.rstrip().endswith("?"))
             self._answer_wanted = listen
             sent = self.played_clock()
             try:
@@ -1233,7 +1249,7 @@ class Robin:
             parts.append(Part(other, came, text))
         return Digest(parts) if len(parts) > 1 else None
 
-    async def _digest_audio(self, digest: Digest) -> ReplyAudio:
+    async def _digest_audio(self, digest: Digest, listen: bool = False) -> ReplyAudio:
         """One cue, the lead-in, then each message with a pause before the next. Notes where each message lies."""
         reply = ReplyAudio()
         reply.gain = self.room.for_announcement()
@@ -1245,13 +1261,15 @@ class Robin:
             part.starts_s = reply.seconds
             await self._speak(_once(part.text), reply)
             part.ends_s = reply.seconds
+        await self._end_with_listening(reply, listen)
         await reply.close()
         return reply
 
     async def _say_digest(self, digest: Digest) -> None:
         with tagged(digest.tag):
+            listen = digest.wants_answer(self.opts.answer_messages)
             async with self._speaker_lock:
-                reply = await self._digest_audio(digest)
+                reply = await self._digest_audio(digest, listen)
                 client = self.client
                 if client is None:
                     LOG.info("Dropped messages %s: the egg disconnected before they could be spoken", digest.names())
@@ -1260,7 +1278,6 @@ class Robin:
                 url = self.web.add(reply)
                 LOG.info('Speaking messages %s as one announcement: "%s"', digest.names(), digest.text)
                 self.last_said.remember(digest.text)
-                listen = digest.wants_answer(self.opts.answer_messages)
                 self._answer_wanted = listen
                 digest.started = time.monotonic()
                 sent = self.played_clock()

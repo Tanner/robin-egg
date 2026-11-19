@@ -115,3 +115,11 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | The egg plays its own mute and unmute sounds, made by `tools/egg-sounds/make_sounds.py`, in place of the formatBCE ones | Every sound the egg makes should be in the same soft bell voice |
 | Mute steps down three notes to a low, muffled note. Unmute takes the same path back up and ends on the listening cue's first note | Down and closed reads as off, up and open as on. Three notes avoid the two-note rise that sounded like Siri |
 | They are set by overriding the `mute_switch_on_sound_file` and `mute_switch_off_sound_file` substitutions, not by changing the packages | The formatBCE packages stay as released, so updating `respeaker_ref` stays simple |
+
+## Listening sound after a reply, decided 2026-11-19
+
+| Decision | Why |
+| --- | --- |
+| When the egg is about to listen again without the wake word, the reply or message ends with the wake word's listening cue | One sound always means "speak now", and it keeps the cues at three |
+| The server adds it at the end of the reply's audio, with no gap after it, not the firmware | The firmware reopens the mic once the reply has played, so the sound ends as the mic opens. It needs no reflash |
+| It plays at the reply's volume | It belongs to the reply, so quiet hours and a quiet voice soften it too |
