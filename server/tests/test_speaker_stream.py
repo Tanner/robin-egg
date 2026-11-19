@@ -321,3 +321,14 @@ def test_a_proactive_sound_file_replaces_the_chime(tmp_path):
     sound = robin.proactive_sound
     assert len(sound) == int(0.3 * REPLY_RATE)
     assert np.allclose(samples[lead : lead + len(sound)], sound, atol=2e-3)
+
+
+def test_a_late_reply_carries_the_turns_it_answers():
+    script = [
+        event("message", {"id": 130, "text": "It is at ten.", "late": True, "answers": [123, 127]}),
+        event("message", {"id": 131, "text": "Odd answers.", "late": True, "answers": "123"}),
+        event("message", {"id": 132, "text": "Odder answers.", "late": True, "answers": [123, "127", True]}),
+        message(133, "Not late."),
+    ]
+    got, _, _ = asyncio.run(listen([script], want=4, **FAST))
+    assert [(m.id, m.late, m.answers) for m in got[:4]] == [(130, True, (123, 127)), (131, True, ()), (132, True, ()), (133, False, ())]

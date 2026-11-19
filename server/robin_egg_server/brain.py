@@ -27,6 +27,10 @@ class RobinUnavailable(Exception):
     """robin-assistant could not answer: unreachable, failed, stopped or too slow."""
 
 
+class RobinTooSlow(RobinUnavailable):
+    """Robin did not finish answering in time. robin-assistant may still send the answer later, down the speaker stream."""
+
+
 
 class Brain(Protocol):
     def reply(self, heard: str, user: str) -> AsyncIterator[str]: ...
@@ -124,13 +128,13 @@ class RobinBrain:
                 while True:
                     left = deadline - time.monotonic()
                     if left <= 0:
-                        raise RobinUnavailable(f"Robin did not finish answering within {self.timeout_s:.0f} s")
+                        raise RobinTooSlow(f"Robin did not finish answering within {self.timeout_s:.0f} s")
                     try:
                         name, data = await asyncio.wait_for(anext(events), left)
                     except StopAsyncIteration:
                         raise RobinUnavailable("robin-assistant closed the reply stream before the turn ended") from None
                     except asyncio.TimeoutError:
-                        raise RobinUnavailable(f"Robin did not finish answering within {self.timeout_s:.0f} s") from None
+                        raise RobinTooSlow(f"Robin did not finish answering within {self.timeout_s:.0f} s") from None
                     if name == "accepted":
                         LOG.debug("robin-assistant accepted the message as row %s", data.get("id"))
                         if _row_id(data.get("id")) is not None:

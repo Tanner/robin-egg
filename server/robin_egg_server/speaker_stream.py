@@ -2,8 +2,9 @@
 
 GET /api/chat/:agent/speaker?chat=speaker is an event stream of the messages Robin writes
 into the speaker chat on its own: a reminder coming due, a scheduled task, a held update, a
-routine. Replies to anyone's message never come through here; the egg gets its own
-replies from wait=1. There is no replay, so a message sent while this is not connected
+routine. The egg gets its own replies from wait=1. The one exception is a late reply,
+marked "late" with the user rows it "answers": an answer that came after the egg gave
+up waiting for it. There is no replay, so a message sent while this is not connected
 is missed, which is intended.
 
 This runs for the life of the server, apart from RobinBrain's request path, and hands
@@ -36,9 +37,11 @@ class SpeakerMessage:
     label: str | None = None  # the task's name, when there is one
     urgent: bool = False  # time-critical: spoken outside speaking hours, ahead of the queue, after its own cue
     low: bool = False  # a nudge: only the proactive cue plays, and the words are held for "what did I miss?"
+    late: bool = False  # Robin's answer to a turn the egg gave up on before the answer came
+    answers: tuple[int, ...] = ()  # for a late answer, the rows of the messages it answers
 
     def describe(self) -> str:
-        return f"{self.id} ({self.label or 'no label'}{', urgent' if self.urgent else ''}{', low' if self.low else ''})"
+        return f"{self.id} ({self.label or 'no label'}{', urgent' if self.urgent else ''}{', low' if self.low else ''}{', late' if self.late else ''})"
 
     @property
     def tag(self) -> str:
@@ -129,12 +132,20 @@ class SpeakerStream:
                     continue
                 label = data.get("label")
                 # A priority this server does not know is a normal message, so robin-assistant can add more.
-                msg = SpeakerMessage(data.get("id"), text, label if isinstance(label, str) and label else None, urgent=data.get("priority") == URGENT, low=data.get("priority") == LOW)
+                late = data.get("late") is True
+                msg = SpeakerMessage(data.get("id"), text, label if isinstance(label, str) and label else None, urgent=data.get("priority") == URGENT, low=data.get("priority") == LOW, late=late, answers=_row_ids(data.get("answers")) if late else ())
                 with tagged(msg.tag):
                     LOG.info("Robin sent message %s on its own", msg.describe())
                     await self.on_message(msg)
             LOG.info("robin-assistant closed the speaker stream after %.0f s", time.monotonic() - self._up_since)
             return None
+
+
+def _row_ids(value: object) -> tuple[int, ...]:
+    """The row ids in a late answer's "answers", or none at all if any of it is not a row id."""
+    if not isinstance(value, list) or not all(isinstance(v, int) and not isinstance(v, bool) for v in value):
+        return ()
+    return tuple(value)
 
 
 async def _lines_until_silent(lines: AsyncIterator[str], timeout_s: float) -> AsyncIterator[str]:

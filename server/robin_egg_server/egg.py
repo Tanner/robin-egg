@@ -27,13 +27,14 @@ import logging
 import math
 import time
 import wave
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Protocol
 
 from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, describe_level, load_sound
 from . import whoami
-from .brain import Brain, QuietTurn, RobinUnavailable, sentences, strip_markdown
+from .brain import Brain, QuietTurn, RobinTooSlow, RobinUnavailable, sentences, strip_markdown
 from .confidence import UNSURE, Confidence, ConfidenceLimits
 from . import digest as digests
 from .digest import Digest, Part
@@ -72,7 +73,8 @@ FOLLOW_UP_GRACE_S = 3.0
 # How much sooner than the clock says a reply ends the egg may still reopen its mic for a follow-up to it.
 FOLLOW_UP_EARLY_S = 0.25
 RECONNECT_DELAY_S = 2.0  # the first wait before trying the egg again; doubles up to 30 s
-ANNOUNCE_WAIT_S = 60.0  # how long /announce waits for the egg to be idle before giving up
+ANNOUNCE_WAIT_S = 60.0
+ABANDONED_KEPT = 8  # how many turns that ended before Robin's answer came are remembered, for late answers  # how long /announce waits for the egg to be idle before giving up
 
 
 class EventSink(Protocol):
@@ -136,6 +138,8 @@ class Turn:
     reply_text: str = ""  # Robin's replies as they were handed to the voice, one after another
     reply_ends: list[tuple[int, int]] = field(default_factory=list)  # each reply's row id, and where its words end in reply_text
     voiced: list[tuple[str, float]] = field(default_factory=list)  # each sentence of the replies, and where its audio ends in the reply
+    asked_robin: bool = False  # this turn's words went to Robin
+    answered: bool = False  # Robin's answer came to its end
 
 
 class Robin:
@@ -174,6 +178,8 @@ class Robin:
         self.client: Any = None  # an APIClient while the egg is connected
         self.room_context: Any = None  # a RoomContext when Robin is told facts about the room
         self.outcomes: Any = None  # an OutcomeClient when robin-assistant is told what became of each message
+        self._abandoned: dict[int, str] = {}  # how recent turns ended that gave up before Robin's answer came, by their user row
+        self._unfinished_replies: deque[int] = deque(maxlen=32)  # replies already reported as not spoken to the end
         self.mic_mute = MicMute()
         self.turn: Turn | None = None
         self.egg_since = time.time()  # when the egg connected or, while it is away, when it was lost
@@ -234,6 +240,7 @@ class Robin:
             with tagged(previous_turn.tag):
                 if previous_turn.task is not None and not previous_turn.task.done():
                     LOG.info("The egg started a new run before this turn finished; stopping this turn")
+                    self._abandon(previous_turn, "wake_word")
                     previous_turn.task.cancel()
                 elif previous_turn.task is None:
                     if previous_turn.listening:
@@ -299,6 +306,7 @@ class Robin:
                 t.listening = False
                 self._report_unfinished(t, "the egg cancelled the turn")
                 if t.task is not None:
+                    self._abandon(t, "abort")
                     t.task.cancel()
                 else:
                     self.last_turn = (time.time(), "cancelled")
@@ -466,6 +474,8 @@ class Robin:
             LOG.exception("The turn failed")
             # What was voiced before the failure still plays, ahead of the apology.
             self._report_unfinished(t, "robin-assistant stopped partway" if isinstance(err, RobinUnavailable) else "the voice failed", played_s=math.inf)
+            if isinstance(err, RobinTooSlow):
+                self._abandon(t, "timeout")
             ended = "failed"
             t.log.outcome = FAILED
             self._reset_commands()  # the apology ends the conversation
@@ -635,6 +645,7 @@ class Robin:
     async def _tracking_replies(self, t: Turn, deltas: AsyncIterator[str]) -> AsyncIterator[str]:
         """Passes Robin's replies on, noting where each reply's words end, so a reply cut short can be named."""
         seen = 0
+        t.asked_robin = True
         async for d in deltas:
             start = len(t.reply_text)
             t.reply_text += d
@@ -646,6 +657,21 @@ class Robin:
             yield d
         ids = list(getattr(self.brain, "reply_ids", None) or [])
         t.reply_ends += [(rid, len(t.reply_text)) for rid in ids[seen:]]
+        t.answered = True
+
+    def _abandon(self, t: Turn, how: str) -> None:
+        """Remembers how a turn ended that gave up before Robin's answer came, for when the answer comes late."""
+        still_asking = t.asked_robin and not t.answered and t.task is not None and not t.task.done()
+        row = getattr(self.brain, "accepted_id", None) if still_asking else None
+        if isinstance(row, int) and not isinstance(row, bool):
+            self._remember_abandoned(row, how)
+
+    def _remember_abandoned(self, row: int, how: str) -> None:
+        self._abandoned.pop(row, None)
+        self._abandoned[row] = how
+        while len(self._abandoned) > ABANDONED_KEPT:
+            del self._abandoned[next(iter(self._abandoned))]
+        LOG.info("The turn for message row %s ended before Robin's answer came (%s), so an answer that comes later is matched to it", row, how.replace("_", " "))
 
     def _played_s(self, t: Turn, now: float, behind_s: float = digests.PLAYED_MARGIN_S) -> float:
         """About how far into the turn's reply the egg has played, taking it to be `behind_s` behind the clock."""
@@ -673,6 +699,7 @@ class Robin:
         if not unspoken:
             return
         t.reply_ends = [(rid, end) for rid, end in t.reply_ends if end <= done]
+        self._unfinished_replies.extend(unspoken)
         one = len(unspoken) == 1
         LOG.info("Robin's %s %s %s not spoken to the end (%s), so robin-assistant is told to send %s as a text",
                  "reply" if one else "replies", digests.listed([str(r) for r in unspoken]), "was" if one else "were", why, "it" if one else "them")
@@ -920,6 +947,8 @@ class Robin:
         "what did I miss?". With message waiting off it is spoken.
         """
         with tagged(msg.tag):
+            if msg.late and self._late_answer_not_wanted(msg):
+                return
             refusal = self._why_not_speak_first(msg.urgent)
             if refusal and self._held(msg, refusal):
                 LOG.info('Held message %s for "what did I miss?": %s', msg.describe(), refusal)
@@ -958,6 +987,21 @@ class Robin:
         self._proactive_queue.put_nowait((0 if msg.urgent else 1, self._proactive_count, time.monotonic(), msg))
         if self._proactive_worker is None or self._proactive_worker.done():
             self._proactive_worker = asyncio.create_task(self._speak_proactive_messages())
+
+    def _late_answer_not_wanted(self, msg: SpeakerMessage) -> bool:
+        """Settles a late answer that is not to be spoken. Any other is spoken as a message Robin sent on its own.
+
+        The person interrupted every turn it answers, so hearing it now would be worse than
+        reading it, or it is a reply already reported as not spoken, which robin-assistant texts.
+        """
+        if msg.id in self._unfinished_replies:
+            LOG.info("Not speaking late answer %s: it was already reported as not spoken to the end, so robin-assistant sends it as a text", msg.describe())
+            return True
+        if msg.answers and all(self._abandoned.get(row) == "wake_word" for row in msg.answers):
+            LOG.info("Dropped late answer %s: the wake word cut off the turn it answers", msg.describe())
+            self._message_outcome(msg, "dropped, the person interrupted that answer")
+            return True
+        return False
 
     async def _until_idle(self) -> None:
         while True:
@@ -1342,6 +1386,7 @@ class Robin:
                     with tagged(turn.tag):
                         self._report_unfinished(turn, "the egg server stopped" if stop.is_set() else "the egg disconnected")
                     if turn.task is not None:
+                        self._abandon(turn, "disconnect")
                         turn.task.cancel()
                     else:
                         await turn.reply.close()
