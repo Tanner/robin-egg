@@ -1,7 +1,7 @@
 """Late replies: Robin's answer to a turn the egg gave up on, sent down the speaker stream later.
 
-What the egg does with one depends on how its turn ended: a turn the wake word cut off is
-dropped and reported, so it arrives as a text, and any other is spoken as a message Robin
+What the egg does with one depends on how its turn ended: a turn the wake word cut off, or
+the egg aborted, is dropped and reported, so it arrives as a text, and any other is spoken as a message Robin
 sent on its own. The real server against the fake egg. No network, models or keys.
 """
 
@@ -146,18 +146,34 @@ def test_a_late_reply_to_a_turn_lost_to_a_disconnect_is_spoken():
     assert announced == [LATE] and sent == [(130, "spoken", "")]
 
 
-def test_a_late_reply_to_a_turn_the_egg_aborted_is_spoken():
+def test_a_late_reply_to_a_turn_the_egg_aborted_is_dropped_and_reported():
+    """On the egg a wake word while Robin is thinking arrives as a stop request, so an abort is the person interrupting."""
     brain = SlowRobin("hang")
 
     async def scenario(egg, robin):
         await brain.started.wait()
         await robin.handle_stop(True)
         await then_late(robin, late(130, 101))
-        await eventually(lambda: egg.announcements)
 
     announced, sent, robin = run(brain, scenario)
     assert robin._abandoned == {101: "abort"}
-    assert announced == [LATE] and sent == [(130, "spoken", "")]
+    assert announced == []
+    assert sent == [(130, "dropped", "the person interrupted that answer")]
+
+
+def test_a_late_reply_to_a_turn_the_wake_word_stopped_the_firmware_way_is_dropped_and_reported():
+    brain = SlowRobin("hang")
+
+    async def scenario(egg, robin):
+        await brain.started.wait()
+        egg.wake()  # the firmware sends a stop request and starts no run
+        await eventually(lambda: 101 in robin._abandoned)
+        await then_late(robin, late(130, 101))
+
+    announced, sent, robin = run(brain, scenario, egg=FakeEgg([speech()], wake_stops=True))
+    assert robin._abandoned == {101: "abort"}
+    assert announced == []
+    assert sent == [(130, "dropped", "the person interrupted that answer")]
 
 
 def test_a_late_reply_that_matches_no_turn_is_spoken():

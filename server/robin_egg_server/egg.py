@@ -76,6 +76,7 @@ FOLLOW_UP_EARLY_S = 1.0  # a guess until the reopen timing in the log is read on
 ANNOUNCE_EARLY_S = 0.5  # a guess until the finish timing in the log is read on the real egg
 RECONNECT_DELAY_S = 2.0  # the first wait before trying the egg again; doubles up to 30 s
 ANNOUNCE_WAIT_S = 60.0
+INTERRUPTED = ("wake_word", "abort")  # how a turn ends when the person stops it, so its late answer is texted, not spoken
 ABANDONED_KEPT = 8  # how many turns that ended before Robin's answer came are remembered, for late answers  # how long /announce waits for the egg to be idle before giving up
 
 
@@ -1013,12 +1014,14 @@ class Robin:
 
         The person interrupted every turn it answers, so hearing it now would be worse than
         reading it, or it is a reply already reported as not spoken, which robin-assistant texts.
+        On the egg a wake word while Robin is thinking arrives as a stop request, an abort, so
+        that counts as the person interrupting as much as a wake word that starts a new run.
         """
         if msg.id in self._unfinished_replies:
             LOG.info("Not speaking late answer %s: it was already reported as not spoken to the end, so robin-assistant sends it as a text", msg.describe())
             return True
-        if msg.answers and all(self._abandoned.get(row) == "wake_word" for row in msg.answers):
-            LOG.info("Dropped late answer %s: the wake word cut off the turn it answers", msg.describe())
+        if msg.answers and all(self._abandoned.get(row) in INTERRUPTED for row in msg.answers):
+            LOG.info("Dropped late answer %s: the person stopped the turn it answers, with the wake word or on the egg", msg.describe())
             self._message_outcome(msg, "dropped, the person interrupted that answer")
             return True
         return False
