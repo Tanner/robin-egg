@@ -42,7 +42,7 @@ class LateBrain:
     def __init__(self, thinks_s: float, reply: str = "Here is what I found for you.") -> None:
         self.thinks_s, self.text = thinks_s, reply
 
-    async def reply(self, heard: str, user: str):
+    async def reply(self, heard: str, user: str, reply_to: int | None = None):
         await asyncio.sleep(self.thinks_s)
         yield self.text
 
@@ -51,7 +51,7 @@ class LateQuietBrain:
     def __init__(self, thinks_s: float) -> None:
         self.thinks_s = thinks_s
 
-    async def reply(self, heard: str, user: str):
+    async def reply(self, heard: str, user: str, reply_to: int | None = None):
         await asyncio.sleep(self.thinks_s)
         raise QuietTurn()
         yield ""
@@ -180,7 +180,7 @@ def test_a_slow_quiet_turn_fades_the_cue_out_and_ends_the_stream_when_the_closin
 
 def test_a_failed_turn_fades_the_cue_out_before_the_apology():
     class LateBrokenBrain:
-        async def reply(self, heard: str, user: str):
+        async def reply(self, heard: str, user: str, reply_to: int | None = None):
             await asyncio.sleep(0.6)
             raise RuntimeError("the stream dropped")
             yield ""

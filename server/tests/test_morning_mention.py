@@ -142,7 +142,7 @@ class MoodyBrain:
     def __init__(self) -> None:
         self.turns = 0
 
-    async def reply(self, text: str, user: str | None = None):
+    async def reply(self, text: str, user: str | None = None, reply_to: int | None = None):
         self.turns += 1
         if self.turns == 1:
             raise RuntimeError("robin-assistant is down")

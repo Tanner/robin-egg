@@ -54,7 +54,7 @@ class SlowBrain:
     def __init__(self, replies: list[list[str]], pause: float = 0.4) -> None:
         self.replies, self.pause, self.heard, self.users = list(replies), pause, [], []
 
-    async def reply(self, heard: str, user: str):
+    async def reply(self, heard: str, user: str, reply_to: int | None = None):
         self.heard.append(heard)
         self.users.append(user)
         for i, piece in enumerate(self.replies.pop(0)):
@@ -64,7 +64,7 @@ class SlowBrain:
 
 
 class BrokenBrain:
-    async def reply(self, heard: str, user: str):
+    async def reply(self, heard: str, user: str, reply_to: int | None = None):
         raise RuntimeError("no API key")
         yield ""
 
@@ -72,7 +72,7 @@ class BrokenBrain:
 class FailsAfterReplying:
     """Says one sentence, then fails, the way a dropped robin-assistant stream does."""
 
-    async def reply(self, heard: str, user: str):
+    async def reply(self, heard: str, user: str, reply_to: int | None = None):
         yield "Hello there, nice to meet you. "
         await asyncio.sleep(0.2)
         raise RuntimeError("the stream dropped")

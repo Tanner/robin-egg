@@ -370,7 +370,7 @@ class IdBrain:
         self.reply_ids: list[int] = []
         self.asked = 0
 
-    async def reply(self, heard: str, user: str):
+    async def reply(self, heard: str, user: str, reply_to: int | None = None):
         self.asked += 1
         self.accepted_id, self.reply_ids = 100 + self.asked, []
         for i, (rid, text) in enumerate(self.turns.pop(0) if self.turns else [(900 + self.asked, "Okay.")]):

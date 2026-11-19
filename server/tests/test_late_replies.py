@@ -44,7 +44,7 @@ class SlowRobin:
         self.asked = 0
         self.started = asyncio.Event()
 
-    async def reply(self, heard: str, user: str):
+    async def reply(self, heard: str, user: str, reply_to: int | None = None):
         self.asked += 1
         self.accepted_id, self.reply_ids = 100 + self.asked, []
         if self.asked > 1:

@@ -35,7 +35,7 @@ def logged(tmp_path, **kw) -> Options:
 
 
 class QuietBrain:
-    async def reply(self, heard: str, user: str):
+    async def reply(self, heard: str, user: str, reply_to: int | None = None):
         raise QuietTurn()
         yield ""
 

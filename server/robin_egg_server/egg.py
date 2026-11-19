@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-import inspect
 import logging
 import math
 import time
@@ -164,7 +163,6 @@ class Robin:
         enrol_offer: EnrolOffer | None = None,
     ) -> None:
         self.stt, self.brain, self.tts, self.web = stt, brain, tts, web
-        self._brain_takes_reply_to = takes_reply_to(brain)
         self.E = events  # aioesphomeapi.VoiceAssistantEventType
         self.opts = opts or Options()
         self.speakers, self.people, self.commands = speakers, people, commands
@@ -452,8 +450,7 @@ class Robin:
                 ended = "voice_command"
                 return
             t.cue = self._thinking_cue(t, t0)
-            answers = {"reply_to": t.answering_id} if t.answering_id is not None and self._brain_takes_reply_to else {}
-            spoken = await self._speak(self._tracking_replies(t, self.brain.reply(heard, user=match.user, **answers)), t.reply, turn=t, t0=t0, voiced=t.voiced)
+            spoken = await self._speak(self._tracking_replies(t, self.brain.reply(heard, user=match.user, reply_to=t.answering_id)), t.reply, turn=t, t0=t0, voiced=t.voiced)
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
             cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))
@@ -1443,14 +1440,6 @@ class Robin:
     def _egg_connected(self, connected: bool) -> None:
         if self.room_context is not None:
             self.room_context.egg_connected(connected)
-
-
-def takes_reply_to(brain: Any) -> bool:
-    """Whether the brain's reply takes reply_to. A brain written before it, as some tests have, is asked without it."""
-    try:
-        return "reply_to" in inspect.signature(brain.reply).parameters
-    except (AttributeError, TypeError, ValueError):
-        return False
 
 
 def in_hours(hour: int, hours: tuple[int, int]) -> bool:
