@@ -53,6 +53,8 @@ micro_wake_word:
     - id: !remove snooze
     - model: hey_robin.json
       id: hey_robin
+      # Trained at 0.97. Lowered because Ryan had to slow down to wake the egg.
+      probability_cutoff: 0.9
     - model: https://github.com/OHF-Voice/micro-wake-word/releases/download/okay_nabu_20241226.3/okay_nabu.json
       id: okay_nabu
     - model: https://raw.githubusercontent.com/formatBCE/Respeaker-Lite-ESPHome-integration/${satellite_core_ref}/microwakeword/models/v2/kenobi.json
