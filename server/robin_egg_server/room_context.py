@@ -1,8 +1,9 @@
 """Telling Robin about the room: ambient facts posted to robin-assistant.
 
 POST /api/context/:agent stores one key and value with a time to live and does not wake
-the agent. Robin sees the live facts, each with the time it was posted, the next time
-it runs. Only facts about the egg go here, never anything anyone said.
+the agent. Robin sees the live facts, each with the time it was posted and a description
+of what it means, the next time it runs. Only facts about the egg go here, never anything
+anyone said.
 
 A changed fact adds a block to every chat's next turn on the robin-assistant side, so a
 fact is posted only when it changes. The one exception is the connection fact, which is
@@ -22,14 +23,26 @@ from .brain import server_url
 LOG = logging.getLogger("robin.context")
 
 MAX_VALUE_CHARS = 200  # robin-assistant refuses longer values
+MAX_DESCRIPTION_CHARS = 200  # and longer descriptions
 
 EGG_CONNECTION = "egg_connection"  # connected | disconnected
 EGG_LAST_SPEAKER = "egg_last_speaker"  # who last spoke to the egg; the fact's own time says when
 EGG_LAST_MESSAGE = "egg_last_message"  # what became of the last message Robin sent on its own
+EGG_LAST_HEARD = "egg_last_heard"  # voices were heard near the egg; the fact's own time says when
+
+# What each fact means, sent with every post so Robin reads it beside the fact. Every
+# live fact's description goes into each new context block, so keep them short.
+DESCRIPTIONS = {
+    EGG_CONNECTION: "Whether the speaker egg in the room is connected to Robin.",
+    EGG_LAST_SPEAKER: "Who last spoke to the egg; the time says when.",
+    EGG_LAST_MESSAGE: "What became of the last message Robin sent to the egg on its own.",
+    EGG_LAST_HEARD: "Voices were heard near the egg, not necessarily talking to it, within 10 minutes of this time. TV counts.",
+}
 
 CONNECTION_TTL_S = 6 * 3600
 LAST_SPEAKER_TTL_S = 2 * 3600
 LAST_MESSAGE_TTL_S = 3600
+LAST_HEARD_TTL_S = 2 * 3600
 
 
 class ContextClient:
@@ -42,10 +55,13 @@ class ContextClient:
         self.endpoint = f"{server_url(server)}/api/context/{agent}"
         self.client = httpx2.AsyncClient(timeout=httpx2.Timeout(timeout_s))
 
-    async def post(self, key: str, value: str, ttl_s: int) -> bool:
+    async def post(self, key: str, value: str, ttl_s: int, description: str | None = None) -> bool:
+        body: dict[str, str | int] = {"key": key, "value": value[:MAX_VALUE_CHARS], "ttl": ttl_s}
+        if description:
+            body["description"] = description[:MAX_DESCRIPTION_CHARS]
         try:
             # httpx timeouts are per read, so wait_for caps the whole request.
-            resp = await asyncio.wait_for(self.client.post(self.endpoint, json={"key": key, "value": value[:MAX_VALUE_CHARS], "ttl": ttl_s}), self.timeout_s)
+            resp = await asyncio.wait_for(self.client.post(self.endpoint, json=body), self.timeout_s)
         except asyncio.TimeoutError:
             LOG.warning("Could not tell Robin that %s is %s: robin-assistant at %s did not answer within %g s", key, value, self.endpoint, self.timeout_s)
             return False
@@ -129,7 +145,7 @@ class RoomContext:
                 await asyncio.wait_for(self._wake.wait(), delay)
 
     async def _post(self, key: str, fact: Fact) -> None:
-        ok = await self.client.post(key, fact.value, fact.ttl_s)
+        ok = await self.client.post(key, fact.value, fact.ttl_s, DESCRIPTIONS.get(key))
         if self.facts.get(key) is not fact:
             return  # it changed while this was being posted; the new fact is already due
         fact.posted = ok
@@ -146,5 +162,5 @@ class RoomContext:
                 await self._worker
         waiting = [(k, f) for k, f in self.facts.items() if f.due is not None and not f.posted]
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(asyncio.gather(*(self.client.post(k, f.value, f.ttl_s) for k, f in waiting)), timeout_s)
+            await asyncio.wait_for(asyncio.gather(*(self.client.post(k, f.value, f.ttl_s, DESCRIPTIONS.get(k)) for k, f in waiting)), timeout_s)
         await self.client.close()
