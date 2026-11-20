@@ -92,7 +92,7 @@ def test_a_slow_quiet_turn_plays_the_closing_sound_after_the_thinking_sound(monk
     assert np.abs(thinking_part[-int(0.05 * REPLY_RATE):]).max() < 0.002  # and faded before the closing sound
     assert abs(np.abs(samples[-closing:]).max() - CLOSING_PEAK) < 0.002
     # The estimate of when the egg goes quiet covers both sounds.
-    assert abs(robin._playback_until - (t.cue.began + t.reply.seconds)) < 0.05
+    assert abs(robin._playback_until - (t.playing_since + t.reply.seconds)) < 0.05
 
 
 def test_the_closing_sound_is_quieter_in_quiet_hours(monkeypatch):

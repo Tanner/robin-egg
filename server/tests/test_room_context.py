@@ -30,7 +30,7 @@ from robin_egg_server.speakers import Match
 from robin_egg_server.web import AudioServer
 from test_robin_brain import FakeRobinAssistant
 from test_server import FakeSTT, SlowBrain, ToneTTS, speech
-from test_speaker_stream import eventually
+from test_speaker_stream import eventually, eventually_played
 
 
 def facts(fake: FakeRobinAssistant, key: str | None = None) -> list[tuple[str, str]]:
@@ -243,7 +243,7 @@ def test_a_run_where_nobody_spoke_is_not_someone_speaking():
 
 def test_robin_learns_what_became_of_its_own_messages():
     async def scenario(egg, robin, fake):
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         await robin.proactive(SpeakerMessage(124, "Time to leave for the dentist.", "Dentist reminder"))
         await eventually(lambda: egg.announcements)
         await eventually(lambda: facts(fake, EGG_LAST_MESSAGE))
@@ -262,7 +262,7 @@ def test_robin_learns_what_became_of_its_own_messages():
 
 def test_a_message_the_wake_word_cut_short_is_reported_as_interrupted():
     async def scenario(egg, robin, fake):
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         robin._proactive_stopped_by = ""
         release = asyncio.Event()
 

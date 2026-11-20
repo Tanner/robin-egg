@@ -18,7 +18,7 @@ from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.repeat import NOTHING_TO_REPEAT, LastSaid, is_repeat_request
 from robin_egg_server.web import AudioServer
 from test_server import FakeSTT, SlowBrain, ToneTTS, converse, enrolment, speech
-from test_speaker_stream import SlowStartBrain, egg_with_speaker, eventually, message, until
+from test_speaker_stream import SlowStartBrain, egg_with_speaker, eventually, eventually_played, message, until
 
 
 def said(run) -> str:
@@ -182,10 +182,10 @@ def test_a_message_robin_sent_on_its_own_can_be_repeated():
 
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)  # the opening run, where nobody spoke
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         go.set()
         await eventually(lambda: egg.announcements)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         egg.wake()
         await eventually(lambda: len(egg.runs) == 2 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[1].types())
 

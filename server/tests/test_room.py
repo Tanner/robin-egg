@@ -23,7 +23,7 @@ from robin_egg_server.room import FLOOR_GAIN, RoomVolume, parse_hours, voice_lev
 from robin_egg_server.web import AudioServer
 from test_robin_brain import until
 from test_server import BrokenBrain, FakeSTT, SlowBrain, ToneTTS, converse, decode, speech, tag_of
-from test_speaker_stream import SlowStartBrain, egg_with_speaker, eventually, message
+from test_speaker_stream import SlowStartBrain, egg_with_speaker, eventually, eventually_played, message
 
 TONE_PEAK = 0.3  # ToneTTS speaks at this amplitude
 LOUD, QUIET = 6000, 700  # mic amplitudes: about -18 dBFS and -36 dBFS
@@ -213,7 +213,7 @@ def test_a_message_robin_sends_in_quiet_hours_is_quieter(monkeypatch, caplog):
 
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         go.set()
         await eventually(lambda: egg.announcements)
 

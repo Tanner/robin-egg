@@ -24,7 +24,7 @@ from robin_egg_server.speaker_stream import SpeakerMessage
 from robin_egg_server.web import AudioServer
 from test_robin_brain import until
 from test_server import FakeSTT, SlowBrain, ToneTTS, speech, tag_of
-from test_speaker_stream import egg_with_speaker, eventually, message
+from test_speaker_stream import egg_with_speaker, eventually, eventually_played, message
 
 QUESTION = "The dentist is at ten. Shall I remind you again in an hour?"
 STATEMENT = "The bins go out tonight."
@@ -35,7 +35,7 @@ def after_the_opening_run(go: asyncio.Event, runs: int, announcements: int = 1):
 
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         go.set()
         await eventually(lambda: len(egg.announcements) == announcements and len(egg.runs) == runs)
         await asyncio.wait_for(egg.done.wait(), 10)

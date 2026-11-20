@@ -20,6 +20,7 @@ from robin_egg_server import digest as digests
 from robin_egg_server import outcomes as outcomes_module
 from robin_egg_server.brain import EchoBrain, QuietTurn
 from robin_egg_server.egg import Options, Robin
+from robin_egg_server import fake_egg
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.outcomes import OutcomeClient, outcome_of
 from robin_egg_server.speaker_stream import SpeakerMessage
@@ -27,7 +28,7 @@ from robin_egg_server.web import AudioServer
 from test_digest import BINS, BINS_SAID, RECYCLING, TAXI, always, waiting_together
 from test_robin_brain import FakeRobinAssistant
 from test_server import FakeSTT, SlowBrain, ToneTTS, speech
-from test_speaker_stream import egg_with_speaker, eventually
+from test_speaker_stream import egg_with_speaker, eventually, eventually_played
 from test_waiting import ask, with_egg
 
 ALWAYS = (0, 24)
@@ -319,14 +320,14 @@ def test_a_digest_the_wake_word_stops_the_firmware_way_reports_only_what_was_hea
 
         robin._say_digest = noting
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         for msg in (BINS, RECYCLING, TAXI):
             await robin.proactive(msg)
         await asyncio.wait_for(egg.announcing.wait(), 10)
         (digest,) = spoken
         second = digest.parts[1]
         middle = digest.started + digests.PLAYED_MARGIN_S + (second.starts_s + second.ends_s) / 2
-        await asyncio.sleep(max(0.0, middle - time.monotonic()))
+        fake_egg.skip_played(middle - fake_egg.played_clock())
         egg.wake()
         await eventually(lambda: len(reports.sent) == 3)
         await asyncio.sleep(0.3)  # a message put back in the queue would be announced here
@@ -399,7 +400,7 @@ def test_a_digest_cut_short_reports_what_was_heard_and_cut_and_not_what_went_bac
         (digest,) = spoken
         second = digest.parts[1]
         middle = digest.started + digests.PLAYED_MARGIN_S + (second.starts_s + second.ends_s) / 2
-        await asyncio.sleep(max(0.0, middle - time.monotonic()))
+        fake_egg.skip_played(middle - fake_egg.played_clock())
         egg.announce_seconds = 0.0
         egg.wake()
 
@@ -474,7 +475,7 @@ def read_out_reports(cut: bool) -> list:
             egg.wake()  # after TTS_END: only announce-finished comes
         await eventually(lambda: len(reports.sent) == 2)
 
-    asyncio.run(with_egg(scenario, Options(speaking_hours=NEVER, follow_up="off"), ["What did I miss?"], egg=FakeEgg([], wake_stops=True)))
+    asyncio.run(with_egg(scenario, Options(speaking_hours=NEVER, follow_up="off"), ["What did I miss?"], egg=FakeEgg([], wake_stops=True, reply_seconds=30.0 if cut else 0.0)))
     return reports.sent
 
 
@@ -500,7 +501,7 @@ def test_announce_sends_no_report():
 
             assert await asyncio.to_thread(post, "", "Dinner is ready.") == 200
             assert await asyncio.to_thread(post, "?priority=low", "The washing is done.") == 200
-            await eventually(lambda: robin._busy_reason() is None)
+            await eventually_played(robin, lambda: robin._busy_reason() is None)
             await ask(egg)  # "what did I miss?" reads out the held announcement
             await asyncio.sleep(0.3)
 
@@ -562,7 +563,7 @@ def turn_reports(brain, scenario, opts: Options | None = None, tts=None, texts=(
         server = asyncio.create_task(robin.run_forever("127.0.0.1", port, stop=stop))
         try:
             await scenario(egg, robin)
-            await eventually(lambda: time.monotonic() > robin._playback_until + 0.7 and (robin.turn is None or robin.turn.task is None or robin.turn.task.done()))
+            await eventually_played(robin, lambda: fake_egg.played_clock() > robin._playback_until + 0.5 and (robin.turn is None or robin.turn.task is None or robin.turn.task.done()))
             await asyncio.sleep(0.2)  # a late report would show up here
         finally:
             stop.set()
@@ -598,7 +599,7 @@ def test_a_reply_the_wake_word_cuts_off_as_it_starts_is_reported_dropped():
 def test_only_the_replies_the_wake_word_cut_off_are_reported():
     async def scenario(egg, robin):
         await reply_sent(egg)
-        await asyncio.sleep(max(0.0, robin._playback_until - 0.8 - time.monotonic()))  # partway through the second reply
+        fake_egg.skip_played(robin._playback_until - 0.8 - fake_egg.played_clock())  # partway through the second reply
         egg.utterances.append(speech())
         egg.wake()
         await eventually(lambda: len(egg.runs) == 2 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[1].types())
@@ -690,7 +691,7 @@ def test_a_reply_the_wake_word_stops_after_tts_end_the_firmware_way_is_reported_
         egg.wake()
         await eventually(lambda: robin.outcomes.sent)
 
-    egg = FakeEgg([speech()], wake_stops=True)
+    egg = FakeEgg([speech()], wake_stops=True, reply_seconds=30.0)
     sent = turn_reports(IdBrain([DENTIST, REMINDER]), scenario, egg=egg)
     assert sent == [(124, "dropped", "the egg stopped playing it partway"), (125, "dropped", "the egg stopped playing it partway")]
     assert len(egg.runs) == 1
@@ -716,7 +717,7 @@ class PlaysInRealTime(FakeEgg):
         super().__init__(*args, **kw)
         self._following = False
         self.early_s, self.phrase = early_s, phrase
-        self.ends_at = time.monotonic
+        self.ends_at = fake_egg.played_clock
         self.reopened_at: float | None = None
 
     async def _on_event(self, t: int, data: dict[str, str]) -> None:
@@ -729,8 +730,9 @@ class PlaysInRealTime(FakeEgg):
             return super()._start_run(wake_word)
 
         async def later() -> None:
-            await asyncio.sleep(max(0.0, self.ends_at() - self.early_s - time.monotonic()))
-            self.reopened_at = time.monotonic()
+            await asyncio.sleep(0)
+            fake_egg.skip_played(self.ends_at() - self.early_s - fake_egg.played_clock())  # the reply plays until the reopen
+            self.reopened_at = fake_egg.played_clock()
             FakeEgg._start_run(self, wake_word if self.phrase is None else self.phrase)
 
         self._later = asyncio.get_running_loop().create_task(later())
@@ -740,7 +742,7 @@ class PlaysInRealTime(FakeEgg):
 def test_a_reply_spoken_to_the_end_sends_no_report(follow_up):
     async def scenario(egg, robin):
         await reply_sent(egg)
-        await eventually(lambda: time.monotonic() > robin._playback_until + 0.7 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[-1].types())
+        await eventually_played(robin, lambda: fake_egg.played_clock() > robin._playback_until + 0.5 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[-1].types())
         egg.utterances.append(speech())
         egg.wake()  # a new question once the answer has played
         await eventually(lambda: any(pb.VOICE_ASSISTANT_STT_END in r.types() and r.data(pb.VOICE_ASSISTANT_STT_END).get("text") == "thanks" for r in egg.runs))

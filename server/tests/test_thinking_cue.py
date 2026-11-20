@@ -112,7 +112,7 @@ def test_the_cue_plays_until_the_first_sentence_and_stops_cleanly():
     t = TURNS[-1]
     assert t.cue is not None and t.cue.playing
     assert robin._playback_until == t.play_end
-    assert abs(t.play_end - (t.cue.began + t.reply.seconds)) < 0.05
+    assert abs(t.play_end - (t.playing_since + t.reply.seconds)) < 0.05
     assert t.reply.seconds > t.cue.seconds + 1.0
 
 
@@ -175,7 +175,7 @@ def test_a_slow_quiet_turn_fades_the_cue_out_and_ends_the_stream_when_the_closin
     # The egg's fetch of the stream ended: the fake egg waits for it before it reports the run done.
     assert len(run.streamed) == len(kept["audio"]) and run.streamed[42:] == kept["audio"][42:]
     t = TURNS[-1]
-    assert abs(robin._playback_until - (t.cue.began + t.reply.seconds)) < 0.05
+    assert abs(robin._playback_until - (t.playing_since + t.reply.seconds)) < 0.05
 
 
 def test_a_failed_turn_fades_the_cue_out_before_the_apology():

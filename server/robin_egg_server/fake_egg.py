@@ -8,14 +8,14 @@ start_conversation. Used by the tests and by --demo.
 
 An announcement finishes as soon as announce_seconds have passed, but counts as having
 played for its whole audio: played_clock() moves on by the rest, so the server can time it
-against its length without the tests waiting in real time. A reply is only fetched, not
-played, unless the fake follows the firmware's wake word (wake_stops).
+against its length without the tests waiting in real time. A reply is the same with
+wake_stops, over reply_seconds. Without wake_stops a reply is only fetched, not played:
+a test that needs it to have played says so with skip_played().
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import io
 import time
 import urllib.request
@@ -66,7 +66,7 @@ def load_speech(path: str | Path) -> bytes:
     return (np.clip(x, -1, 1) * 32767).astype("<i2").tobytes()
 
 
-_played_ahead = 0.0  # how far the fake's announcements have moved played_clock() past the real clock
+_played_ahead = 0.0  # how far the fake's replies and announcements have moved played_clock() past the real clock
 
 
 def played_clock() -> float:
@@ -135,6 +135,7 @@ class FakeEgg:
         media_player_object_id: str = "media_player",
         announce_success: bool = True,
         wake_stops: bool = False,
+        reply_seconds: float = 0.0,
     ) -> None:
         """wake_words, when given, says how each run starts, one per utterance: a wake word
         starts that run even if the server did not ask for a follow-up, and None means a follow-up.
@@ -145,7 +146,8 @@ class FakeEgg:
 
         wake_stops makes the wake word do what the firmware does while the voice assistant is
         busy: it only stops what is playing or running, and starts no run. The reply then plays
-        for as long as its audio, and every reply and announcement ends with announce-finished."""
+        for reply_seconds, or until the wake word stops it, and counts as having played for its
+        whole audio if nothing stopped it. Every reply and announcement ends with announce-finished."""
         self.volume, self.speaker_muted = volume, speaker_muted
         self.media_player_object_id = media_player_object_id
         self.volumes_set: list[float] = []  # every volume the server asked for, in order
@@ -163,6 +165,7 @@ class FakeEgg:
         self.wake_stops = wake_stops
         self._active: Run | None = None  # the run the voice assistant is busy with, when wake_stops
         self._reply_cut = asyncio.Event()
+        self.reply_seconds = reply_seconds  # how long each reply "plays", with wake_stops, before it is reported finished
         self._playout: asyncio.Task | None = None
         # The "LED Ring" light. Its colour is the accent of the voice animations; the firmware's stock one is purple.
         self.ring_rgb: tuple[float, float, float] = (1.0, 0.0, 1.0)
@@ -392,7 +395,7 @@ class FakeEgg:
             run.volume_at_playback = self.volume
             self._fetch = asyncio.create_task(self._fetch_reply(run, run.data(pb.VOICE_ASSISTANT_RUN_START)["url"]))
         elif t == pb.VOICE_ASSISTANT_TTS_END:
-            run.tts_end_at = time.monotonic()
+            run.tts_end_at = played_clock()
             if self._fetch is None:  # not streamed: play the finished file now
                 run.volume_at_playback = self.volume
                 self._fetch = asyncio.create_task(self._fetch_reply(run, data["url"]))
@@ -414,14 +417,24 @@ class FakeEgg:
     async def _play_out(self, run: Run, played: bool) -> None:
         """Plays the rest of the reply, as the media player does, then ends the run as the firmware does."""
         if played and run.first_byte_at is not None:
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._reply_cut.wait(), max(0.0, run.first_byte_at + audio_seconds(run.final or run.streamed) - time.monotonic()))
+            playing_s = min(self._left_to_play(run), self.reply_seconds)
+            try:
+                await asyncio.wait_for(self._reply_cut.wait(), playing_s)
+            except asyncio.TimeoutError:
+                skip_played(self._left_to_play(run))  # played to its end
             self.send(pb.VoiceAssistantAnnounceFinished(success=True))
         self._active = None
         if run.stopped:
             self.done.set()
         else:
             self._after_run(run)
+
+    @staticmethod
+    def _left_to_play(run: Run) -> float:
+        """How much of the run's reply is still to play, on played_clock(). 0 for a run that played nothing."""
+        if run.first_byte_at is None:
+            return 0.0
+        return max(0.0, run.first_byte_at + audio_seconds(run.final or run.streamed) - played_clock())
 
     def _after_run(self, run: Run) -> None:
         following = self.wake_words[len(self.runs)] if self.wake_words and len(self.runs) < len(self.wake_words) else None
@@ -441,7 +454,7 @@ class FakeEgg:
                 assert resp.headers["Content-Type"] == "audio/flac"
                 while chunk := resp.read1(4096) if hasattr(resp, "read1") else resp.read(4096):
                     if run.first_byte_at is None:
-                        run.first_byte_at = time.monotonic()
+                        run.first_byte_at = played_clock()
                     buf.extend(chunk)
             return bytes(buf)
 

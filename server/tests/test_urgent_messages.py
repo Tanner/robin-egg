@@ -22,7 +22,7 @@ from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.web import AudioServer
 from test_robin_brain import event, until
 from test_server import FakeSTT, ToneTTS, decode, speech
-from test_speaker_stream import FAST, SlowStartBrain, egg_with_speaker, eventually, listen
+from test_speaker_stream import FAST, SlowStartBrain, egg_with_speaker, eventually, eventually_played, listen
 
 NEVER = (0, 0)  # speaking hours that are never open
 
@@ -81,7 +81,7 @@ def test_an_urgent_message_is_spoken_outside_speaking_hours_after_the_urgent_cue
 
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)  # the opening run, where nobody spoke
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         go.set()
         await eventually(lambda: "Spoke message 31" in caplog.text)
 

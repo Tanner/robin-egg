@@ -17,6 +17,7 @@ import pytest
 from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server import digest as digests
+from robin_egg_server import fake_egg
 from robin_egg_server.__main__ import parse_args
 from robin_egg_server.audio import REPLY_RATE, ReplyAudio
 from robin_egg_server.digest import Digest, Part, lead_in, room_fact
@@ -27,7 +28,7 @@ from robin_egg_server.speaker_stream import SpeakerMessage
 from test_robin_brain import until
 from test_room_context import egg_with_room, facts
 from test_server import SlowBrain, decode, speech, tag_of
-from test_speaker_stream import SlowStartBrain, egg_with_speaker, eventually, message
+from test_speaker_stream import SlowStartBrain, egg_with_speaker, eventually, eventually_played, message
 
 BINS = SpeakerMessage(7, "The **bins** go out tonight.", "Bins")
 RECYCLING = SpeakerMessage(8, "And the recycling too.")
@@ -63,7 +64,7 @@ def waiting_together(messages, opts=None, announcements=1, utterances=(), texts=
 
         robin._say_digest = noting
         await asyncio.wait_for(egg.done.wait(), 10)  # the opening run, where nobody spoke
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         for msg in messages:
             await robin.proactive(msg)
         if during is not None:
@@ -289,7 +290,7 @@ def test_answering_always_listens_once_after_the_whole_digest():
 def test_a_message_that_waited_too_long_is_dropped_and_the_others_are_still_a_digest(caplog):
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         now = time.monotonic()
         robin._proactive_queue.put_nowait((1, 1, now, BINS))
         robin._proactive_queue.put_nowait((1, 2, now - 601, RECYCLING))  # it has been waiting since before the egg came back
@@ -328,7 +329,7 @@ def test_the_wake_word_partway_counts_what_was_heard_and_the_rest_wait(tmp_path,
         (digest,) = spoken
         second = digest.parts[1]
         middle = digest.started + digests.PLAYED_MARGIN_S + (second.starts_s + second.ends_s) / 2
-        await asyncio.sleep(max(0.0, middle - time.monotonic()))
+        fake_egg.skip_played(middle - fake_egg.played_clock())
         egg.announce_seconds = 0.0  # what is spoken after the barge-in plays to its end
         egg.wake()
 
@@ -367,7 +368,7 @@ def test_the_wake_word_during_the_cue_leaves_every_message_waiting(tmp_path, cap
 def test_messages_put_back_stay_ahead_of_ones_that_arrived_later():
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         for msg in (BINS, RECYCLING):
             await robin.proactive(msg)
         await asyncio.wait_for(egg.announcing.wait(), 10)
@@ -394,7 +395,7 @@ def test_each_message_in_a_digest_gets_its_own_line_in_the_turn_log(tmp_path):
 
 def test_the_room_is_told_about_a_digest_as_one_fact():
     async def scenario(egg, robin, fake):
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         for msg in (BINS, RECYCLING):
             await robin.proactive(msg)
         await eventually(lambda: egg.announcements)

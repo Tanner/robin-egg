@@ -14,6 +14,7 @@ from aioesphomeapi.core import InvalidEncryptionKeyAPIError, RequiresEncryptionA
 
 from robin_egg_server import egg as egg_module
 from robin_egg_server.egg import Options, Robin, in_hours, key_refused
+from robin_egg_server import fake_egg
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.web import AudioServer
 from test_server import FakeSTT, SlowBrain, ToneTTS, converse, speech
@@ -82,7 +83,7 @@ class TimedTTS(ToneTTS):
         self.at: list[float] = []
 
     def synthesize(self, text: str):
-        self.at.append(time.monotonic())
+        self.at.append(fake_egg.played_clock())
         return super().synthesize(text)
 
 

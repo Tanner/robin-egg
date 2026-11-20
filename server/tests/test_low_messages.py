@@ -24,7 +24,7 @@ from robin_egg_server.speaker_stream import SpeakerMessage
 from robin_egg_server.web import AudioServer
 from test_robin_brain import until
 from test_server import FakeSTT, ToneTTS, decode, speech
-from test_speaker_stream import FAST, SlowStartBrain, egg_with_speaker, eventually, listen
+from test_speaker_stream import FAST, SlowStartBrain, egg_with_speaker, eventually, eventually_played, listen
 from test_urgent_messages import NEVER, message, starts_with
 from test_waiting import BREATHING, ask, said, with_egg
 
@@ -70,7 +70,7 @@ def test_a_low_message_plays_only_the_cue_and_is_held_with_the_waiting_light(cap
 
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)  # the opening run, where nobody spoke
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         go.set()
         await eventually(lambda: "Played the chime for message 50" in caplog.text)
         await eventually(lambda: egg.ring == BREATHING)
@@ -91,7 +91,7 @@ def test_what_did_i_miss_reads_a_low_message_and_the_ring_goes_back():
         await robin.proactive(low(51, "The washing machine has finished.", "Laundry"))
         await eventually(lambda: egg.announcements)
         await eventually(lambda: egg.ring == BREATHING)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         await ask(egg)
         await eventually(lambda: egg.ring == RING_AT_BOOT)
 
@@ -211,7 +211,7 @@ def test_the_next_reply_after_a_chime_mentions_the_held_message():
     async def scenario(egg, robin):
         await robin.proactive(low(63, "The washing machine has finished.", "Laundry"))
         await eventually(lambda: egg.announcements)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         await ask(egg)
 
     egg, robin, brain = asyncio.run(with_egg(scenario, Options(speaking_hours=ALWAYS, follow_up="off"), ["When is the dentist?"]))

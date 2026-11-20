@@ -19,6 +19,7 @@ from aioesphomeapi import api_pb2 as pb
 from robin_egg_server.__main__ import parse_args
 from robin_egg_server.audio import REPLY_RATE, ReplyAudio, load_sound
 from robin_egg_server.egg import PROACTIVE_CHIME, Options, Robin
+from robin_egg_server import fake_egg
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.logs import TagFilter
 from robin_egg_server.speaker_stream import SpeakerMessage, SpeakerStream
@@ -41,6 +42,19 @@ async def eventually(condition, timeout: float = 10.0) -> None:
         if time.monotonic() > deadline:
             raise AssertionError("timed out waiting for the condition")
         await asyncio.sleep(0.02)
+
+
+async def eventually_played(robin, condition, timeout: float = 10.0) -> None:
+    """Waits for a condition while the egg plays to its end whatever the server has sent it.
+
+    The fake egg only fetches a reply, so this moves the played clock past the end of the
+    last reply, and 0.7 s more, until the condition holds.
+    """
+    def played() -> bool:
+        fake_egg.skip_played(robin._playback_until + 0.7 - fake_egg.played_clock())
+        return condition()
+
+    await eventually(played, timeout)
 
 
 async def listen(speaker_scripts, want: int, **kw):
@@ -167,7 +181,7 @@ class TimedTTS(ToneTTS):
         self.at: list[float] = []
 
     def synthesize(self, text: str):
-        self.at.append(time.monotonic())
+        self.at.append(fake_egg.played_clock())
         return super().synthesize(text)
 
 
@@ -210,7 +224,7 @@ def test_a_message_while_the_egg_is_idle_is_chimed_and_spoken(caplog):
 
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)  # the opening run, where nobody spoke
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         go.set()
         await eventually(lambda: egg.announcements)
 
@@ -278,7 +292,7 @@ def test_the_wake_word_stops_a_message_robin_is_speaking(caplog):
 
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         egg.done.clear()
         go.set()
         await asyncio.wait_for(egg.announcing.wait(), 10)

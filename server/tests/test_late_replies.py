@@ -15,12 +15,13 @@ from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.brain import RobinTooSlow
 from robin_egg_server.egg import Options, Robin
+from robin_egg_server import fake_egg
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.speaker_stream import SpeakerMessage
 from robin_egg_server.web import AudioServer
 from test_outcomes import Reports
 from test_server import FakeSTT, ToneTTS, speech
-from test_speaker_stream import eventually
+from test_speaker_stream import eventually, eventually_played
 
 ALWAYS = Options(speaking_hours=(0, 24), follow_up="off")
 LATE = "Your dentist is at ten tomorrow."
@@ -79,7 +80,7 @@ def run(brain, scenario, egg: FakeEgg | None = None):
         try:
             await scenario(egg, robin)
             await eventually(lambda: robin._busy_reason() is None and robin._proactive_queue.empty() and (robin._proactive_task is None or robin._proactive_task.done()))
-            await eventually(lambda: time.monotonic() > robin._playback_until + 0.7)  # stopping the server cuts nothing short
+            await eventually_played(robin, lambda: fake_egg.played_clock() > robin._playback_until + 0.5)  # stopping the server cuts nothing short
             await asyncio.sleep(0.2)
         finally:
             stop.set()

@@ -17,7 +17,7 @@ from robin_egg_server.egg import Options
 from robin_egg_server.presence import SpokenTo, absence
 from test_robin_brain import until
 from test_server import FakeSTT, speech
-from test_speaker_stream import SlowStartBrain, egg_with_speaker, eventually, message
+from test_speaker_stream import SlowStartBrain, egg_with_speaker, eventually, eventually_played, message
 
 WINDOW = Options(follow_up="off", speaking_hours=(0, 24), presence_window_s=30 * 60)
 
@@ -100,11 +100,11 @@ def test_a_message_is_spoken_after_someone_spoke_and_dropped_once_they_have_been
     async def scenario(egg, robin, tts, handled):
         robin.presence = presence
         await asyncio.wait_for(egg.done.wait(), 10)  # one turn: "what time is it"
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         clock.now += 29 * 60
         soon.set()
         await eventually(lambda: egg.announcements)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         clock.now += 2 * 60
         late.set()
         await eventually(lambda: len(handled) == 2)
@@ -123,7 +123,7 @@ def test_a_turn_with_nothing_recognisable_is_not_presence(caplog):
 
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         go.set()
         await eventually(lambda: handled)
 

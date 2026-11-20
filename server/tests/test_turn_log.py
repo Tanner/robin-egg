@@ -23,7 +23,7 @@ from robin_egg_server.speaker_stream import SpeakerMessage
 from robin_egg_server.turn_log import TurnLog, TurnRecord, older
 from test_robin_brain import until
 from test_server import TANNER, BrokenBrain, FakeEmbedder, FakeSTT, MuteTTS, SlowBrain, ToneTTS, converse, identify_with, speech
-from test_speaker_stream import SlowStartBrain, egg_with_speaker, eventually, message
+from test_speaker_stream import SlowStartBrain, egg_with_speaker, eventually, eventually_played, message
 
 
 def lines(path) -> list[dict]:
@@ -174,7 +174,7 @@ def test_a_spoken_message_is_recorded_without_its_words(tmp_path):
 
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         go.set()
         await eventually(lambda: egg.announcements)
         await eventually(lambda: len(lines(opts.turn_log)) == 2)
@@ -237,7 +237,7 @@ def test_a_message_with_nothing_to_say_is_dropped_not_spoken(tmp_path):
 
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         go.set()
         await eventually(lambda: len(lines(opts.turn_log)) == 2)
 
@@ -253,7 +253,7 @@ def test_a_message_the_wake_word_stopped_is_interrupted(tmp_path):
 
     async def scenario(egg, robin, tts, handled):
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         egg.done.clear()
         go.set()
         await asyncio.wait_for(egg.announcing.wait(), 10)

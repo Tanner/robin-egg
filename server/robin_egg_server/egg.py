@@ -134,7 +134,8 @@ class Turn:
     started: float = field(default_factory=time.monotonic)
     listening: bool = True
     playing: bool = False  # the egg was told to start playing the streamed reply
-    play_end: float = 0.0  # when the egg should run out of the audio made so far, once it is playing
+    play_end: float = 0.0  # when the egg should run out of the audio made so far, once it is playing, on played_clock()
+    playing_since: float = 0.0  # when the egg was told to start playing, on played_clock()
     task: asyncio.Task | None = None
     cue: ThinkingCue | None = None  # the thinking sound, on turns that ask Robin
     log: TurnRecord = field(default_factory=TurnRecord)  # what the turn log will say about this turn
@@ -153,7 +154,7 @@ class Turn:
 class Robin:
     """Runs voice turns for one egg."""
 
-    played_clock: Callable[[], float] = staticmethod(time.monotonic)  # what announcements are timed by, against their audio length
+    played_clock: Callable[[], float] = staticmethod(time.monotonic)  # what replies and announcements are timed by, against their audio length
 
     def __init__(
         self,
@@ -196,7 +197,7 @@ class Robin:
         self.device: dict[str, str] = {}  # the egg's name and versions, from its last connection
         self.last_turn: tuple[float, str] | None = None  # when the last turn ended, and how
         self._follow_up_pending = False
-        self._playback_until = 0.0  # when the egg should finish playing the last reply
+        self._playback_until = 0.0  # when the egg should finish playing the last reply, on played_clock()
         self._state = asyncio.Event()  # set whenever the egg may have become idle
         self._speaker_lock = asyncio.Lock()  # one announcement at a time
         # Urgent messages first, then arrival order: (0 if urgent else 1, arrival number, when it arrived, message).
@@ -261,14 +262,14 @@ class Robin:
         # The firmware reports the last wake word on every run, follow-ups included, so the
         # phrase alone cannot say whether someone just woke the egg. A follow-up starts as
         # soon as the reply finishes playing; a wake word heard later is a new conversation.
-        reopened = time.monotonic() <= self._playback_until + FOLLOW_UP_GRACE_S
+        reopened = self.played_clock() <= self._playback_until + FOLLOW_UP_GRACE_S
         follow_up = self._follow_up_pending and (not wake_word_phrase or reopened)
         self._follow_up_pending = False
         # The egg reopens its mic for a follow-up only once it has played the reply. A reopen
         # with no phrase is that, whatever the clock says. With a phrase, one that comes clearly
         # sooner than the reply could have ended is the wake word cutting the reply short.
         if previous_turn is not None and follow_up and previous_turn.play_end:
-            off = previous_turn.play_end - time.monotonic()
+            off = previous_turn.play_end - self.played_clock()
             with tagged(previous_turn.tag):
                 LOG.info("The egg reopened its mic %.2f s %s the reply's estimated end", abs(off), "before" if off > 0 else "after")
         if previous_turn is not None and not (follow_up and not wake_word_phrase):
@@ -338,7 +339,7 @@ class Robin:
         if t is None or not t.play_end or t.finish_seen:
             return
         t.finish_seen = True
-        left = t.play_end - time.monotonic()
+        left = t.play_end - self.played_clock()
         if left > FOLLOW_UP_EARLY_S:
             with tagged(t.tag):
                 LOG.info("The egg reported the reply finished %.2f s before its estimated end, so it was stopped partway", left)
@@ -377,10 +378,11 @@ class Robin:
         before = t.reply.seconds
         await t.reply.push(self.closing_sound, REPLY_RATE, gap_s=0)
         if t.playing:  # the thinking sound already started the stream; the closing sound follows its fade
-            t.play_end = max(t.play_end, time.monotonic()) + t.reply.seconds - before
+            t.play_end = max(t.play_end, self.played_clock()) + t.reply.seconds - before
         else:
             t.playing = True
-            t.play_end = time.monotonic() + t.reply.seconds
+            t.playing_since = self.played_clock()
+            t.play_end = t.playing_since + t.reply.seconds
             self.send(E.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
         LOG.info("Sending the closing sound to the egg")
         self.send(E.VOICE_ASSISTANT_INTENT_END, {"continue_conversation": "0"})
@@ -516,7 +518,7 @@ class Robin:
             await t.reply.close()
             self._state.set()
             if self.ring is not None and self.turn is t:
-                self.ring.give_back_at(self._playback_until)  # at once if nothing is playing
+                self.ring.give_back_at(time.monotonic() + max(0.0, self._playback_until - self.played_clock()))  # at once if nothing is playing
             self.turn_log.turn(t)
 
     def _show_who(self, match: Match) -> None:
@@ -539,7 +541,8 @@ class Robin:
 
         def start_playing() -> None:
             t.playing = True
-            t.play_end = time.monotonic() + t.reply.seconds
+            t.playing_since = self.played_clock()
+            t.play_end = t.playing_since + t.reply.seconds
             self.send(self.E.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
 
         return ThinkingCue(self.thinking_sound, t.reply, t0 + self.opts.thinking_delay_s, start_playing)
@@ -553,7 +556,7 @@ class Robin:
             return
         await t.cue.stop()
         if t.cue.began is not None:
-            t.play_end = max(t.play_end, t.cue.began + t.reply.seconds)
+            t.play_end = max(t.play_end, t.playing_since + t.reply.seconds)
 
     async def _stop_thinking(self, t: Turn) -> None:
         await self._end_thinking(t)
@@ -580,7 +583,7 @@ class Robin:
             pos = at + len(h.spoken()) if at >= 0 else len(say) + 1
             t.read_out.append((h.msg, pos))
         if t.read_out:
-            wait = max(0.0, t.play_end - time.monotonic()) + digests.PLAYED_MARGIN_S + FOLLOW_UP_EARLY_S
+            wait = max(0.0, t.play_end - self.played_clock()) + digests.PLAYED_MARGIN_S + FOLLOW_UP_EARLY_S
             t.settle = asyncio.get_running_loop().call_later(wait, self._settle_read_out, t, math.inf)
 
     def _held(self, msg: SpeakerMessage, refusal: str) -> bool:
@@ -676,7 +679,7 @@ class Robin:
         self.send(E.VOICE_ASSISTANT_TTS_START, {"text": reply_text[:480]})
         await t.reply.close()
         self.send(E.VOICE_ASSISTANT_TTS_END, {"url": t.url})
-        self._playback_until = t.play_end if t.playing else time.monotonic() + t.reply.seconds
+        self._playback_until = t.play_end if t.playing else self.played_clock() + t.reply.seconds
         t.play_end = self._playback_until
         self.send(E.VOICE_ASSISTANT_RUN_END)
 
@@ -782,7 +785,7 @@ class Robin:
         egg cannot tell where one reply ends, the replies from the one being spoken onward
         are reported. Each reply is reported at most once.
         """
-        played = self._played_s(t, time.monotonic(), behind_s) if played_s is None else played_s
+        played = self._played_s(t, self.played_clock(), behind_s) if played_s is None else played_s
         self._settle_read_out(t, played)
         if self.outcomes is None or not t.reply_ends:
             return
@@ -835,7 +838,7 @@ class Robin:
                     voiced.append((s, reply.seconds))
                 if turn is not None and turn.playing:
                     # Audio made after the egg ran dry plays from now, not from where the last piece ended.
-                    turn.play_end = max(turn.play_end, time.monotonic()) + reply.seconds - before
+                    turn.play_end = max(turn.play_end, self.played_clock()) + reply.seconds - before
                 if first:
                     first = False
                     if t0 is not None:
@@ -845,7 +848,8 @@ class Robin:
                     # A second tts_start_streaming would make the egg fetch the stream again from the start.
                     if turn is not None and self.opts.stream and not turn.playing:
                         turn.playing = True
-                        turn.play_end = time.monotonic() + reply.seconds
+                        turn.playing_since = self.played_clock()
+                        turn.play_end = turn.playing_since + reply.seconds
                         self.send(self.E.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
 
         worker = asyncio.create_task(voice())
@@ -1009,7 +1013,7 @@ class Robin:
             return "the egg is not connected"
         if self._in_conversation():
             return "the egg is in a conversation"
-        now = time.monotonic()
+        now = self.played_clock()
         if now < self._playback_until:
             return "the egg is still playing a reply"
         if self._follow_up_pending and now < self._playback_until + FOLLOW_UP_GRACE_S:
@@ -1262,8 +1266,7 @@ class Robin:
                 self.last_said.remember(digest.text)
                 listen = digest.wants_answer(self.opts.answer_messages)
                 self._answer_wanted = listen
-                digest.started = time.monotonic()
-                sent = self.played_clock()
+                digest.started = sent = self.played_clock()
                 try:
                     result = await client.send_voice_assistant_announcement_await_response(url, timeout=60 + reply.seconds, text=digest.text[:480], start_conversation=listen)
                 finally:
@@ -1290,7 +1293,7 @@ class Robin:
         with tagged(digest.tag):
             if task.cancelled():
                 why = self._proactive_stopped_by or "the server is stopping"
-                position = digest.position()
+                position = digest.position(self.played_clock())
                 heard, cut, unreached = digest.split(position)
                 outcomes = [(p.msg, "spoken, in one announcement") for p in heard]
                 if cut is not None:
@@ -1318,7 +1321,7 @@ class Robin:
 
         The person stopped it, so the messages not reached are not spoken again; robin-assistant sends them as texts.
         """
-        position = digest.position()
+        position = digest.position(self.played_clock())
         heard, cut, unreached = digest.split(position)
         outcomes = [(p.msg, "spoken, in one announcement") for p in heard]
         if cut is not None:
@@ -1403,7 +1406,7 @@ class Robin:
         It is handled as a follow-up: a short wait for speech, and silence closes it quietly.
         """
         self._follow_up_pending = True
-        self._playback_until = time.monotonic()
+        self._playback_until = self.played_clock()
         self._answering = msg.describe()
         self._answering_id = msg.id if isinstance(msg.id, int) and not isinstance(msg.id, bool) else None
         self.last_match = None  # nobody has spoken yet, so there is no speaker to inherit

@@ -70,7 +70,7 @@ class Digest:
         self.lead_in = lead_in(len(parts))
         self.text = " ".join([self.lead_in, *(p.text for p in parts)])  # also what "say that again" repeats
         self.tag = "+".join(p.msg.tag for p in parts)  # ties its log lines together, e.g. [m7+m8]
-        self.started: float | None = None  # when the egg was sent the announcement
+        self.started: float | None = None  # when the egg was sent the announcement, on Robin.played_clock()
 
     @property
     def messages(self) -> list[SpeakerMessage]:

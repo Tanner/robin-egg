@@ -22,7 +22,7 @@ from robin_egg_server.speaker_stream import SpeakerMessage
 from robin_egg_server.waiting import KEEP_S, MAX_WAITING, NOTHING_WAITING, WAITING_BRIGHTNESS, MessageWaiting, is_missed_question
 from robin_egg_server.web import AudioServer
 from test_server import FakeSTT, ToneTTS, enrolment, speech
-from test_speaker_stream import eventually
+from test_speaker_stream import eventually, eventually_played
 
 QUIET = (0, 0)  # speaking hours that never begin
 BREATHING = {"on": True, "brightness": WAITING_BRIGHTNESS, "effect": "Breathe"}
@@ -53,7 +53,7 @@ async def with_egg(scenario, opts: Options, texts=(), egg: FakeEgg | None = None
     server = asyncio.create_task(robin.run_forever("127.0.0.1", port, stop=stop))
     try:
         await asyncio.wait_for(egg.done.wait(), 10)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         await scenario(egg, robin)
     finally:
         stop.set()
@@ -192,7 +192,7 @@ def test_a_ring_that_was_on_gets_its_own_look_back_and_a_reconnect_shows_the_lig
         egg._w.close()
         await asyncio.wait_for(egg.done.wait(), 10)  # the opening run of the new connection
         await eventually(lambda: egg.ring == BREATHING)
-        await eventually(lambda: robin._busy_reason() is None)
+        await eventually_played(robin, lambda: robin._busy_reason() is None)
         await ask(egg)
         await eventually(lambda: egg.ring == own)
 

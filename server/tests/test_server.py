@@ -28,6 +28,7 @@ from robin_egg_server.audio import MIC_RATE, ReplyAudio
 from robin_egg_server.brain import sentences
 from robin_egg_server.commands import ENROL_SENTENCES, KEEP_IT, SPEAKER_ID_OFF, VoiceCommands
 from robin_egg_server.egg import FAILED_TURN, PROACTIVE_CHIME, Options, Robin
+from robin_egg_server import fake_egg
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.logs import TagFilter
 from robin_egg_server.speakers import Match, People, Person, SpeakerId, VoiceprintStore
@@ -543,7 +544,7 @@ def test_a_follow_up_that_reports_the_wake_word_is_still_a_follow_up(tmp_path):
     async def start(seconds_after_reply: float) -> bool:
         robin = Robin(FakeSTT([]), SlowBrain([]), ToneTTS(), AudioServer(), VoiceAssistantEventType)
         robin._follow_up_pending = True
-        robin._playback_until = time.monotonic() - seconds_after_reply
+        robin._playback_until = fake_egg.played_clock() - seconds_after_reply
         await robin.handle_start("c1", 0, None, "Okay Nabu")
         await robin.turn.reply.close()
         return robin.turn.follow_up

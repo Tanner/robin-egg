@@ -19,7 +19,7 @@ from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.speaker_stream import SpeakerMessage
 from robin_egg_server.web import AudioServer
 from test_server import FakeSTT, SlowBrain, ToneTTS
-from test_speaker_stream import eventually
+from test_speaker_stream import eventually, eventually_played
 
 
 async def with_egg(egg: FakeEgg, scenario, opts: Options | None = None) -> Robin:
@@ -44,7 +44,7 @@ async def with_egg(egg: FakeEgg, scenario, opts: Options | None = None) -> Robin
 async def opening_run_over(egg: FakeEgg, robin: Robin, runs: int) -> None:
     """The fake egg hears a wake word each time the server connects; wait for that run to close."""
     await eventually(lambda: len(egg.runs) == runs and pb.VOICE_ASSISTANT_RUN_END in egg.runs[-1].types())
-    await eventually(lambda: robin._busy_reason() is None)
+    await eventually_played(robin, lambda: robin._busy_reason() is None)
 
 
 def post(web: AudioServer, text: str) -> tuple[int, str]:
