@@ -528,7 +528,7 @@ class IdBrain:
         self.reply_ids: list[int] = []
         self.asked = 0
 
-    async def reply(self, heard: str, user: str, reply_to: int | None = None):
+    async def reply(self, heard: str, user: str, reply_to: int | None = None, follow_up: bool = False):
         self.asked += 1
         self.accepted_id, self.reply_ids = 100 + self.asked, []
         for i, (rid, text) in enumerate(self.turns.pop(0) if self.turns else [(900 + self.asked, "Okay.")]):
@@ -630,7 +630,7 @@ class LinkBrain:
         self.accepted_id: int | None = None
         self.reply_ids: list[int] = []
 
-    async def reply(self, heard: str, user: str, reply_to: int | None = None):
+    async def reply(self, heard: str, user: str, reply_to: int | None = None, follow_up: bool = False):
         self.accepted_id, self.reply_ids = 101, []
         for rid, text in self.replies:
             self.reply_ids.append(rid)

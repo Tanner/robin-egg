@@ -33,7 +33,7 @@ class RobinTooSlow(RobinUnavailable):
 
 
 class Brain(Protocol):
-    def reply(self, heard: str, user: str, reply_to: int | None = None) -> AsyncIterator[str]: ...
+    def reply(self, heard: str, user: str, reply_to: int | None = None, follow_up: bool = False) -> AsyncIterator[str]: ...
 
 
 class EchoBrain:
@@ -42,8 +42,9 @@ class EchoBrain:
     def __init__(self) -> None:
         self.accepted_id: int | None = None
         self.reply_ids: list[int] = []
+        self.listen: bool | None = None
 
-    async def reply(self, heard: str, user: str, reply_to: int | None = None) -> AsyncIterator[str]:
+    async def reply(self, heard: str, user: str, reply_to: int | None = None, follow_up: bool = False) -> AsyncIterator[str]:
         yield f"I heard: {heard}"
 
 
@@ -111,20 +112,27 @@ class RobinBrain:
         self.client = httpx2.AsyncClient(timeout=httpx2.Timeout(10.0, read=None))
         self.accepted_id: int | None = None  # the row robin-assistant stored the last message as
         self.reply_ids: list[int] = []  # the rows of the last turn's replies, in the order they came
+        self.listen: bool | None = None  # whether Robin wants the egg to listen again after the last turn, or None when Robin did not say
 
-    async def reply(self, heard: str, user: str, reply_to: int | None = None) -> AsyncIterator[str]:
-        """`reply_to` is the row of a message Robin sent that this answers, so Robin is shown that message with the answer."""
+    async def reply(self, heard: str, user: str, reply_to: int | None = None, follow_up: bool = False) -> AsyncIterator[str]:
+        """`reply_to` is the row of a message Robin sent that this answers, so Robin is shown that message with the answer.
+
+        `follow_up` says the egg heard this in the window after a reply, with no wake word, so it may be
+        speech that was not meant for Robin.
+        """
         import httpx2
 
-        self.accepted_id, self.reply_ids = None, []
+        self.accepted_id, self.reply_ids, self.listen = None, [], None
         fields = {"text": heard, "chat": "speaker", "device": "speaker", "wait": "1", "user": user, "send_id": secrets.token_urlsafe(16)}
         # robin-assistant refuses the whole message for a reply_to that is not a positive row id.
         if _row_id(reply_to) is not None and reply_to > 0:
             fields["reply_to"] = str(reply_to)
+        if follow_up:
+            fields["follow_up"] = "1"
         deadline = time.monotonic() + self.timeout_s
         replies = 0
         outcome = None
-        LOG.info('Asking Robin at %s as %s: "%s"', self.endpoint, user, heard)
+        LOG.info('Asking Robin at %s as %s%s: "%s"', self.endpoint, user, " in a follow-up with no wake word" if follow_up else "", heard)
         try:
             async with self.client.stream(
                 "POST",
@@ -162,6 +170,8 @@ class RobinBrain:
                             yield text + "\n"
                     elif name == "end":
                         outcome = data.get("outcome")
+                        if isinstance(data.get("listen"), bool):
+                            self.listen = data["listen"]
                         break
         except httpx2.HTTPError as err:
             raise RobinUnavailable(f"Could not reach robin-assistant at {self.endpoint}: {err}") from err

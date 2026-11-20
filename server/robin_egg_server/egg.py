@@ -478,10 +478,10 @@ class Robin:
                 ended = "voice_command"
                 return
             t.cue = self._thinking_cue(t, t0)
-            spoken = await self._speak(self._tracking_replies(t, self.brain.reply(heard, user=match.user, reply_to=t.answering_id)), t.reply, turn=t, t0=t0, voiced=t.voiced)
+            spoken = await self._speak(self._tracking_replies(t, self.brain.reply(heard, user=match.user, reply_to=t.answering_id, follow_up=t.follow_up)), t.reply, turn=t, t0=t0, voiced=t.voiced)
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
-            cont = self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and reply_text.rstrip().endswith("?"))
+            cont = self._listens_after_robin(reply_text)
             # One hint a reply. The enrolment offer goes first, and the mention keeps for the next reply.
             hint = ENROL_OFFER if await self._enrol_offer_due(match) else self._morning_mention_due()
             if hint is not None:
@@ -530,6 +530,14 @@ class Robin:
             return
         household = self.people.keys if self.people is not None else None
         self.ring.borrow(self.colours.colour_for(match.key, household), why=f"for {match.key}")
+
+    def _listens_after_robin(self, reply_text: str) -> bool:
+        """Robin's own choice, from SetListening, when it made one. Otherwise --follow-up decides."""
+        listen = getattr(self.brain, "listen", None)
+        if not isinstance(listen, bool):
+            return self._reopens_after(reply_text)
+        LOG.info("Robin asked the egg %s after this reply", "to listen again" if listen else "not to listen again")
+        return listen
 
     def _reopens_after(self, text: str) -> bool:
         return self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and text.rstrip().endswith("?"))

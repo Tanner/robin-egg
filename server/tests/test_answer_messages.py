@@ -194,7 +194,7 @@ class ReplyToBrain:
     def __init__(self) -> None:
         self.reply_tos: list[object] = []
 
-    async def reply(self, heard: str, user: str, reply_to: int | None = None):
+    async def reply(self, heard: str, user: str, reply_to: int | None = None, follow_up: bool = False):
         self.reply_tos.append(reply_to)
         yield "Okay."
 

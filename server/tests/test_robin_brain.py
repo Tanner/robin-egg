@@ -202,11 +202,13 @@ async def ask(scripts, heard="what's on tomorrow", status=200, headers="", **kw)
         await fake.stop()
 
 
-def answer(*texts: str, outcome: str = "response") -> list[tuple]:
+def answer(*texts: str, outcome: str = "response", listen: object = None) -> list[tuple]:
+    """listen, when given, is sent on the end event as robin-assistant's SetListening choice."""
     steps = [event("accepted", {"id": 123}), event("typing", {})]
     for i, t in enumerate(texts):
         steps += [PING, event("reply", {"id": 124 + i, "text": t})]
-    return steps + [event("end", {"outcome": outcome})]
+    end = {"outcome": outcome} if listen is None else {"outcome": outcome, "listen": listen}
+    return steps + [event("end", end)]
 
 
 def test_posts_as_a_speaker_and_yields_each_reply_separately():

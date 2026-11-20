@@ -8,7 +8,7 @@ One turn:
 2. The server finds the end of speech, then transcribes it locally with Whisper.
 3. Robin answers through robin-assistant, in its speaker chat: a chat of its own, apart from the web chat the phone uses, that the web UI shows read-only on its Speaker page.
 4. Each of Robin's messages is spoken locally, sentence by sentence, and the egg starts playing the first sentence while the rest is still being spoken. If Robin has nothing to say after 2 s, the egg plays a soft thinking sound until it does. When the egg stops listening without a reply, it plays a soft closing sound.
-5. The egg reopens its mic for a few seconds, so a follow-up needs no wake word.
+5. The egg reopens its mic for a few seconds, so a follow-up needs no wake word, unless Robin asks it not to.
 
 This is the MVP, to prove egg to Mac mini end to end. It does not yet know who is speaking, check presence, or set an API key on the egg. The robin-assistant side is in [docs/robin-chat-api.md](../docs/robin-chat-api.md), and the speaker chat in [the robin-assistant design](../docs/superpowers/specs/2026-11-18-speaker-chat-robin-assistant-design.md) and [the egg server design](../docs/superpowers/specs/2026-11-18-speaker-chat-egg-server-design.md). See [Talking in the speaker chat](#talking-in-the-speaker-chat).
 
@@ -542,7 +542,7 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 | `--thinking-delay` | 2 s | How long after the end of speech the thinking sound starts, if Robin has not produced a first sentence. |
 | `--closing-cue`, `--no-closing-cue` | on | Play a soft sound when the egg stops listening without a reply. Not played with `--no-stream`. |
 | `--listening-cue`, `--no-listening-cue` | on | End a reply or message the egg listens again after with the wake word's listening sound. |
-| `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. Enrolling and forgetting a voice still reopen it, whatever this is set to. |
+| `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. Robin's own choice, from the `listen` field on the reply's `end` event, comes first: see [Talking in the speaker chat](#talking-in-the-speaker-chat). Enrolling and forgetting a voice still reopen it, whatever this is set to. |
 | `--follow-up-window` | 5 s | How long to wait for a follow-up. |
 | `--repeat-window` | 10 min | How long after Robin says something "say that again" still repeats it. `0` turns the command off. |
 | `--answer-messages questions\|always\|off` | `questions` | When to reopen the mic after a message Robin sends on its own, so it can be answered without the wake word. It waits `--follow-up-window` seconds. Never after `/announce`. |
@@ -631,6 +631,10 @@ The egg talks in robin-assistant's speaker chat, not in the plain web chat the p
 A late answer is dropped only when the person stopped every turn it answers. A late reply whose id was already reported as not spoken to the end is not spoken again.
 
 **Answering a message.** The run that follows a message Robin sent on its own, when the egg reopens its mic for an answer, is posted with `reply_to=<the message's id>`. robin-assistant shows Robin the message with the answer, so a bare "yes" arrives with its question. After several messages spoken as one announcement it is the last one's id. When speech-to-text is unsure and Robin asks for the answer again, the answer that follows still carries the `reply_to`. A message the egg stopped partway does not reopen the mic, so nothing after it carries one. A turn started by the wake word has no `reply_to`, and neither does a message whose id is not a number, since robin-assistant refuses the whole question for a bad one.
+
+**Robin choosing whether to listen again.** The `end` event of a reply can carry `listen: true` or `listen: false`, which Robin sets with its `SetListening` tool. When it is there, it decides whether the egg reopens its mic after the reply, whatever `--follow-up` says: `false` closes the mic with no listening sound, and `true` reopens it with one. The log says `Robin asked the egg not to listen again after this reply`, or `to listen again`. An `end` event with no `listen`, or one that is not `true` or `false`, leaves the choice to `--follow-up` as before. It applies to replies from Robin, not to the egg's own answers such as a repeat or a volume change. A turn Robin answers with nothing closes the mic either way.
+
+**Follow-up turns.** A turn heard in the follow-up window, with no wake word, is posted with `follow_up=1`, so Robin knows the speech may not have been meant for it, such as one side of a phone call near the egg. A turn started by the wake word has no `follow_up` field.
 
 **On the bench**, with the real egg and a real robin-assistant, before daily use:
 

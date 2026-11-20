@@ -32,7 +32,7 @@ class RecordingBrain:
     def __init__(self) -> None:
         self.heard: list[str] = []
 
-    async def reply(self, text: str, user: str | None = None, reply_to: int | None = None):
+    async def reply(self, text: str, user: str | None = None, reply_to: int | None = None, follow_up: bool = False):
         self.heard.append(text)
         yield "That one is for Robin."
 
