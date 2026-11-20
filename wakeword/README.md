@@ -66,7 +66,9 @@ The egg keeps the 5 seconds of audio before each "Hey Robin" wake. After a round
 
 4. Upload the `egg_takes/` folder to Drive at `MyDrive/robin_wakeword/recordings/`, next to the memos.
 
-The notebook adds these takes as they are and does not cut them again, so each take trains exactly as you heard it in review. In `recordings_cut/` their names start with `egg_`.
+Deleting a clip in review, or going back on its label or relabelling it, deletes its takes in `egg_takes/` but not the copies already in Drive. Delete those in Drive by hand before the next training run.
+
+The notebook adds these takes as they are and does not cut them again, so each take is used exactly as you heard it in review, with no second cut. Like every other take, it is still augmented in training. In `recordings_cut/` their names start with `egg_`.
 
 The takes are not committed, unlike the memos. A false-wake take can hold 3 seconds of whatever was being said in the room, and git history cannot forget it. They stay on the Mac mini and in Drive, and `egg_takes/` is in `.gitignore`.
 

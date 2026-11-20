@@ -32,6 +32,8 @@
 
 The spec said the server learns of wakes from `esphome.wake_word_detected`. That event carries no clip number, so the server would have to guess which wake a fetched clip belongs to. The firmware instead sends its own event, `esphome.wake_clip_frozen`, with the clip's number and wake word, right after it freezes. An egg without the component sends no such event, so the server makes no fetches and needs no "missing component" warning. The spec has been updated to say so.
 
+Note, from building task 7: the freeze and the frozen event are not appended to `on_wake_word_detected` as task 7 says. They are added to the base firmware's `send_wake_word_event` script with `!extend`, because the base firmware waits 300 ms after starting the wake sound before anything appended to `on_wake_word_detected` runs. The spec describes what was built.
+
 ## Complexity
 
 - Tasks 1, 4, 5 and 6 are plain Python over files, with low risk.

@@ -355,7 +355,7 @@ The sentences of each enrolment are kept as audio beside them, in `~/.robin-egg/
 - Only a finished enrolment is kept. One that is stopped, runs out of good sentences or sounds like someone else writes nothing.
 - Enrolling again replaces the person's audio. "Forget my voice" deletes it along with the voiceprint.
 - The folders and files are readable only by the account that runs the server.
-- No other audio is kept. Everyday turns are not saved, and what a voiceprint learns from them is numbers only.
+- The only other audio kept is the 5 seconds before each "Hey Robin" wake, saved in `~/.robin-egg/wakes/` for review and training; unlabelled clips are deleted after 14 days and labelled ones stay until you delete them (see [Reviewing wake clips](#reviewing-wake-clips)). The rest of everyday turns is not saved, and what a voiceprint learns from them is numbers only.
 - At startup the server finishes a save that was cut off partway, for example by a crash, and removes what it left behind. The log says so.
 - `--enrolment-audio DIR` changes where they are kept.
 
@@ -572,7 +572,7 @@ The egg keeps the 5 seconds of audio before each "Hey Robin" wake, and the serve
 - `report` prints, for each model round and cutoff and then for each recognised speaker, the clips reviewed, real and false wakes, how many of each stopped a reply, the false share, false wakes per day, the misses found, the clips still unreviewed and the days. The days are the calendar days from the first to the last reviewed clip of that row, counting both, and false wakes per day are spread over those, so clips waiting for review do not make the rate read low; with nothing reviewed the days are 0 and there are no rates. Misses are a lower bound, since a missed "Hey Robin" leaves a clip only when a second try woke the egg within 5 seconds, the rates cover reviewed clips only, and a wake whose clip could not be fetched is not counted at all (the server log names each one).
 - `export` writes each confirmed real cut and each confirmed miss to `wakeword/recordings/egg_takes/positive/`, and each false-wake cut to `egg_takes/negative/`, as 16 kHz mono 16-bit WAVs holding exactly the samples you heard. A clip's JSON lists the files written from it, and running export again writes only what is new. `--to DIR` writes somewhere else.
 
-Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin-egg/wakes`. Unlabelled clips are deleted after 14 days; labelled ones stay until you delete them, and deleting one in `review` also deletes its exported takes.
+Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin-egg/wakes`. Unlabelled clips are deleted after 14 days; labelled ones stay until you delete them, and deleting one in `review` also deletes its exported takes. Copies already uploaded to Google Drive are not touched: delete those in Drive by hand.
 
 ## Useful options
 
@@ -758,6 +758,8 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/enrolment_tools.py` | Rebuilding voiceprints from that audio, and the held-out test of enrolled voices against each other |
 | `robin_egg_server/turn_log.py` | The turn log: one line per turn and per message Robin sends, with no audio or words |
 | `robin_egg_server/stats.py` | The `stats` command that summarises the turn log |
+| `robin_egg_server/wake_clips.py` | Wake clips: fetching the egg's frozen clip after each "Hey Robin" wake, pairing it with its turn, and the folder of clips with its 14-day trim |
+| `robin_egg_server/wakes.py` | The `wakes` command: reviewing and labelling wake clips, the wake rates report, and exporting the takes for training |
 | `robin_egg_server/waiting.py` | Message waiting: the held messages, the ring's waiting light, and "what did I miss?" |
 | `robin_egg_server/digest.py` | Several waiting messages as one announcement: the lead-in, what ends a digest, and which messages were heard when one is cut short |
 | `robin_egg_server/morning_mention.py` | The morning mention: when to end a reply by saying that messages are waiting |
@@ -796,5 +798,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_morning_mention.py` | The morning mention, its rules alone and through the fake egg |
 | `tests/test_presence.py` | `--presence-minutes`: Robin's own messages spoken or dropped by when someone last spoke |
 | `tests/test_turn_log.py` | The turn log and `stats`, through the fake egg and on their own |
+| `tests/test_wake_clips.py` | The folder of wake clips and its trim, fetching from the fake egg's clip server, and keeping a clip of each wake during live turns |
+| `tests/test_wakes.py` | Reviewing wake clips: the loud spans, the keys, going back and `--all`, the report and the export |
 | `tests/test_digest.py` | Several waiting messages as one announcement: the cue, order and pause, the cap, urgent messages, answering, the longest wait, the wake word partway, the turn log and the room fact |
 | `tests/test_waiting.py` | Message waiting: held messages, the ring light on the fake egg, and "what did I miss?" |
