@@ -767,11 +767,11 @@ def test_the_wake_word_during_a_reply_that_asked_for_a_follow_up_is_reported():
 LONG_REMINDER = (125, "Shall I set a reminder for nine o'clock tomorrow?")  # long enough that 2 s before the end is inside it
 
 
-def early_reopen(phrase: str) -> tuple[list, PlaysInRealTime]:
+def early_reopen(phrase: str, early_s: float = 2.0) -> tuple[list, PlaysInRealTime]:
     async def scenario(egg, robin):
         await eventually(lambda: egg.reopened_at is not None and len(egg.runs) == 2 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[1].types())
 
-    egg = PlaysInRealTime([speech()], early_s=2.0, phrase=phrase)
+    egg = PlaysInRealTime([speech()], early_s=early_s, phrase=phrase)
     sent = turn_reports(IdBrain([DENTIST, LONG_REMINDER]), scenario, Options(speaking_hours=ALWAYS, follow_up="always"), egg=egg)
     return sent, egg
 
@@ -783,7 +783,8 @@ def test_a_reopen_with_no_wake_word_means_the_reply_was_played_whatever_the_cloc
 
 
 def test_a_reopen_that_reports_a_wake_word_well_before_the_reply_could_end_reports_what_was_cut():
-    sent, egg = early_reopen("Okay Nabu")
+    # The reply ends with the 1 s listening sound, so 3 s early lands in the words, past the 1 s allowed for an early reopen.
+    sent, egg = early_reopen("Okay Nabu", early_s=3.0)
     assert sent == [(125, "dropped", "interrupted by the wake word")]
 
 

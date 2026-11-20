@@ -78,6 +78,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-stream", action="store_true", help="Play the reply only once it is complete (fallback if streaming misbehaves)")
     p.add_argument("--thinking-cue", action=argparse.BooleanOptionalAction, default=True, help="Play a soft sound while Robin is slow to start answering (default on; --no-thinking-cue turns it off; not played with --no-stream)")
     p.add_argument("--closing-cue", action=argparse.BooleanOptionalAction, default=True, help="Play a soft sound when the egg stops listening without a reply (default on; --no-closing-cue closes silently; not played with --no-stream)")
+    p.add_argument("--listening-cue", action=argparse.BooleanOptionalAction, default=True, help="End a reply or message the egg listens again after with the wake word's listening sound (default on; --no-listening-cue reopens the mic silently)")
     p.add_argument("--thinking-delay", type=float, default=2.0, help="Seconds after the end of speech before the thinking sound starts")
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
@@ -240,6 +241,7 @@ def build(args: argparse.Namespace):
         thinking_cue=args.thinking_cue,
         thinking_delay_s=args.thinking_delay,
         closing_cue=args.closing_cue,
+        listening_cue=args.listening_cue,
         recognition_light=args.recognition_light,
         # A test run's timings would skew the numbers from real use.
         turn_log=None if args.no_turn_log or args.demo or args.echo else Path(args.turn_log).expanduser(),

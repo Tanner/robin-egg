@@ -20,7 +20,9 @@ Usage, from the repository root (needs ffmpeg for the FLAC files):
     python3 tools/egg-sounds/make_sounds.py
 
 Writes wake_word_triggered.flac, mute_switch_on.flac and mute_switch_off.flac in firmware/sounds/,
-and proactive.flac, urgent.flac, thinking.flac, closing.flac and ready.flac in server/robin_egg_server/sounds/.
+and proactive.flac, urgent.flac, thinking.flac, closing.flac, ready.flac and listening.flac in
+server/robin_egg_server/sounds/. listening.flac is the wake word cue again, which the server plays
+when the egg listens again without the wake word.
 """
 
 import math
@@ -164,3 +166,4 @@ for name, notes in CUES.items():
     write_flac(render(notes), OUTPUTS[name])
 write_flac(render_loop(THINKING, THINKING_PERIOD_S, THINKING_PEAK_DBFS), OUTPUTS["thinking"])
 write_flac(render(CLOSING, CLOSING_PEAK_DBFS), OUTPUTS["closing"])
+write_flac(render(CUES["listening"]), REPO / "server/robin_egg_server/sounds/listening.flac")

@@ -11,7 +11,7 @@ Last checked against Seeed's wiki and the formatBCE repo on 2026-11-14. Nothing 
 | JST-PH 2.0 mm 2-pin male connectors with 10 cm silicone wire, plus female sockets, 20 sets. Sold by Zhansheng Electronics | $6.99 | Ordered on Amazon, arriving Monday Nov 16, 2026 |
 | Self-tapping pan-head screw set, M2, M2.5 and M3, 1200 pcs, black. For the board (M2×6) and chassis (M2.5×8) screws | $8.49 | Ordered on Amazon 2026-11-17, arriving Wednesday Nov 18, 2026 |
 | Kadrick heat-set insert kit, M2 to M5, 520 pcs. For the 4 M3 inserts in the baffle. Check that an M3 size fits the CAD's 4.0 mm × 5.0 mm hole | $15.98 | Ordered on Amazon 2026-11-17, arriving Thursday Nov 19, 2026 |
-| ruthex heat-set insert tips, 7 pcs, with 900M adapter | $16.90 | Ordered on Amazon 2026-11-17, arriving Wednesday Nov 18, 2026 |
+| ruthex heat-set insert tips, 7 pcs, with 900M adapter | $16.90 | Arrived. The 900M adapter does not fit the Hakko FX-888DX, which takes T18 tips, so it sits loose (2026-11-19). Use a T18 conical tip for the 4 inserts, or buy T18 insert tips |
 | M3 socket-head cap screw kit, 12.9 alloy steel, 800 pcs. For the speaker (M3×8) and foot (M3×25) screws | $7.99 | Ordered on Amazon 2026-11-17, arriving Wednesday Nov 18, 2026 |
 | USB-C charger, 5 V, 2 A or more | | On hand |
 | USB-C data cable | | On hand |
