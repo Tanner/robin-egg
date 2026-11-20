@@ -340,3 +340,30 @@ def test_a_fake_egg_without_clips_serves_nothing():
 
     egg, calls = asyncio.run(go())
     assert (egg.clip_port, egg.clip_count, calls) == (0, 0, [])
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        b"HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: 1000\r\nX-Wake-Count: 1\r\n"
+        b"X-Wake-Word: Hey Robin\r\nX-Model-Round: v1\r\nX-Cutoff: 0.9\r\nConnection: close\r\n\r\nRIF",
+        b"NOT HTTP AT ALL\r\n\r\n",
+    ],
+    ids=["short body", "not http"],
+)
+def test_a_broken_reply_raises_os_error(reply):
+    async def go():
+        async def answer(r, w):
+            await r.readuntil(b"\r\n\r\n")
+            w.write(reply)
+            await w.drain()
+            w.close()
+
+        server = await asyncio.start_server(answer, "127.0.0.1", 0)
+        try:
+            await fetch_clip("127.0.0.1", server.sockets[0].getsockname()[1])
+        finally:
+            server.close()
+
+    with pytest.raises(OSError):
+        asyncio.run(go())

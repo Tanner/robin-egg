@@ -8,6 +8,7 @@ label and cuts. Unlabelled clips are deleted after 14 days; labelled ones stay.
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import logging
 import os
@@ -128,8 +129,8 @@ class FetchedClip:
 async def fetch_clip(host: str, port: int, timeout_s: float = 3.0) -> FetchedClip | None:
     """The egg's frozen clip, or None when it has frozen none since boot.
 
-    Raises OSError for a refused connection, an HTTP error other than 404 or headers that cannot
-    be read, and asyncio.TimeoutError when the egg takes longer than timeout_s.
+    Raises OSError for a refused connection, an HTTP error other than 404, a reply cut off or not
+    in HTTP, or headers that cannot be read, and asyncio.TimeoutError when the egg takes longer than timeout_s.
     """
     url = f"http://{host}:{port}{CLIP_PATH}"
 
@@ -146,6 +147,8 @@ async def fetch_clip(host: str, port: int, timeout_s: float = 3.0) -> FetchedCli
             if isinstance(err.reason, TimeoutError):
                 raise asyncio.TimeoutError(f"The egg at {host}:{port} did not answer within {timeout_s} s") from err
             raise
+        except http.client.HTTPException as err:
+            raise OSError(f"The egg at {host}:{port} sent a wake clip reply that was cut off or not HTTP ({err!r})") from err
         count, wake_word, model_round, cutoff = (headers.get(h) for h in ("X-Wake-Count", "X-Wake-Word", "X-Model-Round", "X-Cutoff"))
         try:
             if None in (count, wake_word, model_round, cutoff):
