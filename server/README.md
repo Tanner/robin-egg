@@ -558,6 +558,22 @@ When the file reaches 5 MB it is renamed `turns.jsonl.1`, replacing the previous
 
 Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numbers. `/announce` calls are not recorded. A turn still listening when the egg disconnects is recorded as cancelled only when the next turn starts.
 
+## Reviewing wake clips
+
+The egg keeps the 5 seconds of audio before each "Hey Robin" wake, and the server saves it to `~/.robin-egg/wakes/` as a WAV with a JSON file beside it: when it woke, which model round and cutoff were loaded, how the turn ended and who was recognised. No audio goes into the turn log. Three commands, run from `server/`, turn these clips into numbers and training takes:
+
+```sh
+.venv/bin/python -m robin_egg_server.wakes review
+.venv/bin/python -m robin_egg_server.wakes report
+.venv/bin/python -m robin_egg_server.wakes export
+```
+
+- `review` plays each unlabelled clip, oldest first, with the turn's outcome, the speaker and a suggested label, and takes one key: `r` real, `f` false, `m` real with a missed try before it, `d` delete, space to play it again, `s` skip, `q` quit. For a real wake it plays the last loud span on its own and asks whether that cut is a clean "Hey Robin"; with `m` it then plays each earlier span and asks whether it was a try the egg missed. Space plays the cut again before you answer. A false wake's cut is the clip's last 3 seconds. Labels are saved as you go, so quitting loses nothing. It plays through macOS's `afplay`, and says so when `afplay` fails.
+- `report` prints, for each model round and cutoff and then for each recognised speaker, the clips reviewed, real and false wakes, how many of each stopped a reply, the false share, false wakes per day over the days the round was in use, the misses found and the clips still unreviewed. Misses are a lower bound, since a missed "Hey Robin" leaves a clip only when a second try woke the egg within 5 seconds, and the rates cover reviewed clips only.
+- `export` writes each confirmed real cut and each confirmed miss to `wakeword/recordings/egg_takes/positive/`, and each false-wake cut to `egg_takes/negative/`, as 16 kHz mono 16-bit WAVs holding exactly the samples you heard. A clip's JSON lists the files written from it, and running export again writes only what is new. `--to DIR` writes somewhere else.
+
+Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin-egg/wakes`. Unlabelled clips are deleted after 14 days; labelled ones stay until you delete them, and deleting one in `review` also deletes its exported takes.
+
 ## Useful options
 
 | Option | Default | What it does |
@@ -619,6 +635,9 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 | `--turn-log FILE` | `~/.robin-egg/turns.jsonl` | Where each turn's outcome and timings are recorded for `stats`. Not used with `--demo` or `--echo`. |
 | `--no-turn-log` | off | Record nothing about turns. |
 | `--turn-log-names` | off | Also record who spoke each turn, not only whether they were recognised. |
+| `--no-wake-clips` | off | Keep no clip of each "Hey Robin" wake. Clips are kept by default. |
+| `--wake-clips-dir DIR` | `~/.robin-egg/wakes` | Where the 5-second clip of each "Hey Robin" wake is kept for review and training. Unlabelled clips are deleted after 14 days. |
+| `--wake-clip-port PORT` | 8080 | The egg's HTTP port for its frozen wake clip. |
 
 ## Talking in the speaker chat
 
