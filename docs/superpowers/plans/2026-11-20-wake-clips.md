@@ -24,24 +24,28 @@
 - Logs are full sentences a person can read, with no emojis. Code comments explain the code, not the change.
 - Run server tests with `cd server && .venv/bin/python -m pytest`. Firmware commands use `/Users/tanner/Developer/robin-egg/firmware/.venv/bin/esphome` and need `secrets.yaml` copied from `/Users/tanner/Developer/robin-egg/firmware/secrets.yaml` into this worktree's `firmware/`. It is ignored by git.
 
+## Not in this build
+
+"Forget my voice" does not touch wake clips. Tanner dropped that on 2026-11-20. A clip can be deleted by hand in `review`.
+
 ## One change from the spec
 
 The spec said the server learns of wakes from `esphome.wake_word_detected`. That event carries no clip number, so the server would have to guess which wake a fetched clip belongs to. The firmware instead sends its own event, `esphome.wake_clip_frozen`, with the clip's number and wake word, right after it freezes. An egg without the component sends no such event, so the server makes no fetches and needs no "missing component" warning. The spec has been updated to say so.
 
 ## Complexity
 
-- Tasks 1, 4, 5, 6 and 7 are plain Python over files, with low risk.
+- Tasks 1, 4, 5 and 6 are plain Python over files, with low risk.
 - Task 2 touches the fake egg, which every server test uses. Its changes must be additions only.
 - Task 3 is the hard server task. It hooks into `egg.py`, where turn start, listening end and turn recording each have several paths.
-- Task 8 is the hard firmware task and the least certain. Nobody has built a component against this firmware, and subagents cannot flash the egg. It ends at a clean compile.
-- Task 9 needs Tanner and the egg on the bench.
+- Task 7 is the hard firmware task and the least certain. Nobody has built a component against this firmware, and subagents cannot flash the egg. It ends at a clean compile.
+- Task 8 needs Tanner and the egg on the bench.
 
 ## Preventing regressions
 
 - Every server task ends with the full test suite, not only its own tests. The 40-odd existing test files must pass unchanged.
 - With no `esphome.wake_clip_frozen` event, the server behaves as it does today. Task 3 has a test for that.
-- The firmware change is one block in `robin-egg.yaml` plus one appended action. Removing them gives back today's firmware. Task 9 compares wake behaviour before and after flashing.
-- The notebook step does nothing when `egg_takes/` is missing. Task 7 checks the notebook still parses and that the phone-memo cell is byte-for-byte unchanged.
+- The firmware change is one block in `robin-egg.yaml` plus one appended action. Removing them gives back today's firmware. Task 8 compares wake behaviour before and after flashing.
+- The notebook step does nothing when `egg_takes/` is missing. Task 6 checks the notebook still parses and that the phone-memo cell is byte-for-byte unchanged.
 
 ## Review focus
 
@@ -49,7 +53,7 @@ The spec said the server learns of wakes from `esphome.wake_word_detected`. That
 2. The egg reboots, so clip numbers restart at 1. The server must not treat clip 1 as already kept. Test in task 3.
 3. Two wakes before one fetch. The earlier clip is lost and the log says so, and the later one is filed under its own wake. Test in task 3.
 4. The wakes folder cannot be written, for example a full disk. One warning, and the turn goes on. Test in task 3.
-5. A clip with no usable span: silence, steady TV louder than 3 seconds, or a clip shorter than 3 seconds from a wake just after boot. Review must still take a label, store no positive cut, and store a false cut no longer than the clip. Test in task 5.
+5. A clip with no usable span: silence, steady TV louder than 3 seconds, or a clip shorter than 3 seconds from a wake just after boot. Review must still take a label, store no positive cut, and store a false cut no longer than the clip. Test in task 4.
 
 ## File structure
 
@@ -59,7 +63,6 @@ The spec said the server learns of wakes from `esphome.wake_word_detected`. That
 | `server/robin_egg_server/wakes.py` (new) | The `review`, `report` and `export` commands, and the span rule |
 | `server/robin_egg_server/egg.py` | Calls the collector at turn start, listening end, turn recording, connect and disconnect |
 | `server/robin_egg_server/__main__.py` | The options, building the store and collector, the daily trim |
-| `server/robin_egg_server/commands.py` | "Forget my voice" deletes that person's clips and takes |
 | `server/robin_egg_server/fake_egg.py` | Sends the frozen event and serves a clip |
 | `firmware/components/wake_clip/` (new) | The capture component |
 | `firmware/robin-egg.yaml` | Loads the component, freezes on a wake, sends the event |
@@ -110,7 +113,6 @@ class WakeClipStore:
     def samples(self, entry: Entry) -> np.ndarray       # int16
     def delete(self, entry: Entry) -> None              # WAV, JSON and every path in entry.exported
     def trim(self, now: float | None = None) -> int     # deletes unlabelled entries older than KEEP_UNLABELLED_S; returns how many
-    def forget(self, speaker: str) -> int               # deletes every entry with that speaker; returns how many
 ```
 
 - [ ] **Step 1: Write the failing tests**
@@ -132,9 +134,8 @@ def test_trim_deletes_only_old_unlabelled_clips(tmp_path): ...
     # three entries: 15 days old unlabelled, 15 days old labelled REAL, 13 days old unlabelled
     # trim(now) == 1, and the two others remain
 
-def test_forget_deletes_that_persons_clips_and_takes(tmp_path): ...
-    # entries for "tanner" (labelled, with one file listed in exported) and "ryan"
-    # forget("tanner") == 1; tanner's WAV, JSON and exported file are gone; ryan's remain
+def test_delete_removes_the_clip_and_its_takes(tmp_path): ...
+    # an entry with one file listed in exported: delete() removes the WAV, the JSON and that file
 
 def test_a_clip_with_a_broken_json_is_skipped(tmp_path, caplog): ...
 ```
@@ -316,37 +317,7 @@ def test_wake_clips_are_on_by_default_and_can_be_turned_off(): ...
 
 ---
 
-### Task 4: "Forget my voice" deletes that person's clips
-
-**Files:**
-- Modify: `server/robin_egg_server/commands.py`, `server/robin_egg_server/__main__.py`
-- Test: `server/tests/test_commands.py`
-
-**Interfaces, consumed:** `WakeClipStore.forget(speaker) -> int`.
-
-**Interfaces, produced:** the commands class takes `wake_clips: WakeClipStore | None = None`, next to its existing `audio` argument.
-
-In `_answer_forget`, delete the wake clips first, then the enrolment audio, then the voiceprint. If deleting clips raises `OSError`, log why, answer `FORGET_FAILED`, and keep the voiceprint, as the enrolment audio step does. When any clip had exported takes, log: "Forget for NAME: N wake clips and their takes deleted. Copies uploaded to Drive at MyDrive/robin_wakeword/recordings/egg_takes/ have to be deleted by hand".
-
-- [ ] **Step 1: Write the failing tests**
-
-```python
-def test_forget_deletes_the_persons_wake_clips(tmp_path): ...
-    # the forget flow for tanner with clips for tanner and ryan: tanner's are gone, ryan's stay,
-    # and the reply is "Done. I've forgotten your voice."
-
-def test_forget_keeps_the_voiceprint_when_clips_cannot_be_deleted(tmp_path): ...
-    # WakeClipStore.forget raises OSError: reply is FORGET_FAILED and the voiceprint remains
-```
-
-- [ ] **Step 2: Run them and see them fail.**
-- [ ] **Step 3: Implement, and pass the store in `build()`.**
-- [ ] **Step 4: Run the whole suite.**
-- [ ] **Step 5: Commit.** `git commit -m "Forget a person's wake clips with their voice"`
-
----
-
-### Task 5: Review clips at the terminal
+### Task 4: Review clips at the terminal
 
 **Files:**
 - Create: `server/robin_egg_server/wakes.py`
@@ -423,7 +394,7 @@ def test_labelled_clips_are_not_shown_again(tmp_path): ...
 
 ---
 
-### Task 6: Report the rates and export the takes
+### Task 5: Report the rates and export the takes
 
 **Files:**
 - Modify: `server/robin_egg_server/wakes.py`, `server/README.md`
@@ -498,7 +469,7 @@ def test_report_prints_the_two_cautions(tmp_path, capsys): ...
 
 ---
 
-### Task 7: The notebook reads egg takes without cutting them again
+### Task 6: The notebook reads egg takes without cutting them again
 
 **Files:**
 - Modify: `wakeword/hey_robin_training.ipynb` (code cell index 8), `.gitignore`, `wakeword/README.md`
@@ -524,7 +495,7 @@ def test_the_notebook_copies_egg_takes_without_cutting(): ...
 
 ---
 
-### Task 8: The firmware capture component
+### Task 7: The firmware capture component
 
 **Files:**
 - Create: `firmware/components/wake_clip/__init__.py`, `wake_clip.h`, `wake_clip.cpp`
@@ -591,11 +562,11 @@ micro_wake_word:
 - [ ] **Step 4: Document.** In `wakeword/README.md` under "Load it into the firmware", add: set `hey_robin_round` to the new round and `hey_robin_cutoff` to the cutoff in use.
 - [ ] **Step 5: Commit.** `git commit -m "Capture the audio before each wake on the egg"`
 
-Do not flash the egg. That is task 9.
+Do not flash the egg. That is task 8.
 
 ---
 
-### Task 9: Bench check with Tanner
+### Task 8: Bench check with Tanner
 
 This task needs the egg and Tanner. No subagent runs it.
 

@@ -20,6 +20,7 @@ The egg cannot improve from its own use today, because the audio that woke it ne
 - Catching every miss. A missed "Hey Robin" leaves a clip only when the person tries again within 5 seconds and that second try wakes the egg. The report says the miss count is a lower bound.
 - Clips for wakes by the other models (Okay Nabu, Stop, Snooze). The server keeps clips for "Hey Robin" only.
 - A review page for the phone. Review happens at the Mac.
+- "Forget my voice" deleting wake clips. Tanner decided on 2026-11-20 that it is not needed. A clip can be deleted during review.
 - Scoring clips with the model on the Mac. It would be useful later, and the clips make it possible.
 
 ## Anti-goals
@@ -76,7 +77,6 @@ A new module, `robin_egg_server/wake_clips.py`.
 - The fetch has a short timeout. Any failure logs one human-readable warning with the turn's tag and is dropped.
 - A daily trim deletes clips with no review label that are older than 14 days. Labelled clips stay until someone deletes them.
 - Clips are on by default. `--no-wake-clips` turns them off.
-- "Forget my voice" deletes the clips recognised as that person, along with their enrolment audio and their exported takes in `egg_takes/`. It cannot reach copies uploaded to Drive. The log names the Drive folder to clear by hand, and the decisions row says so.
 - `fake_egg.py` learns to serve a clip, so tests and the bench script can run the whole path without hardware.
 
 ### Review, report and export
@@ -115,7 +115,7 @@ The notebook gains one step: it copies the files in `egg_takes/positive` and `eg
 
 ## Preventing regressions
 
-- The existing server tests pass unchanged. New tests cover the fetch against the fake egg, a wake that starts no turn, two wakes before one fetch, the stale-counter case, a failed and a slow fetch during a turn, the trim, forget, the suggestion rule, the span cutting, the report numbers and the export files.
+- The existing server tests pass unchanged. New tests cover the fetch against the fake egg, a wake that starts no turn, two wakes before one fetch, the stale-counter case, a failed and a slow fetch during a turn, the trim, the suggestion rule, the span cutting, the report numbers and the export files.
 - On the bench, before and after flashing the component: the egg wakes on the same takes, the time from wake to the listening chime does not grow, and the boot log shows no memory or tensor arena error. Run `tools/bench-voice-test` both times.
 - On the bench, confirm a fetched clip is channel 1 audio at the wake word model's gain with no clipping, and that "Hey Robin" sits at its end.
 - Confirm by hand that a wake with the mute switch on changes nothing the endpoint serves.
@@ -134,7 +134,6 @@ The notebook gains one step: it copies the files in `egg_takes/positive` and `eg
 - Clips are on by default, with `--no-wake-clips` to turn them off.
 - Only "Hey Robin" wakes are kept.
 - A wake that stops a reply gets no suggested label.
-- "Forget my voice" deletes that person's clips and exported takes, labelled ones included. Drive copies are cleared by hand.
 - The model round is a substitution set by hand.
 - Export writes one file per take and the notebook reads them without cutting again. This is the one change to the notebook.
 - Exported takes are not committed to the repo, unlike the phone memos.
