@@ -576,3 +576,109 @@ def test_an_unwritable_folder_costs_the_clip_not_the_turn(tmp_path, caplog):
         egg, _, _ = run_with_clips([speech()], ["hi"], [["Hello. "]], tmp_path, egg=egg, clips=collector(store, egg))
     assert egg.runs[0].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Hello."
     assert len([r for r in caplog.records if r.levelno == logging.WARNING and r.name == "robin.wake_clips"]) == 1
+
+
+def test_turns_that_never_get_an_event_leave_no_record(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    egg = FakeEgg([speech(), speech(), speech()], wake_word="Hey Robin", wake_words=["Hey Robin"] * 3)  # no clip component
+    clips = collector(store, egg, pair_window_s=0.001)  # a fake turn is over in a few hundredths of a second
+
+    async def scenario(egg, store):
+        # Checked while the egg is still connected, since a disconnect forgets every turn anyway.
+        await eventually(lambda: len(egg.runs) == 3 and egg.done.is_set() and clips.turns_waiting == 0, timeout=5.0)
+
+    run_with_clips([speech(), speech(), speech()], ["hi", "hi again", "and again"], [["Hello. "], ["Hello again. "], ["Still here. "]], tmp_path, egg=egg, clips=clips, scenario=scenario)
+    assert len(egg.runs) == 3
+    assert store.entries() == []
+
+
+def fetched_clip(count: int = 1) -> wake_clips.FetchedClip:
+    return wake_clips.FetchedClip(count=count, wake_word="Hey Robin", model_round="v1", cutoff=0.9, wav=wav_bytes(tone(1.0)))
+
+
+def dropped_warnings(caplog) -> list[str]:
+    return [f"{r.tag}{r.getMessage()}" for r in caplog.records if r.levelno == logging.WARNING and r.name == "robin.wake_clips"]
+
+
+def test_a_fetched_clip_waiting_for_its_outcome_is_dropped_with_a_warning(tmp_path, caplog):
+    caplog.handler.addFilter(TagFilter())
+    store = WakeClipStore(tmp_path / "wakes")
+
+    async def fetch(host, port):
+        return fetched_clip()
+
+    async def go():
+        clips = WakeClips(store, fetch=fetch)
+        clips.connected("egg.local")
+        clips.turn_started("t7", "Hey Robin", False)
+        clips.frozen(1, "Hey Robin", None)
+        clips.listening_ended("t7")
+        await clips.settle()
+        clips.disconnected()
+        clips.turn_recorded("t7", "cancelled", None)
+        await clips.settle()
+
+    with caplog.at_level(logging.WARNING, logger="robin.wake_clips"):
+        asyncio.run(go())
+    assert dropped_warnings(caplog) == ["[t7] The clip for wake 1 was dropped, because the connection to the egg was lost before the turn ended"]
+    assert store.entries() == []
+
+
+@pytest.mark.parametrize("fetch_fails", [False, True], ids=["fetch arrives", "fetch fails"])
+def test_a_clip_being_fetched_when_the_egg_drops_gets_one_warning(tmp_path, caplog, fetch_fails):
+    caplog.handler.addFilter(TagFilter())
+    store = WakeClipStore(tmp_path / "wakes")
+
+    async def go():
+        release = asyncio.Event()
+
+        async def fetch(host, port):
+            await release.wait()
+            if fetch_fails:
+                raise OSError("Connection refused")
+            return fetched_clip()
+
+        clips = WakeClips(store, fetch=fetch)
+        clips.connected("egg.local")
+        clips.turn_started("t8", "Hey Robin", False)
+        clips.frozen(1, "Hey Robin", None)
+        clips.listening_ended("t8")
+        await asyncio.sleep(0)
+        clips.disconnected()
+        release.set()
+        await clips.settle()
+
+    with caplog.at_level(logging.WARNING, logger="robin.wake_clips"):
+        asyncio.run(go())
+    [warning] = dropped_warnings(caplog)
+    assert warning.startswith("[t8] ")
+    assert ("Connection refused" in warning) if fetch_fails else ("connection to the egg was lost" in warning)
+    assert store.entries() == []
+
+
+def test_a_recorded_turn_whose_fetch_ends_after_the_egg_drops_keeps_its_clip(tmp_path, caplog):
+    store = WakeClipStore(tmp_path / "wakes")
+
+    async def go():
+        release = asyncio.Event()
+
+        async def fetch(host, port):
+            await release.wait()
+            return fetched_clip()
+
+        clips = WakeClips(store, fetch=fetch)
+        clips.connected("egg.local")
+        clips.turn_started("t9", "Hey Robin", False)
+        clips.frozen(1, "Hey Robin", None)
+        clips.listening_ended("t9")
+        clips.turn_recorded("t9", "answered", None)
+        await asyncio.sleep(0)
+        clips.disconnected()
+        release.set()
+        await clips.settle()
+
+    with caplog.at_level(logging.WARNING, logger="robin.wake_clips"):
+        asyncio.run(go())
+    assert dropped_warnings(caplog) == []
+    [e] = store.entries()
+    assert (e.turn, e.outcome) == ("t9", "answered")

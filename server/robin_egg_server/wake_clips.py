@@ -302,6 +302,7 @@ class _TurnClip:
     outcome: str | None = None
     speaker: str | None = None
     clip: FetchedClip | None = None  # fetched, waiting for the outcome
+    dropped: bool = False  # the egg disconnected while its clip was being fetched and before its outcome came
 
 
 class WakeClips:
@@ -329,12 +330,29 @@ class WakeClips:
     def connected(self, host: str) -> None:
         self.host = host
 
+    @property
+    def turns_waiting(self) -> int:
+        """How many "Hey Robin" turns are still waiting for their event, their clip or their outcome."""
+        return len(self._turns)
+
     def disconnected(self) -> None:
-        """Forgets pending wakes and the last count: the egg may have rebooted, which restarts its count."""
+        """Forgets pending wakes, turns and the last count: the egg may have rebooted, which restarts its count.
+
+        A turn whose clip is fetched, or still being fetched, but whose outcome has not come loses
+        its clip, since a turn cut off by the disconnect is only recorded when the next one starts.
+        """
         for wake in self._wakes:
             if wake.timer is not None:
                 wake.timer.cancel()
         self._wakes.clear()
+        for turn in self._turns.values():
+            if turn.recorded or turn.wake is None:
+                continue
+            if turn.clip is not None:
+                with tagged(turn.tag):
+                    _warn_dropped(turn)
+            elif turn.listened:
+                turn.dropped = True  # warned when the fetch ends with a clip; a failed fetch warns for itself
         self._turns.clear()
         self._last_count = None
         self.host = None
@@ -364,6 +382,8 @@ class WakeClips:
         if follow_up or wake_word != KEPT_WAKE_WORD:
             return
         now = time.monotonic()
+        for old in [t for t in self._turns.values() if self._unpaired(t, now)]:
+            del self._turns[old.tag]
         turn = self._turns[tag] = _TurnClip(tag, now)
         # The newest event: an older one still in the window was a wake that started nothing.
         if self._wakes and now - self._wakes[-1].at <= self.pair_window_s:
@@ -386,6 +406,8 @@ class WakeClips:
         turn.recorded, turn.outcome, turn.speaker = True, outcome, speaker
         if turn.clip is not None:
             self._spawn(self._save_turn(turn), tag)
+        elif self._unpaired(turn, time.monotonic()):
+            del self._turns[tag]  # an egg without the clip component sends no event
 
     async def settle(self) -> None:
         """Waits for every fetch and save in flight, including any they start."""
@@ -393,6 +415,10 @@ class WakeClips:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
     # ---- pairing ----
+
+    def _unpaired(self, turn: _TurnClip, now: float) -> bool:
+        """The turn is over and its window for an event passed without one, so it will never have a clip."""
+        return turn.recorded and turn.wake is None and now - turn.at > self.pair_window_s
 
     def _unclaimed_turn(self, now: float) -> _TurnClip | None:
         """The newest turn still waiting for its event, dropping those that waited longer than the window."""
@@ -428,6 +454,9 @@ class WakeClips:
             clip = await self._fetched(turn.wake)
             if clip is None:
                 self._turns.pop(turn.tag, None)
+                return
+            if turn.dropped:
+                _warn_dropped(turn)
                 return
             turn.clip = clip
             if turn.recorded:
@@ -485,6 +514,11 @@ class WakeClips:
             await asyncio.to_thread(self.store.save, clip.wav, entry)
         except OSError as err:
             LOG.warning("Could not save the clip for wake %d in %s, so it is lost: %s", wake.count, self.store.root, _describe(err))
+
+
+def _warn_dropped(turn: _TurnClip) -> None:
+    assert turn.wake is not None
+    LOG.warning("The clip for wake %d was dropped, because the connection to the egg was lost before the turn ended", turn.wake.count)
 
 
 def _describe(err: BaseException) -> str:
