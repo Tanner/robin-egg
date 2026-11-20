@@ -24,6 +24,11 @@ substitutions:
   mute_switch_on_sound_file: sounds/mute_switch_on.flac
   mute_switch_off_sound_file: sounds/mute_switch_off.flac
 
+  # The "Hey Robin" model in use: its round in wakeword/results/ and its cutoff.
+  # Each wake clip carries both, so a clip can be traced to the model that heard it.
+  hey_robin_round: v1
+  hey_robin_cutoff: "0.9"
+
 packages:
   respeaker:
     url: https://github.com/formatBCE/Respeaker-XVF3800-ESPHome-integration
@@ -54,7 +59,7 @@ micro_wake_word:
     - model: hey_robin.json
       id: hey_robin
       # Trained at 0.97. Lowered because Ryan had to slow down to wake the egg.
-      probability_cutoff: 0.9
+      probability_cutoff: ${hey_robin_cutoff}
     - model: https://github.com/OHF-Voice/micro-wake-word/releases/download/okay_nabu_20241226.3/okay_nabu.json
       id: okay_nabu
     - model: https://raw.githubusercontent.com/formatBCE/Respeaker-Lite-ESPHome-integration/${satellite_core_ref}/microwakeword/models/v2/kenobi.json
@@ -69,6 +74,45 @@ micro_wake_word:
     - model: https://raw.githubusercontent.com/formatBCE/Respeaker-Lite-ESPHome-integration/${satellite_core_ref}/microwakeword/models/v2/snooze.json
       id: snooze
       internal: true
+  # Runs after the base firmware's actions, so after its 300 ms wake sound delay when the
+  # wake sound is on. Freezes the clip of the wake and tells the server it can fetch it.
+  # Inside the same "mute switch is off" condition the base firmware uses, so a wake while
+  # muted freezes nothing.
+  on_wake_word_detected:
+    - if:
+        condition:
+          switch.is_off: mic_mute_switch
+        then:
+          - wake_clip.freeze:
+              id: wake_clip_capture
+              wake_word: !lambda return wake_word;
+          - homeassistant.event:
+              event: esphome.wake_clip_frozen
+              data:
+                count: !lambda return to_string(id(wake_clip_capture).get_count());
+                wake_word: !lambda return wake_word;
+
+# Wake clips: the last 5 seconds of what the wake word model heard before each wake, frozen
+# on the wake and served at http://<egg>:8080/wake-clip for the server to fetch. Removing
+# this block, external_components and the on_wake_word_detected hook above gives back the
+# firmware without clips.
+external_components:
+  - source:
+      type: local
+      path: components
+
+wake_clip:
+  id: wake_clip_capture
+  # Must match micro_wake_word's microphone settings, so a clip is what the model heard.
+  # The core package sets i2s_mics channel 1, and the XVF3800 package sets gain factor 1.
+  microphone:
+    microphone: i2s_mics
+    channels: 1
+    gain_factor: 1
+  seconds: 5
+  port: 8080
+  model_round: ${hey_robin_round}
+  cutoff: ${hey_robin_cutoff}
 
 # Whether the board hears voices nearby, for the server to tell Robin someone is
 # around. Only this on/off state leaves the egg: no audio and no direction.

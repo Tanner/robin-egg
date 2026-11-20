@@ -74,6 +74,8 @@ The takes are not committed, unlike the memos. A false-wake take can hold 3 seco
 
 Copy `hey_robin.json` and `hey_robin.tflite` into `firmware/`, next to `robin-egg.yaml`, then build and flash as usual. The device YAML already lists the model.
 
+In `robin-egg.yaml`, set `hey_robin_round` to the new round and `hey_robin_cutoff` to the cutoff in use. Each wake clip the egg keeps carries both, and `hey_robin_cutoff` is also the model's `probability_cutoff`.
+
 Only the first model in the list is turned on at first boot, so "Hey Robin" has to come first. A device YAML can only add to the end of the list that the formatBCE core package (`core/voice-assistant.yaml`) defines. `robin-egg.yaml` therefore removes the core's models by id and lists them again after `hey_robin`. If a formatBCE release adds or renames a model, update that list to match.
 
 The firmware has a sensitivity setting for each model, and `probability_cutoff` in the manifest is the default.
