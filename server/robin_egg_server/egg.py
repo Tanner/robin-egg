@@ -682,7 +682,7 @@ class Robin:
             before = t.reply.seconds
             await t.reply.push(self.listening_sound, REPLY_RATE, gap_s=0)
             if t.playing:
-                t.play_end = max(t.play_end, time.monotonic()) + t.reply.seconds - before
+                t.play_end = max(t.play_end, self.played_clock()) + t.reply.seconds - before
         self._follow_up_pending = cont
         self.send(E.VOICE_ASSISTANT_INTENT_END, {"continue_conversation": "1" if cont else "0"})
         self.send(E.VOICE_ASSISTANT_TTS_START, {"text": reply_text[:480]})
