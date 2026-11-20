@@ -7,10 +7,13 @@ label and cuts. Unlabelled clips are deleted after 14 days; labelled ones stay.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import time
+import urllib.error
+import urllib.request
 import wave
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -24,6 +27,13 @@ LOG = logging.getLogger("robin.wake_clips")
 
 DEFAULT_WAKES = Path("~/.robin-egg/wakes").expanduser()
 KEEP_UNLABELLED_S = 14 * 86400
+
+# The event the egg sends right after it freezes a clip. data: {"count": "<int>", "wake_word": "<phrase>"}
+FROZEN_EVENT = "esphome.wake_clip_frozen"
+# The egg serves the frozen clip here as a WAV, with headers X-Wake-Count, X-Wake-Word,
+# X-Model-Round and X-Cutoff. It answers 404 before the first freeze.
+CLIP_PATH = "/wake-clip"
+DEFAULT_CLIP_PORT = 8080
 
 # What a wake did: started a turn, or cut off a reply, a message or a ringing timer.
 TURN, STOPPED_A_REPLY = "turn", "stopped a reply"
@@ -104,6 +114,47 @@ def _from_json(path: Path, data: dict) -> Entry:
         misses=[(int(start), int(end)) for start, end in data.get("misses", [])],
         exported=[str(p) for p in data.get("exported", [])],
     )
+
+
+@dataclass
+class FetchedClip:
+    count: int
+    wake_word: str
+    model_round: str
+    cutoff: float
+    wav: bytes
+
+
+async def fetch_clip(host: str, port: int, timeout_s: float = 3.0) -> FetchedClip | None:
+    """The egg's frozen clip, or None when it has frozen none since boot.
+
+    Raises OSError for a refused connection, an HTTP error other than 404 or headers that cannot
+    be read, and asyncio.TimeoutError when the egg takes longer than timeout_s.
+    """
+    url = f"http://{host}:{port}{CLIP_PATH}"
+
+    def get() -> FetchedClip | None:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout_s) as resp:
+                wav, headers = resp.read(), resp.headers
+        except urllib.error.HTTPError as err:
+            err.close()
+            if err.code == 404:
+                return None
+            raise
+        except urllib.error.URLError as err:
+            if isinstance(err.reason, TimeoutError):
+                raise asyncio.TimeoutError(f"The egg at {host}:{port} did not answer within {timeout_s} s") from err
+            raise
+        count, wake_word, model_round, cutoff = (headers.get(h) for h in ("X-Wake-Count", "X-Wake-Word", "X-Model-Round", "X-Cutoff"))
+        try:
+            if None in (count, wake_word, model_round, cutoff):
+                raise ValueError("a header is missing")
+            return FetchedClip(count=int(count), wake_word=wake_word, model_round=model_round, cutoff=float(cutoff), wav=wav)
+        except ValueError as err:
+            raise OSError(f"The egg at {host}:{port} sent a wake clip with headers that could not be read ({err})") from err
+
+    return await asyncio.wait_for(asyncio.to_thread(get), timeout_s)
 
 
 class WakeClipStore:

@@ -5,6 +5,7 @@ Run from server/:  python -m pytest tests/test_wake_clips.py -q
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import wave
@@ -13,10 +14,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from aioesphomeapi import APIClient
 
 from robin_egg_server import wake_clips
 from robin_egg_server.audio import MIC_RATE
+from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.wake_clips import (
+    FROZEN_EVENT,
     PROBABLY_FALSE,
     PROBABLY_REAL,
     REAL,
@@ -24,8 +28,10 @@ from robin_egg_server.wake_clips import (
     TURN,
     Entry,
     WakeClipStore,
+    fetch_clip,
     suggest,
 )
+from test_speaker_stream import eventually
 
 NOW = datetime(2026, 11, 20, 9, 30, 0).astimezone()
 
@@ -221,3 +227,116 @@ def test_a_second_clip_of_the_same_name_is_kept_beside_the_first(tmp_path):
     assert sorted(store.entries(), key=lambda e: e.path.name) == sorted([first, second], key=lambda e: e.path.name)
     assert np.array_equal(store.samples(first), tone(1.0))
 
+
+async def connected(egg: FakeEgg) -> tuple[APIClient, list]:
+    """A client on the fake egg that has subscribed to its service calls, as the server does."""
+    port = await egg.start()
+    client = APIClient("127.0.0.1", port, None)
+    await client.connect(login=True)
+    calls: list = []
+    client.subscribe_service_calls(calls.append)
+    await eventually(lambda: egg._services_subscribed)
+    return client, calls
+
+
+def test_fetch_returns_the_frozen_clip_and_its_headers():
+    async def go():
+        egg = FakeEgg([], wake_word="Hey Robin", clips=True, clip_audio=tone(2.0).astype("<i2").tobytes())
+        client, calls = await connected(egg)
+        try:
+            egg.wake()
+            clip = await fetch_clip("127.0.0.1", egg.clip_port)
+            await eventually(lambda: calls)
+        finally:
+            await client.disconnect()
+            await egg.stop()
+        return egg, clip, calls
+
+    egg, clip, calls = asyncio.run(go())
+    assert egg.clip_count == 1
+    assert (clip.count, clip.wake_word, clip.model_round, clip.cutoff) == (1, "Hey Robin", "v1", 0.9)
+    with wave.open(io.BytesIO(clip.wav), "rb") as w:
+        assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (MIC_RATE, 1, 2)
+        assert np.array_equal(np.frombuffer(w.readframes(w.getnframes()), dtype="<i2"), tone(2.0))
+    [call] = calls
+    assert call.service == FROZEN_EVENT and call.is_event
+    assert dict(call.data) == {"count": "1", "wake_word": "Hey Robin"}
+
+
+def test_fetch_before_any_wake_gives_none():
+    async def go():
+        egg = FakeEgg([], clips=True)
+        await egg.start()
+        try:
+            return await fetch_clip("127.0.0.1", egg.clip_port)
+        finally:
+            await egg.stop()
+
+    assert asyncio.run(go()) is None
+
+
+def test_a_muted_fake_egg_freezes_nothing():
+    async def go():
+        egg = FakeEgg([], wake_word="Hey Robin", clips=True)
+        client, calls = await connected(egg)
+        try:
+            egg.set_muted(True)
+            egg.wake()
+            clip = await fetch_clip("127.0.0.1", egg.clip_port)
+        finally:
+            await client.disconnect()
+            await egg.stop()
+        return egg, clip, calls
+
+    egg, clip, calls = asyncio.run(go())
+    assert egg.clip_count == 0
+    assert clip is None
+    assert calls == []
+
+
+def test_fetch_times_out():
+    async def go():
+        egg = FakeEgg([], clips=True)
+        await egg.start()
+        egg.clip_delay_s = 1.0
+        try:
+            await fetch_clip("127.0.0.1", egg.clip_port, timeout_s=0.1)
+        finally:
+            await egg.stop()
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(go())
+
+
+def test_freeze_only_starts_no_run_and_the_event_waits_for_the_subscription():
+    async def go():
+        egg = FakeEgg([], wake_word="Hey Robin", clips=True)
+        await egg.start()
+        try:
+            egg.freeze_only()  # nothing has connected, so there is no one to tell
+            clip = await fetch_clip("127.0.0.1", egg.clip_port)
+        finally:
+            await egg.stop()
+        return egg, clip
+
+    egg, clip = asyncio.run(go())
+    assert egg.clip_count == 1 and clip.count == 1
+    assert egg.runs == []
+    with wave.open(io.BytesIO(clip.wav), "rb") as w:
+        assert w.getnframes() == 5 * MIC_RATE
+
+
+def test_a_fake_egg_without_clips_serves_nothing():
+    async def go():
+        egg = FakeEgg([], wake_word="Hey Robin")
+        client, calls = await connected(egg)
+        try:
+            egg.wake()
+            await asyncio.sleep(0.1)
+        finally:
+            await client.disconnect()
+            await egg.stop()
+        return egg, calls
+
+    egg, calls = asyncio.run(go())
+    assert (egg.clip_port, egg.clip_count, calls) == (0, 0, [])
