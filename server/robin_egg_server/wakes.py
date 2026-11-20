@@ -27,8 +27,8 @@ RATE = 16000
 FALSE_CUT_S = 3.0
 
 KEYS = "[r] real  [f] false  [m] real, with a missed try before it  [d] delete  [space] play again  [s] skip  [q] quit"
-CUT_QUESTION = "Is this cut a clean Hey Robin? [y/n]"
-MISS_QUESTION = "Was this a Hey Robin the egg missed? [y/n]"
+CUT_QUESTION = "Is this cut a clean Hey Robin? [y/n]  [space] play again"
+MISS_QUESTION = "Was this a Hey Robin the egg missed? [y/n]  [space] play again"
 DELETE_QUESTION = "Delete this clip for good? [y/n]"
 
 
@@ -64,11 +64,14 @@ def _screen(n: int, total: int, entry: Entry) -> str:
     return f"{n} of {total}   {when:%a} {when.day} {when:%b %H:%M}   {what}   {entry.speaker or '-'}   {entry.suggested or '-'}"
 
 
-def _yes(ask: Callable[[str], str], question: str) -> bool:
+def _yes(ask: Callable[[str], str], question: str, again: Callable[[], None] | None = None) -> bool:
+    """Asks until y or n. With `again`, the space key calls it, to play the cut once more, and asks again."""
     while True:
         key = ask(question).lower()
         if key in ("y", "n"):
             return key == "y"
+        if key == " " and again is not None:
+            again()
 
 
 def review(store: WakeClipStore, play: Callable[[np.ndarray], None], ask: Callable[[str], str], out: Callable[[str], None] = print) -> int:
@@ -99,13 +102,15 @@ def review(store: WakeClipStore, play: Callable[[np.ndarray], None], ask: Callab
                 entry.label, entry.cut, entry.misses = REAL, None, []
                 if found:
                     start, end = found[-1]
-                    play(samples[start:end])
-                    if _yes(ask, CUT_QUESTION):
+                    cut = samples[start:end]
+                    play(cut)
+                    if _yes(ask, CUT_QUESTION, lambda: play(cut)):
                         entry.cut = (start, end)
                 if key == "m":
                     for start, end in found[:-1]:
-                        play(samples[start:end])
-                        if _yes(ask, MISS_QUESTION):
+                        attempt = samples[start:end]
+                        play(attempt)
+                        if _yes(ask, MISS_QUESTION, lambda: play(attempt)):
                             entry.misses.append((start, end))
                 store.write(entry)
                 labelled += 1
@@ -122,15 +127,20 @@ def review(store: WakeClipStore, play: Callable[[np.ndarray], None], ask: Callab
     return labelled
 
 
-def play(samples: np.ndarray) -> None:
-    """Plays the samples through afplay, from a temporary WAV, and returns when it ends."""
+def play(samples: np.ndarray, run: Callable[..., subprocess.CompletedProcess] = subprocess.run, out: Callable[[str], None] = print) -> None:
+    """Plays the samples through afplay, from a temporary WAV, and returns when it ends.
+
+    When afplay fails it says so in one line, so nobody answers a question about a cut they did not hear.
+    """
     with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
         with wave.open(tmp.name, "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
             w.setframerate(RATE)
             w.writeframes(samples.astype("<i2").tobytes())
-        subprocess.run(["afplay", tmp.name], check=False)
+        result = run(["afplay", tmp.name], check=False)
+    if result.returncode != 0:
+        out(f"afplay could not play the clip (it exited with code {result.returncode}), so it was not heard.")
 
 
 def ask(prompt: str) -> str:

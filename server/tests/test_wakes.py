@@ -6,13 +6,14 @@ Run from server/:  python -m pytest tests/test_wakes.py -q
 from __future__ import annotations
 
 import io
+import subprocess
 import wave
 from datetime import datetime, timedelta
 
 import numpy as np
 
 from robin_egg_server.wake_clips import FALSE, PROBABLY_REAL, REAL, STOPPED_A_REPLY, TURN, Entry, WakeClipStore
-from robin_egg_server.wakes import FALSE_CUT_S, RATE, review, spans
+from robin_egg_server.wakes import FALSE_CUT_S, RATE, play, review, spans
 
 START = datetime(2026, 11, 19, 8, 14, 0).astimezone()
 
@@ -110,7 +111,7 @@ def test_real_stores_the_last_span_once_confirmed(tmp_path):
     assert len(session.played) == 2
     assert np.array_equal(session.played[0], TWO_SPANS)
     assert np.array_equal(session.played[1], TWO_SPANS[last[0] : last[1]])
-    assert session.asked[-1] == "Is this cut a clean Hey Robin? [y/n]"
+    assert session.asked[-1] == "Is this cut a clean Hey Robin? [y/n]  [space] play again"
 
 
 def test_real_with_a_rejected_cut_keeps_the_label_only(tmp_path):
@@ -133,7 +134,7 @@ def test_missed_tries_are_stored(tmp_path):
     assert labelled.label == REAL
     assert labelled.cut == found[-1]
     assert labelled.misses == [found[0]]
-    assert session.asked[-2:] == ["Was this a Hey Robin the egg missed? [y/n]"] * 2
+    assert session.asked[-2:] == ["Was this a Hey Robin the egg missed? [y/n]  [space] play again"] * 2
     assert np.array_equal(session.played[2], THREE_SPANS[found[0][0] : found[0][1]])
     assert np.array_equal(session.played[3], THREE_SPANS[found[1][0] : found[1][1]])
 
@@ -221,3 +222,47 @@ def test_the_screen_shows_the_clip_and_the_keys(tmp_path):
     assert session.asked[:3] == [key_line] * 3  # an unknown key and a replay both show the keys again
     assert len(session.played) == 3  # the clip, its replay, then the next clip
     assert session.lines[1] == "2 of 2   Thu 19 Nov 08:15   stopped a reply   -   -"
+
+
+def test_space_plays_the_cut_again_before_the_answer(tmp_path):
+    store = WakeClipStore(tmp_path)
+    save(store, THREE_SPANS)
+    found = spans(THREE_SPANS)
+    session = Session("m", " ", "y", "y", " ", " ", "n")
+    assert session.run(store) == 1
+    [labelled] = store.entries()
+    assert labelled.cut == found[-1]
+    assert labelled.misses == [found[0]]
+    cut, first, second = (THREE_SPANS[start:end] for start, end in (found[2], found[0], found[1]))
+    expected = [THREE_SPANS, cut, cut, first, second, second, second]
+    assert len(session.played) == len(expected)
+    assert all(np.array_equal(heard, want) for heard, want in zip(session.played, expected))
+    cut_question = "Is this cut a clean Hey Robin? [y/n]  [space] play again"
+    miss_question = "Was this a Hey Robin the egg missed? [y/n]  [space] play again"
+    assert session.asked[1:] == [cut_question] * 2 + [miss_question] + [miss_question] * 3
+
+
+def test_space_does_not_answer_the_delete_question(tmp_path):
+    store = WakeClipStore(tmp_path)
+    save(store, TWO_SPANS)
+    session = Session("d", " ", "n", "s")
+    assert session.run(store) == 0
+    assert len(session.played) == 1
+    assert session.asked[1:3] == ["Delete this clip for good? [y/n]"] * 2
+
+
+def test_play_says_when_afplay_fails():
+    calls, lines = [], []
+
+    def afplay(args, **kwargs):
+        with wave.open(args[1], "rb") as w:
+            calls.append((args[0], w.getframerate(), w.readframes(w.getnframes())))
+        return subprocess.CompletedProcess(args, 1)
+
+    play(TWO_SPANS, run=afplay, out=lines.append)
+    assert calls == [("afplay", RATE, TWO_SPANS.astype("<i2").tobytes())]
+    assert lines == ["afplay could not play the clip (it exited with code 1), so it was not heard."]
+
+    play(TWO_SPANS, run=lambda args, **kwargs: subprocess.CompletedProcess(args, 0), out=lines.append)
+    assert len(lines) == 1
+
