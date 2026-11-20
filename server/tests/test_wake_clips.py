@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import wave
 from datetime import datetime, timedelta
@@ -15,10 +16,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 from aioesphomeapi import APIClient
+from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server import wake_clips
 from robin_egg_server.audio import MIC_RATE
+from robin_egg_server.egg import Options
 from robin_egg_server.fake_egg import FakeEgg
+from robin_egg_server.logs import TagFilter
 from robin_egg_server.wake_clips import (
     FROZEN_EVENT,
     PROBABLY_FALSE,
@@ -27,10 +31,12 @@ from robin_egg_server.wake_clips import (
     STOPPED_A_REPLY,
     TURN,
     Entry,
+    WakeClips,
     WakeClipStore,
     fetch_clip,
     suggest,
 )
+from test_server import TANNER, FakeEmbedder, FakeSTT, SlowBrain, ToneTTS, converse, identify_with, speech
 from test_speaker_stream import eventually
 
 NOW = datetime(2026, 11, 20, 9, 30, 0).astimezone()
@@ -367,3 +373,177 @@ def test_a_broken_reply_raises_os_error(reply):
 
     with pytest.raises(OSError):
         asyncio.run(go())
+
+
+# ---- keeping a clip of each "Hey Robin" wake during live turns ----
+
+
+def collector(store: WakeClipStore, egg: FakeEgg, timeout_s: float = 3.0, calls: list | None = None, **kw) -> WakeClips:
+    """A collector that fetches from the fake egg's clip server, whose port is only known once converse() starts it."""
+
+    async def fetch(host: str, port: int):
+        if calls is not None:
+            calls.append((host, port))
+        return await fetch_clip(host, egg.clip_port, timeout_s=timeout_s)
+
+    kw.setdefault("pair_window_s", 0.3)
+    return WakeClips(store, fetch=fetch, **kw)
+
+
+def run_with_clips(utterances, texts, replies, tmp_path, opts=None, egg=None, clips=None, scenario=None, **robin_kwargs):
+    """One conversation against a fake egg that freezes clips, then waits for every fetch and save to finish."""
+    egg = egg or FakeEgg(utterances, wake_word="Hey Robin", clips=True)
+    clips = clips or collector(WakeClipStore(tmp_path / "wakes"), egg)
+
+    async def go():
+        until = None
+        runner = None
+        if scenario is not None:
+            until = asyncio.Event()
+
+            async def drive():
+                try:
+                    await scenario(egg, clips.store)
+                finally:
+                    until.set()
+
+            runner = asyncio.create_task(drive())
+        result = await converse(utterances, FakeSTT(texts), SlowBrain(replies, pause=0), ToneTTS(), opts or Options(follow_up="off"), egg=egg, until=until, wake_clips=clips, **robin_kwargs)
+        if runner is not None:
+            await runner
+        await clips.settle()
+        return result
+
+    egg, robin = asyncio.run(go())
+    return egg, robin, clips.store
+
+
+def test_a_wake_that_starts_a_turn_leaves_a_clip_with_the_outcome(tmp_path):
+    _, _, store = run_with_clips([speech()], ["hi"], [["Hello. "]], tmp_path)
+    [e] = store.entries()
+    assert (e.kind, e.turn, e.outcome, e.suggested) == (TURN, "t1", "answered", PROBABLY_REAL)
+    assert (e.wake_word, e.count, e.model_round, e.cutoff) == ("Hey Robin", 1, "v1", 0.9)
+    assert e.speaker is None
+    assert store.samples(e).size == 5 * MIC_RATE
+
+
+def test_a_wake_where_nobody_spoke_is_suggested_false(tmp_path):
+    _, _, store = run_with_clips([], [], [], tmp_path)
+    [e] = store.entries()
+    assert (e.turn, e.outcome, e.suggested) == ("t1", "nobody spoke", PROBABLY_FALSE)
+
+
+def test_a_recognised_speaker_is_kept_with_the_clip(tmp_path):
+    _, _, store = run_with_clips([speech(2.0)], ["hi"], [["Hi Tanner. "]], tmp_path, **identify_with(FakeEmbedder([TANNER]), tmp_path))
+    [e] = store.entries()
+    assert e.speaker == "tanner"
+
+
+def test_a_wake_that_only_stops_a_reply_leaves_a_clip(tmp_path):
+    async def scenario(egg, store):
+        await eventually(lambda: egg._playout is not None)
+        egg.wake()
+        await eventually(lambda: len(store.entries()) == 2)
+
+    egg = FakeEgg([speech()], wake_word="Hey Robin", clips=True, wake_stops=True, reply_seconds=30.0)
+    _, _, store = run_with_clips([speech()], ["hi"], [["Hello there, nice to meet you. "]], tmp_path, egg=egg, scenario=scenario)
+    first, second = sorted(store.entries(), key=lambda e: e.count)
+    assert (first.kind, first.turn, first.count) == (TURN, "t1", 1)
+    assert (second.kind, second.turn, second.count, second.outcome, second.suggested) == (STOPPED_A_REPLY, "t1", 2, None, None)
+
+
+def test_other_wake_words_leave_no_clip(tmp_path):
+    calls: list = []
+    store = WakeClipStore(tmp_path / "wakes")
+    egg = FakeEgg([speech()], wake_word="Okay Nabu", clips=True)
+    run_with_clips([speech()], ["hi"], [["Hello. "]], tmp_path, egg=egg, clips=collector(store, egg, calls=calls))
+    assert egg.clip_count == 1
+    assert store.entries() == []
+    assert calls == []
+
+
+def test_a_follow_up_leaves_no_second_clip(tmp_path):
+    _, _, store = run_with_clips([speech(), speech()], ["hi", "and you"], [["Hello. "], ["Fine. "]], tmp_path, Options(follow_up="always"))
+    [e] = store.entries()
+    assert e.turn == "t1"
+
+
+def test_no_frozen_event_means_no_fetch_and_no_change(tmp_path):
+    calls: list = []
+    store = WakeClipStore(tmp_path / "wakes")
+    egg = FakeEgg([speech()], wake_word="Hey Robin")
+    egg, _, _ = run_with_clips([speech()], ["hi"], [["Hello. "]], tmp_path, egg=egg, clips=collector(store, egg, calls=calls))
+    assert store.entries() == [] and calls == []
+    plain, _ = asyncio.run(converse([speech()], FakeSTT(["hi"]), SlowBrain([["Hello. "]], pause=0), ToneTTS(), Options(follow_up="off"), egg=FakeEgg([speech()], wake_word="Hey Robin")))
+    assert [r.types() for r in egg.runs] == [r.types() for r in plain.runs]
+
+
+def first_audio_s(path: Path) -> float:
+    [line] = [json.loads(line) for line in path.read_text().splitlines()]
+    return line["first_audio_s"]
+
+
+def test_a_hanging_fetch_does_not_delay_the_turn(tmp_path, caplog):
+    caplog.handler.addFilter(TagFilter())
+    store = WakeClipStore(tmp_path / "wakes")
+    egg = FakeEgg([speech()], wake_word="Hey Robin", clips=True)
+    egg.clip_delay_s = 5.0
+    with caplog.at_level(logging.WARNING, logger="robin.wake_clips"):
+        run_with_clips([speech()], ["hi"], [["Hello. "]], tmp_path, Options(follow_up="off", turn_log=tmp_path / "with.jsonl"), egg=egg, clips=collector(store, egg, timeout_s=0.2))
+    asyncio.run(converse([speech()], FakeSTT(["hi"]), SlowBrain([["Hello. "]], pause=0), ToneTTS(), Options(follow_up="off", turn_log=tmp_path / "without.jsonl"), egg=FakeEgg([speech()], wake_word="Hey Robin")))
+    assert abs(first_audio_s(tmp_path / "with.jsonl") - first_audio_s(tmp_path / "without.jsonl")) <= 0.1
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and r.name == "robin.wake_clips"]
+    assert len(warnings) == 1
+    assert f"{warnings[0].tag}{warnings[0].getMessage()}".startswith("[t1]")
+    assert store.entries() == []
+
+
+def test_clip_numbers_restarting_after_a_reboot_are_kept(tmp_path):
+    async def scenario(egg, store):
+        await eventually(lambda: len(store.entries()) == 1)
+        egg.clip_count = 0  # the egg rebooted
+        egg.drop()
+        await eventually(lambda: len(store.entries()) == 2)
+
+    _, _, store = run_with_clips([speech(), speech()], ["hi", "hi again"], [["Hello. "], ["Hello again. "]], tmp_path, scenario=scenario)
+    assert sorted((e.turn, e.count) for e in store.entries()) == [("t1", 1), ("t2", 1)]
+
+
+def test_two_wakes_before_one_fetch_lose_the_first(tmp_path, caplog):
+    store = WakeClipStore(tmp_path / "wakes")
+    egg = FakeEgg([], wake_word="Okay Nabu", clips=True)
+    started: list[int] = []
+    fetched: list[int] = []
+
+    async def fetch(host, port):
+        started.append(1)
+        if len(started) == 1:
+            await asyncio.sleep(0.2)  # the first fetch is the slow one
+        clip = await fetch_clip(host, egg.clip_port)
+        fetched.append(clip.count)
+        return clip
+
+    clips = WakeClips(store, fetch=fetch, pair_window_s=0.3)
+
+    async def scenario(egg, store):
+        await eventually(lambda: egg.done.is_set())  # the Okay Nabu turn, count 1, is over
+        egg.wake_word = "Hey Robin"
+        egg.freeze_only()
+        egg.freeze_only()
+        await eventually(lambda: len(fetched) == 2)
+
+    with caplog.at_level(logging.INFO, logger="robin.wake_clips"):
+        run_with_clips([], [], [], tmp_path, egg=egg, clips=clips, scenario=scenario)
+    [e] = store.entries()
+    assert (e.kind, e.count) == (STOPPED_A_REPLY, 3)
+    assert "The clip for wake 2 was replaced by a later wake before it could be fetched, so it is lost" in caplog.text
+
+
+def test_an_unwritable_folder_costs_the_clip_not_the_turn(tmp_path, caplog):
+    (tmp_path / "a-file").write_text("not a folder")
+    store = WakeClipStore(tmp_path / "a-file")
+    egg = FakeEgg([speech()], wake_word="Hey Robin", clips=True)
+    with caplog.at_level(logging.WARNING, logger="robin.wake_clips"):
+        egg, _, _ = run_with_clips([speech()], ["hi"], [["Hello. "]], tmp_path, egg=egg, clips=collector(store, egg))
+    assert egg.runs[0].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Hello."
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING and r.name == "robin.wake_clips"]) == 1

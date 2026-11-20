@@ -77,3 +77,21 @@ def test_a_robin_assistant_too_old_for_the_speaker_chat_stops_the_server_before_
 def test_enrolment_audio_is_kept_beside_the_voiceprints_unless_told_otherwise(tmp_path):
     assert parse_args(["egg.local", "--echo"]).enrolment_audio == str(Path("~/.robin-egg/enrolment").expanduser())
     assert parse_args(["egg.local", "--echo", "--enrolment-audio", str(tmp_path)]).enrolment_audio == str(tmp_path)
+
+
+def test_wake_clips_are_on_by_default_and_can_be_turned_off(tmp_path, monkeypatch):
+    from robin_egg_server import voices
+    from robin_egg_server.__main__ import build
+    from robin_egg_server.wake_clips import DEFAULT_CLIP_PORT, DEFAULT_WAKES, WakeClips
+
+    monkeypatch.setattr(voices.WhisperSTT, "load", lambda self: None)
+    args = parse_args(["egg.local", "--echo"])
+    assert args.wake_clips_dir == DEFAULT_WAKES
+    assert args.wake_clip_port == DEFAULT_CLIP_PORT
+    common = ["egg.local", "--echo", "--tts", "say", "--no-speaker-recognition"]
+    robin, _ = build(parse_args([*common, "--wake-clips-dir", str(tmp_path / "wakes"), "--wake-clip-port", "8081"]))
+    assert isinstance(robin.wake_clips, WakeClips)
+    assert robin.wake_clips.store.root == tmp_path / "wakes" and robin.wake_clips.port == 8081
+    assert robin.opts.wake_clips == tmp_path / "wakes"
+    robin, _ = build(parse_args([*common, "--no-wake-clips"]))
+    assert robin.wake_clips is None and robin.opts.wake_clips is None

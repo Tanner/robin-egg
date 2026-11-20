@@ -25,6 +25,7 @@ from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .vad import VAD_KINDS
 from .turn_log import DEFAULT_TURN_LOG
 from .volume import MIN_VOLUME
+from .wake_clips import DEFAULT_CLIP_PORT, DEFAULT_WAKES, KEEP_UNLABELLED_S, WakeClips, WakeClipStore, keep_trimmed
 from .web import AudioServer
 
 LOG = logging.getLogger("robin")
@@ -115,6 +116,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--turn-log", metavar="FILE", default=str(DEFAULT_TURN_LOG), help="Where to record each turn's outcome and timings, for `python -m robin_egg_server.stats` (default ~/.robin-egg/turns.jsonl). No audio or words are recorded. Not used with --demo or --echo")
     p.add_argument("--no-turn-log", action="store_true", help="Do not record turns")
     p.add_argument("--turn-log-names", action="store_true", help="Also record who spoke each turn, not only whether they were recognised")
+    p.add_argument("--no-wake-clips", action="store_true", help="Do not keep a clip of each Hey Robin wake. Clips are on by default")
+    p.add_argument("--wake-clips-dir", metavar="DIR", type=lambda s: Path(s).expanduser(), default=DEFAULT_WAKES, help="Where the 5-second clip of each Hey Robin wake is kept for review and training (default ~/.robin-egg/wakes). Unlabelled clips are deleted after 14 days")
+    p.add_argument("--wake-clip-port", type=int, default=DEFAULT_CLIP_PORT, metavar="PORT", help=f"The egg's HTTP port for its frozen wake clip (default {DEFAULT_CLIP_PORT})")
     p.add_argument("--message-waiting", action=argparse.BooleanOptionalAction, default=True, help="Hold the messages Robin sends on its own outside --speaking-hours, breathe the egg's ring while any wait, and read them out to 'what did I miss?' (default on; off drops them)")
     p.add_argument("--morning-mention", action=argparse.BooleanOptionalAction, default=True, help="Once speaking hours have begun, end the first reply from Robin by saying how many held messages are waiting and how to hear them, once per batch (default on; needs --message-waiting)")
     p.add_argument("--min-volume", type=float, default=MIN_VOLUME, help=f"The quietest the egg can be set by voice, from 0 to 1 (default {MIN_VOLUME}). 'Set the volume to one' sets this")
@@ -257,6 +261,8 @@ def build(args: argparse.Namespace):
         min_volume=args.min_volume,
         digest=args.digest,
         digest_max=args.digest_max,
+        wake_clips=None if args.no_wake_clips else args.wake_clips_dir,
+        wake_clip_port=args.wake_clip_port,
     )
     if opts.thinking_cue and not opts.stream:
         LOG.info("The thinking sound is off, because it is carried in the streamed reply and --no-stream turns streaming off")
@@ -294,8 +300,13 @@ def build(args: argparse.Namespace):
         LOG.info("Speaker recognition is off, so every voice is sent as Unknown Speaker")
     if opts.turn_log is not None:
         LOG.info("Recording each turn's outcome and timings, but no audio or words, in %s", opts.turn_log)
+    wake_clips = None
+    if opts.wake_clips is not None:
+        wake_clips = WakeClips(WakeClipStore(opts.wake_clips), port=opts.wake_clip_port)
+        LOG.info("Keeping a clip of each Hey Robin wake in %s; unlabelled clips are deleted after %d days", opts.wake_clips, KEEP_UNLABELLED_S // 86400)
     web = AudioServer()
-    return Robin(stt, brain, tts, web, VoiceAssistantEventType, opts, speakers=speakers, people=people, commands=commands, ring=ring, colours=colours, enrol_offer=enrol_offer), web
+    robin = Robin(stt, brain, tts, web, VoiceAssistantEventType, opts, speakers=speakers, people=people, commands=commands, ring=ring, colours=colours, enrol_offer=enrol_offer, wake_clips=wake_clips)
+    return robin, web
 
 
 def log_enrolment(people: list[Person] | None, store: VoiceprintStore) -> None:
@@ -322,6 +333,7 @@ async def run(args: argparse.Namespace) -> None:
         trimmer = asyncio.create_task(keep_captures_trimmed(robin.opts.save_audio, args.save_audio_hours * 3600, trimming))
     elif robin.opts.save_audio is not None:
         LOG.warning("Mic captures in %s are kept until you delete them (--save-audio-hours 0)", robin.opts.save_audio)
+    clip_trimmer = asyncio.create_task(keep_trimmed(robin.wake_clips.store, trimming)) if robin.wake_clips is not None else None
     try:
         if hasattr(robin.brain, "check"):
             await robin.brain.check()
@@ -377,8 +389,11 @@ async def run(args: argparse.Namespace) -> None:
                 await robin.outcomes.close()
     finally:
         trimming.set()
-        if trimmer is not None:
-            await trimmer
+        for task in (trimmer, clip_trimmer):
+            if task is not None:
+                await task
+        if robin.wake_clips is not None:
+            await robin.wake_clips.settle()
         if hasattr(robin.brain, "close"):
             await robin.brain.close()
 

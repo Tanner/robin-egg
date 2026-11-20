@@ -8,6 +8,7 @@ label and cuts. Unlabelled clips are deleted after 14 days; labelled ones stay.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import http.client
 import json
 import logging
@@ -19,10 +20,12 @@ import wave
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Awaitable, Callable
 
 import numpy as np
 
 from . import turn_log
+from .logs import tagged
 
 LOG = logging.getLogger("robin.wake_clips")
 
@@ -35,6 +38,12 @@ FROZEN_EVENT = "esphome.wake_clip_frozen"
 # X-Model-Round and X-Cutoff. It answers 404 before the first freeze.
 CLIP_PATH = "/wake-clip"
 DEFAULT_CLIP_PORT = 8080
+
+# Only wakes by this model are kept; the others are the stock models, which are not being trained.
+KEPT_WAKE_WORD = "Hey Robin"
+# A frozen event and a turn start this close together, in either order, are the same wake.
+PAIR_WINDOW_S = 2.0
+TRIM_EVERY_S = 86400.0
 
 # What a wake did: started a turn, or cut off a reply, a message or a ringing timer.
 TURN, STOPPED_A_REPLY = "turn", "stopped a reply"
@@ -241,3 +250,228 @@ def _write_atomically(path: Path, data: bytes) -> None:
     with os.fdopen(fd, "wb") as f:
         f.write(data)
     os.replace(tmp, path)
+
+
+@dataclass
+class _Wake:
+    """A "Hey Robin" event from the egg."""
+
+    count: int
+    time: str  # ISO, local, with offset: when the event came
+    cut_off: str | None  # the tag of the turn or message that was going on when it came
+    at: float  # the same moment on the monotonic clock
+    timer: asyncio.TimerHandle | None = None  # files it as stopping a reply if no turn claims it in time
+
+
+@dataclass
+class _TurnClip:
+    """A turn a "Hey Robin" wake started, from its start until its clip is saved or lost."""
+
+    tag: str
+    at: float  # when the turn started, on the monotonic clock
+    wake: _Wake | None = None  # None until its event comes
+    listened: bool = False  # listening has ended, so the clip may be fetched
+    recorded: bool = False  # the turn log has its outcome
+    outcome: str | None = None
+    speaker: str | None = None
+    clip: FetchedClip | None = None  # fetched, waiting for the outcome
+
+
+class WakeClips:
+    """Pairs each frozen clip with the turn it started, fetches it, and files it.
+
+    Nothing here is awaited by a turn: each fetch and each save runs in its own task, and
+    any failure there is one warning and a lost clip.
+    """
+
+    def __init__(
+        self,
+        store: WakeClipStore,
+        port: int = DEFAULT_CLIP_PORT,
+        fetch: Callable[[str, int], Awaitable[FetchedClip | None]] = fetch_clip,
+        pair_window_s: float = PAIR_WINDOW_S,
+    ) -> None:
+        self.store, self.port, self._fetch, self.pair_window_s = store, port, fetch, pair_window_s
+        self.host: str | None = None
+        self.other_wakes = 0  # events for other wake words, which are never fetched
+        self._wakes: list[_Wake] = []  # "Hey Robin" events no turn has claimed yet, oldest first
+        self._turns: dict[str, _TurnClip] = {}  # "Hey Robin" turns waiting for their event, their clip or their outcome
+        self._last_count: int | None = None  # the newest wake count the egg has reported on this connection
+        self._tasks: set[asyncio.Task] = set()
+
+    def connected(self, host: str) -> None:
+        self.host = host
+
+    def disconnected(self) -> None:
+        """Forgets pending wakes and the last count: the egg may have rebooted, which restarts its count."""
+        for wake in self._wakes:
+            if wake.timer is not None:
+                wake.timer.cancel()
+        self._wakes.clear()
+        self._turns.clear()
+        self._last_count = None
+        self.host = None
+
+    def frozen(self, count: int, wake_word: str, cut_off: str | None) -> None:
+        """The egg froze clip `count` for a wake by `wake_word`. cut_off is what was going on then, if anything."""
+        if self._last_count is not None and count <= self._last_count:
+            LOG.info("The egg reported wake %d after wake %d on the same connection, so it is ignored", count, self._last_count)
+            return
+        self._last_count = count
+        if wake_word != KEPT_WAKE_WORD:
+            self.other_wakes += 1
+            LOG.debug("Not keeping the clip for wake %d: it was %s, and only %s wakes are kept", count, wake_word, KEPT_WAKE_WORD)
+            return
+        now = time.monotonic()
+        wake = _Wake(count, datetime.now().astimezone().isoformat(timespec="seconds"), cut_off, now)
+        turn = self._unclaimed_turn(now)
+        if turn is not None:
+            turn.wake = wake
+            if turn.listened:
+                self._fetch_for_turn(turn)
+            return
+        wake.timer = asyncio.get_running_loop().call_later(self.pair_window_s, self._no_turn, wake)
+        self._wakes.append(wake)
+
+    def turn_started(self, tag: str, wake_word: str | None, follow_up: bool) -> None:
+        if follow_up or wake_word != KEPT_WAKE_WORD:
+            return
+        now = time.monotonic()
+        turn = self._turns[tag] = _TurnClip(tag, now)
+        # The newest event: an older one still in the window was a wake that started nothing.
+        if self._wakes and now - self._wakes[-1].at <= self.pair_window_s:
+            turn.wake = self._wakes.pop()
+            if turn.wake.timer is not None:
+                turn.wake.timer.cancel()
+
+    def listening_ended(self, tag: str) -> None:
+        turn = self._turns.get(tag)
+        if turn is None or turn.listened:
+            return
+        turn.listened = True
+        if turn.wake is not None:
+            self._fetch_for_turn(turn)
+
+    def turn_recorded(self, tag: str, outcome: str, speaker: str | None) -> None:
+        turn = self._turns.get(tag)
+        if turn is None or turn.recorded:
+            return
+        turn.recorded, turn.outcome, turn.speaker = True, outcome, speaker
+        if turn.clip is not None:
+            self._spawn(self._save_turn(turn), tag)
+
+    async def settle(self) -> None:
+        """Waits for every fetch and save in flight, including any they start."""
+        while self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    # ---- pairing ----
+
+    def _unclaimed_turn(self, now: float) -> _TurnClip | None:
+        """The newest turn still waiting for its event, dropping those that waited longer than the window."""
+        for tag, turn in list(self._turns.items()):
+            if turn.wake is None and now - turn.at > self.pair_window_s:
+                del self._turns[tag]  # an egg without the clip component sends no event
+        waiting = [t for t in self._turns.values() if t.wake is None]
+        return waiting[-1] if waiting else None
+
+    def _no_turn(self, wake: _Wake) -> None:
+        with contextlib.suppress(ValueError):
+            self._wakes.remove(wake)
+        with tagged(wake.cut_off or ""):
+            LOG.info("Wake %d started no turn, so its clip is kept as one that stopped %s", wake.count, wake.cut_off or "nothing in particular")
+            self._spawn(self._keep_stopped(wake), wake.cut_off)
+
+    # ---- fetching and saving ----
+
+    def _spawn(self, coro: Awaitable[None], tag: str | None) -> None:
+        async def run() -> None:
+            with tagged(tag or ""):
+                try:
+                    await coro
+                except Exception as err:  # noqa: BLE001 - a lost clip must never reach the turn
+                    LOG.warning("Could not keep a wake clip, so it is lost: %s", _describe(err))
+
+        task = asyncio.get_running_loop().create_task(run())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    def _fetch_for_turn(self, turn: _TurnClip) -> None:
+        async def fetch() -> None:
+            clip = await self._fetched(turn.wake)
+            if clip is None:
+                self._turns.pop(turn.tag, None)
+                return
+            turn.clip = clip
+            if turn.recorded:
+                await self._save_turn(turn)
+
+        self._spawn(fetch(), turn.tag)
+
+    async def _fetched(self, wake: _Wake) -> FetchedClip | None:
+        """The clip for this wake, or None, with a warning, when it cannot be had."""
+        host = self.host
+        if host is None:
+            LOG.warning("Could not fetch the clip for wake %d, so it is lost: the egg is not connected", wake.count)
+            return None
+        try:
+            clip = await self._fetch(host, self.port)
+        except (OSError, asyncio.TimeoutError) as err:
+            LOG.warning("Could not fetch the clip for wake %d from %s:%d, so it is lost: %s", wake.count, host, self.port, _describe(err))
+            return None
+        if clip is None:
+            LOG.warning("The egg had no clip to give for wake %d, so it is lost", wake.count)
+            return None
+        if clip.count > wake.count:
+            LOG.warning("The clip for wake %d was replaced by a later wake before it could be fetched, so it is lost", wake.count)
+            return None
+        if clip.count < wake.count:
+            LOG.warning("The egg gave the clip for wake %d when wake %d was asked for, so it is lost", clip.count, wake.count)
+            return None
+        return clip
+
+    async def _save_turn(self, turn: _TurnClip) -> None:
+        self._turns.pop(turn.tag, None)
+        assert turn.wake is not None and turn.clip is not None
+        await self._save(turn.clip, turn.wake, TURN, turn.tag, turn.outcome, turn.speaker)
+
+    async def _keep_stopped(self, wake: _Wake) -> None:
+        clip = await self._fetched(wake)
+        if clip is not None:
+            await self._save(clip, wake, STOPPED_A_REPLY, wake.cut_off, None, None)
+
+    async def _save(self, clip: FetchedClip, wake: _Wake, kind: str, turn: str | None, outcome: str | None, speaker: str | None) -> None:
+        entry = Entry(
+            path=None,
+            time=wake.time,
+            kind=kind,
+            turn=turn,
+            wake_word=clip.wake_word,
+            count=clip.count,
+            model_round=clip.model_round,
+            cutoff=clip.cutoff,
+            outcome=outcome,
+            speaker=speaker,
+            suggested=suggest(kind, outcome),
+        )
+        try:
+            await asyncio.to_thread(self.store.save, clip.wav, entry)
+        except OSError as err:
+            LOG.warning("Could not save the clip for wake %d in %s, so it is lost: %s", wake.count, self.store.root, _describe(err))
+
+
+def _describe(err: BaseException) -> str:
+    if isinstance(err, asyncio.TimeoutError):
+        return str(err) or "the egg took too long to send it"
+    return str(err) or type(err).__name__
+
+
+async def keep_trimmed(store: WakeClipStore, stop: asyncio.Event, every_s: float = TRIM_EVERY_S) -> None:
+    """Deletes unlabelled clips past their 14 days now and then once a day, for the life of the server."""
+    while not stop.is_set():
+        try:
+            await asyncio.to_thread(store.trim)
+        except OSError as err:
+            LOG.warning("Could not delete old wake clips from %s; trying again in a day: %s", store.root, err)
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(stop.wait(), every_s)

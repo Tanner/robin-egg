@@ -57,7 +57,7 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | Decision | Why |
 | --- | --- |
 | A voice the server cannot identify is "Unknown Speaker", with a limited set of skills. No "household" fallback | Unsure means unknown, not one of us |
-| Keep no audio, except the sentences of an enrolment, which "forget my voice" deletes. A debug switch keeps turn audio for 24 hours | Privacy. Enrolment audio lets voiceprints be rebuilt and tested without anyone enrolling again (changed 2026-11-19) |
+| Keep no audio, except the sentences of an enrolment, which "forget my voice" deletes, and the 5-second clip of each "Hey Robin" wake. A debug switch keeps turn audio for 24 hours | Privacy. Enrolment audio lets voiceprints be rebuilt and tested without anyone enrolling again (changed 2026-11-19). Wake clips show how well the wake word works and train its next round (changed 2026-11-20) |
 | v1 prototype has no presence sensor. mmWave and light sensor come later | Keep v1 small |
 | Add the `voice` Method to robin-assistant after build step 3 | The server works end to end first |
 | robin-assistant port and `[users]` keys get set up when integration starts | Not needed before then |
@@ -136,3 +136,9 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | Voices do not count while the microphone is muted, while the egg is busy, or for 12 s after it plays or a conversation ends | Mute asks for quiet. The egg's own speech, and the beam locking and unlocking around a turn, must not look like someone in the room. A turn already tells Robin who spoke |
 | Each fact carries its own `description`, which Robin reads after the time, instead of explaining the facts in Robin's prompt | Whoever posts a fact explains it, so a new fact needs no prompt edit in another repo. Every egg fact got one |
 | TV and radio count as voices | Nothing on the egg can tell them apart from people. The description says so, so Robin can weigh it |
+
+## Wake clips, decided 2026-11-20
+
+| Decision | Why |
+| --- | --- |
+| The server keeps the 5-second clip the egg froze for each "Hey Robin" wake, with what it knows about the turn. Unlabelled clips are deleted after 14 days; labelled ones stay as training data | Real wakes in the room are the only way to count false wakes and misses, and they are the takes the next model round needs. An unlabelled clip is room audio nobody has listened to, so it is not kept for long |

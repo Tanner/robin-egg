@@ -58,6 +58,7 @@ from .vad import ModelVad, make_vad
 from .turn_log import ANSWERED, ASKED_AGAIN, FAILED, LOCAL_COMMAND, NOBODY_SPOKE, NOTHING_RECOGNISED, OVERHEARD, QUIET, TurnLog, TurnRecord
 from .voices import SpeechToText, TextToSpeech
 from .waiting import MessageWaiting, is_missed_question
+from .wake_clips import DEFAULT_CLIP_PORT, FROZEN_EVENT, WakeClips
 from .volume import MIN_VOLUME, EggVolume
 from .web import AudioServer
 
@@ -126,6 +127,8 @@ class Options:
     digest_max: int = digests.DEFAULT_MAX  # the most messages in one digest; the rest follow in another
     morning_mention: bool = True  # once speaking hours begin, end one reply by saying that messages are waiting
     overheard: str = "log"  # what a follow-up that looks meant for someone else does: log | close | off
+    wake_clips: Path | None = None  # where a clip of each "Hey Robin" wake is kept; off if None
+    wake_clip_port: int = DEFAULT_CLIP_PORT  # the egg's HTTP port for its frozen wake clip
 
 
 @dataclass
@@ -177,6 +180,7 @@ class Robin:
         ring: LedRing | None = None,
         colours: PersonColours | None = None,
         enrol_offer: EnrolOffer | None = None,
+        wake_clips: WakeClips | None = None,
     ) -> None:
         self.stt, self.brain, self.tts, self.web = stt, brain, tts, web
         self.E = events  # aioesphomeapi.VoiceAssistantEventType
@@ -186,6 +190,7 @@ class Robin:
         self.room = RoomVolume(self.opts.quiet_hours, self.opts.quiet_volume, self.opts.match_voice)
         self.ring, self.colours = ring, colours or PersonColours()
         self.enrol_offer = enrol_offer
+        self.wake_clips = wake_clips
         self.volume = EggVolume(min_volume=self.opts.min_volume)  # the egg's speaker volume, while it is connected
         self.last_match: Match | None = None  # who spoke the previous turn, for follow-ups to inherit
         self.last_said = LastSaid(self.opts.repeat_window_s)  # text only, for "say that again"
@@ -216,6 +221,7 @@ class Robin:
         self._proactive_front = 0  # numbers the messages put back at the front of the queue, counting down
         self._proactive_worker: asyncio.Task | None = None
         self._proactive_task: asyncio.Task | None = None  # the message being spoken now
+        self._proactive_tag: str | None = None  # its tag, for a wake clip that cuts it off
         self._proactive_stopped_by = ""  # why the message being spoken was cut short
         self._answer_wanted = False  # the message being spoken asked the egg to listen once it has played
         self._answering: str | None = None  # the message the egg's next run answers, as the log names it
@@ -268,8 +274,10 @@ class Robin:
                 elif previous_turn.task is None:
                     if previous_turn.listening:
                         LOG.info("The egg started a new run while this turn was still listening; dropping this turn")
+                        if self.wake_clips is not None:
+                            self.wake_clips.listening_ended(previous_turn.tag)
                     await previous_turn.reply.close()  # it never got to answer
-                    self.turn_log.turn(previous_turn)
+                    self._record_turn(previous_turn)
         # The firmware reports the last wake word on every run, follow-ups included, so the
         # phrase alone cannot say whether someone just woke the egg. A follow-up starts as
         # soon as the reply finishes playing; a wake word heard later is a new conversation.
@@ -301,6 +309,8 @@ class Robin:
         reply = ReplyAudio()
         url = self.web.add(reply, tag)
         self.turn = Turn(make_vad(self.opts.vad, cfg), reply, url, wake_word_phrase, follow_up, tag=tag, answering_id=answering_id, answering=answering)
+        if self.wake_clips is not None:
+            self.wake_clips.turn_started(tag, wake_word_phrase, follow_up)
         with tagged(self.turn.tag):
             if answering:
                 LOG.info("Answer to message %s: listening for %.0f s", answering, cfg.no_speech_timeout_s)
@@ -339,7 +349,9 @@ class Robin:
                 else:
                     self.last_turn = (time.time(), "cancelled")
                     self._turn_ended_at = self.played_clock()
-                    self.turn_log.turn(t)
+                    if self.wake_clips is not None:
+                        self.wake_clips.listening_ended(t.tag)
+                    self._record_turn(t)
             elif t.listening:
                 t.vad.reason = "the egg ended the audio stream"
                 self._end_listening(t)
@@ -372,6 +384,8 @@ class Robin:
             LOG.info(describe_level(bytes(t.audio), t.vad.threshold if isinstance(t.vad, EnergyVad) else None))
         self._save_capture(t)
         t.task = asyncio.create_task(self._respond(t))
+        if self.wake_clips is not None:
+            self.wake_clips.listening_ended(t.tag)
 
     async def _close_without_reply(self, t: Turn) -> None:
         """Ends a turn that has no reply, with the closing sound so the person knows the egg stopped listening.
@@ -536,7 +550,14 @@ class Robin:
             self._state.set()
             if self.ring is not None and self.turn is t:
                 self.ring.give_back_at(time.monotonic() + max(0.0, self._playback_until - self.played_clock()))  # at once if nothing is playing
-            self.turn_log.turn(t)
+            self._record_turn(t)
+
+    def _record_turn(self, t: Turn) -> None:
+        """Writes the turn's log line, and gives its outcome to the wake clip it started, if any."""
+        self.turn_log.turn(t)
+        if self.wake_clips is not None:
+            match = t.log.match
+            self.wake_clips.turn_recorded(t.tag, t.log.outcome, match.key if match is not None else None)
 
     def _overheard(self, t: Turn, heard: str) -> bool:
         """Records the signs that this turn's speech was meant for someone else, and says whether to close for them.
@@ -1240,6 +1261,7 @@ class Robin:
                     self._message_outcome(msg, f"dropped, {nobody}")
                     continue
                 self._proactive_stopped_by = ""
+                self._proactive_tag = msg.tag
                 if self._nudges(msg.low):
                     await self._nudge(msg)
                     continue
@@ -1579,6 +1601,10 @@ class Robin:
                 if self.waiting is not None:
                     await self.waiting.attach(client)
                 await self.volume.attach(client)
+                if self.wake_clips is not None:
+                    self.wake_clips.connected(host)
+                    # Before the voice assistant: the egg tells only a subscriber about a wake it froze.
+                    client.subscribe_service_calls(self._on_service_call)
                 client.subscribe_voice_assistant(
                     handle_start=self.handle_start,
                     handle_stop=self.handle_stop,
@@ -1608,6 +1634,8 @@ class Robin:
                 if self.waiting is not None:
                     self.waiting.detach()
                 self.volume.detach()
+                if self.wake_clips is not None:
+                    self.wake_clips.disconnected()
                 self._state.set()
                 self._egg_connected(False)
                 self.last_match = None  # the next conversation starts fresh, whoever is in the room by then
@@ -1661,6 +1689,31 @@ class Robin:
             raise
         except Exception as err:  # noqa: BLE001 - a missed chime must never cost the connection
             LOG.warning("The egg did not play the ready sound (%s)", str(err) or type(err).__name__)
+
+    def _on_service_call(self, call: Any) -> None:
+        """An action or event the egg would send Home Assistant. Only the wake clip event is used; it never raises into the API client."""
+        if not call.is_event or call.service != FROZEN_EVENT:
+            return
+        try:
+            count, wake_word = int(call.data["count"]), call.data["wake_word"]
+        except (KeyError, ValueError, TypeError) as err:
+            LOG.warning("Ignoring a wake clip event from the egg that could not be read (%s): %s", err, dict(call.data))
+            return
+        try:
+            self.wake_clips.frozen(count, wake_word, self._cut_off())
+        except Exception:  # noqa: BLE001 - a wake clip is never worth the connection
+            LOG.exception("Could not handle the egg's wake clip event for wake %d", count)
+
+    def _cut_off(self) -> str | None:
+        """The tag of what a wake heard now would stop: the turn whose answer is coming or playing, else the message being spoken."""
+        t = self.turn
+        # A reply plays until the egg reports it finished, but no longer than the clock says it could.
+        playing = t is not None and bool(t.play_end) and not t.finish_seen and self.played_clock() < t.play_end + digests.PLAYED_MARGIN_S
+        if t is not None and ((t.task is not None and not t.task.done()) or playing):
+            return t.tag
+        if self._proactive_task is not None and not self._proactive_task.done():
+            return self._proactive_tag
+        return None
 
     def _egg_connected(self, connected: bool) -> None:
         if self.room_context is not None:

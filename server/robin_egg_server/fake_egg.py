@@ -167,7 +167,8 @@ class FakeEgg:
 
         lead_s is the room noise before each utterance; 0 is someone already talking when the mic opens.
 
-        clips turns on the wake clip component. Each freeze copies clip_audio, 16 kHz 16-bit
+        clips turns on the wake clip component. Every wake freezes a clip: the first run, a run
+        wake_words starts and wake(), but not a follow-up. Each freeze copies clip_audio, 16 kHz 16-bit
         mono PCM, or 5 s of silence when it is None, and the clip is served with model_round and
         cutoff in its headers."""
         self.volume, self.speaker_muted = volume, speaker_muted
@@ -299,6 +300,7 @@ class FakeEgg:
         elif isinstance(msg, pb.SubscribeVoiceAssistantRequest) and msg.subscribe:
             await asyncio.sleep(0.05)
             first = self.wake_words[0] if self.wake_words else None
+            self._freeze(first or self.wake_word)  # the first run stands for a wake word heard
             self._start_run(first or self.wake_word)
         elif isinstance(msg, pb.VoiceAssistantResponse):
             assert msg.port == 0 and not msg.error
@@ -427,10 +429,14 @@ class FakeEgg:
         """Freeze a clip and send its event, as a wake does, without starting or stopping a run."""
         self._freeze()
 
-    def _freeze(self) -> None:
-        """Like the firmware: with the mute switch off, freeze the clip, then tell the server if it has subscribed."""
+    def _freeze(self, wake_word: str | None = None) -> None:
+        """Like the firmware: with the mute switch off, freeze the clip, then tell the server if it has subscribed.
+
+        wake_word is the phrase heard, the egg's own wake word unless a run says otherwise.
+        """
         if not self.clips or self.muted:
             return
+        wake_word = wake_word or self.wake_word
         self.clip_count += 1
         pcm = self.clip_audio if self.clip_audio is not None else bytes(5 * MIC_RATE * 2)
         buf = io.BytesIO()
@@ -439,9 +445,9 @@ class FakeEgg:
             w.setsampwidth(2)
             w.setframerate(MIC_RATE)
             w.writeframes(pcm)
-        self._frozen = (self.clip_count, self.wake_word, buf.getvalue())
+        self._frozen = (self.clip_count, wake_word, buf.getvalue())
         if self._services_subscribed and self._w is not None:
-            data = {"count": str(self.clip_count), "wake_word": self.wake_word}
+            data = {"count": str(self.clip_count), "wake_word": wake_word}
             self.send(
                 pb.HomeassistantActionRequest(
                     service=FROZEN_EVENT, is_event=True, data=[pb.HomeassistantServiceMap(key=k, value=v) for k, v in data.items()]
@@ -560,6 +566,7 @@ class FakeEgg:
     def _after_run(self, run: Run) -> None:
         following = self.wake_words[len(self.runs)] if self.wake_words and len(self.runs) < len(self.wake_words) else None
         if following is not None:
+            self._freeze(following)
             self._start_run(following)  # someone said the wake word instead of waiting
         elif run.data(pb.VOICE_ASSISTANT_INTENT_END).get("continue_conversation") == "1":
             # The firmware reopens its mic without listening for a wake word, but still
