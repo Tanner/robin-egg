@@ -31,6 +31,7 @@ class WakeClip : public Component {
   void set_microphone_source(microphone::MicrophoneSource *source) { this->microphone_source_ = source; }
   void set_capacity_bytes(size_t capacity_bytes) { this->capacity_bytes_ = capacity_bytes; }
   void set_port(uint16_t port) { this->port_ = port; }
+  void set_max_client_sockets(uint8_t max_client_sockets) { this->max_client_sockets_ = max_client_sockets; }
   void set_model_round(const std::string &model_round) { this->model_round_ = model_round; }
   void set_cutoff(const std::string &cutoff) { this->cutoff_ = cutoff; }
 
@@ -50,6 +51,7 @@ class WakeClip : public Component {
   microphone::MicrophoneSource *microphone_source_{nullptr};
   size_t capacity_bytes_{0};
   uint16_t port_{8080};
+  uint8_t max_client_sockets_{2};
   std::string model_round_;
   std::string cutoff_;
 

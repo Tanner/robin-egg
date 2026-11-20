@@ -6,11 +6,12 @@ micro_wake_word or voice_assistant has it running, and never starts, stops or re
 
 from esphome import automation
 import esphome.codegen as cg
-from esphome.components import microphone
+from esphome.components import microphone, socket
 from esphome.components.esp32 import include_builtin_idf_component
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_MICROPHONE, CONF_PORT, CONF_SECONDS
 
+AUTO_LOAD = ["socket"]
 DEPENDENCIES = ["microphone", "psram"]
 
 CONF_CUTOFF = "cutoff"
@@ -19,6 +20,10 @@ CONF_WAKE_WORD = "wake_word"
 
 # The wake word model hears 16 kHz audio, so the clip is kept at that rate.
 SAMPLE_RATE = 16000
+
+# The HTTP server's client connections. wake_clip.cpp sets httpd's max_open_sockets from
+# this, so the firmware's socket pool always holds every socket the server can open.
+MAX_CLIENT_SOCKETS = 2
 
 wake_clip_ns = cg.esphome_ns.namespace("wake_clip")
 WakeClip = wake_clip_ns.class_("WakeClip", cg.Component)
@@ -42,6 +47,11 @@ CONFIG_SCHEMA = cv.All(
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on_esp32,
+    # Counted in CONFIG_LWIP_MAX_SOCKETS: the clients, the listening socket, and the UDP
+    # control socket ESP-IDF's httpd keeps open for as long as it runs.
+    socket.consume_sockets(MAX_CLIENT_SOCKETS, "wake_clip"),
+    socket.consume_sockets(1, "wake_clip", socket.SocketType.TCP_LISTEN),
+    socket.consume_sockets(1, "wake_clip", socket.SocketType.UDP),
 )
 
 FINAL_VALIDATE_SCHEMA = cv.Schema(
@@ -66,6 +76,7 @@ async def to_code(config):
     cg.add(var.set_microphone_source(mic_source))
     cg.add(var.set_capacity_bytes(config[CONF_SECONDS] * SAMPLE_RATE * 2))
     cg.add(var.set_port(config[CONF_PORT]))
+    cg.add(var.set_max_client_sockets(MAX_CLIENT_SOCKETS))
     cg.add(var.set_model_round(config[CONF_MODEL_ROUND]))
     cg.add(var.set_cutoff(config[CONF_CUTOFF]))
 

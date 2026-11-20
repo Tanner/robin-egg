@@ -165,7 +165,7 @@ bool WakeClip::start_server_() {
   // Its own control port, so it cannot collide with another ESP-IDF HTTP server on the default.
   config.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 1;
   config.max_uri_handlers = 1;
-  config.max_open_sockets = 2;
+  config.max_open_sockets = this->max_client_sockets_;
   config.lru_purge_enable = true;
   config.recv_wait_timeout = 3;
   config.send_wait_timeout = 3;
