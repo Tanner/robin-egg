@@ -69,6 +69,7 @@ To open it: unplug the USB-C cable, then pull the top straight up.
 
 From the first assembly, 2026-11-19. Everything fitted once the speaker was mounted as described.
 
+- **Print the body in matte robin's-egg blue** (about `#ADE5E7`, as in the renders). The first one was black.
 - **Print the top in white or translucent filament.** The LEDs work, but they don't show through a black top at all, even over the 1.2 mm ring. Black blocks the light at any thickness. The body and base can stay any colour.
 - **Make the top hold on more firmly.** The push-on top sits loosely and doesn't pop on. Two ways:
   - **Top only:** about 6 small vertical crush ribs inside the top's rim, each pressing about 0.2 mm into the body's lip. Gives a firm friction fit, but no click.

@@ -42,7 +42,7 @@ Tanner's point (2026-11-15): a lone egg looks awkward and like it could roll. Ry
 ## Colour
 
 - **Prototype in what is on hand:** a white egg, with black fabric or a black foot if you want contrast. White PLA at about 1.2 mm thick glows nicely over the LEDs. Colour does not matter for the acoustic tests.
-- **Final:** buy matte robin's-egg blue for the body, and keep the crown white or translucent so the LED glow stays clean. Blue over the LEDs tints and dims them. If the nest gets printed, black or a brown or wood-fill filament.
+- **Final:** buy matte robin's-egg blue for the body, matching the cylinder mock renders (about `#ADE5E7`), and keep the crown white or translucent so the LED glow stays clean. Blue over the LEDs tints and dims them. If the nest gets printed, black or a brown or wood-fill filament.
 - Matte filament hides layer lines on the curve. American robin eggs are plain blue, so no speckles are needed.
 
 ## Board and driver facts used

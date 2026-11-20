@@ -20,6 +20,8 @@ The egg is wall powered. There is no battery.
 
 Not bought yet, all for the enclosure stage. The full list with sizes is in the [CAD hardware table](../cad/egg/README.md#hardware). Still needed: foam tape or silicone for the chamber seal, hot glue for the wire holes, polyester damping fill, and heat-shrink. Rubber feet and acoustic fabric can wait until after the half-egg test rig. The board standoffs are printed into the chassis, and the USB-C cable plugs straight into the XIAO port, so no standoffs or panel-mount socket are needed. A mic mute slide switch is only needed if the open mute question goes that way.
 
+Filament for the next cylinder print (2026-11-19): **matte robin's-egg blue PLA** for the body, matching the mock renders (about `#ADE5E7`, a pale blue-green), and **white or translucent PLA or PETG** for the top, so the LEDs show through. The first print was all black.
+
 Optional sensors for later: LD2410-type mmWave presence, SHT4x temperature and humidity, VEML7700 light.
 
 ## Board facts
