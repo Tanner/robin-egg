@@ -325,6 +325,15 @@ def log_enrolment(people: list[Person] | None, store: VoiceprintStore) -> None:
         LOG.info("No voiceprints loaded yet; %s. Say 'learn my voice' to enrol", rest)
 
 
+def wake_clip_trimmer(folder: Path, keeping: bool, stop: asyncio.Event) -> asyncio.Task | None:
+    """Deletes old unlabelled wake clips once a day while clips are kept, or while the folder holds clips from before they were turned off."""
+    if not keeping:
+        if not folder.is_dir():
+            return None
+        LOG.info("Wake clips are off (--no-wake-clips), but the unlabelled clips already in %s are still deleted after %d days", folder, KEEP_UNLABELLED_S // 86400)
+    return asyncio.create_task(keep_trimmed(WakeClipStore(folder), stop))
+
+
 async def run(args: argparse.Namespace) -> None:
     robin, web = build(args)
     trimmer = None
@@ -333,7 +342,7 @@ async def run(args: argparse.Namespace) -> None:
         trimmer = asyncio.create_task(keep_captures_trimmed(robin.opts.save_audio, args.save_audio_hours * 3600, trimming))
     elif robin.opts.save_audio is not None:
         LOG.warning("Mic captures in %s are kept until you delete them (--save-audio-hours 0)", robin.opts.save_audio)
-    clip_trimmer = asyncio.create_task(keep_trimmed(robin.wake_clips.store, trimming)) if robin.wake_clips is not None else None
+    clip_trimmer = wake_clip_trimmer(args.wake_clips_dir, keeping=robin.wake_clips is not None, stop=trimming)
     try:
         if hasattr(robin.brain, "check"):
             await robin.brain.check()

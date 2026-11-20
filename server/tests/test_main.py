@@ -95,3 +95,39 @@ def test_wake_clips_are_on_by_default_and_can_be_turned_off(tmp_path, monkeypatc
     assert robin.opts.wake_clips == tmp_path / "wakes"
     robin, _ = build(parse_args([*common, "--no-wake-clips"]))
     assert robin.wake_clips is None and robin.opts.wake_clips is None
+
+
+def test_old_wake_clips_are_still_trimmed_when_clips_are_off(tmp_path, caplog):
+    from datetime import datetime, timedelta
+
+    from robin_egg_server.__main__ import wake_clip_trimmer
+    from robin_egg_server.wake_clips import WakeClipStore
+    from test_speaker_stream import eventually
+    from test_wake_clips import entry, tone, wav_bytes
+
+    folder = tmp_path / "wakes"
+    store = WakeClipStore(folder)
+    old = store.save(wav_bytes(tone(1.0)), entry(datetime.now().astimezone() - timedelta(days=15)))
+
+    async def go():
+        stop = asyncio.Event()
+        task = wake_clip_trimmer(folder, keeping=False, stop=stop)
+        assert task is not None
+        await eventually(lambda: not old.path.exists())
+        stop.set()
+        await task
+
+    with caplog.at_level("INFO"):
+        asyncio.run(go())
+    assert store.entries() == []
+    assert "--no-wake-clips" in caplog.text and str(folder) in caplog.text
+
+
+def test_no_wake_clip_folder_and_clips_off_means_no_trimming(tmp_path):
+    from robin_egg_server.__main__ import wake_clip_trimmer
+
+    async def go():
+        return wake_clip_trimmer(tmp_path / "wakes", keeping=False, stop=asyncio.Event())
+
+    assert asyncio.run(go()) is None
+    assert not (tmp_path / "wakes").exists()

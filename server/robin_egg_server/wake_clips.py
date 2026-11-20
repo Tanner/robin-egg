@@ -20,7 +20,7 @@ import wave
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Iterable
 
 import numpy as np
 
@@ -234,14 +234,41 @@ class WakeClipStore:
         LOG.info("Deleted the wake clip %s, its JSON and %d exported take files", entry.path.name, len(entry.exported))
 
     def trim(self, now: float | None = None) -> int:
-        """Delete unlabelled clips older than KEEP_UNLABELLED_S, judged by the wake's time. Returns how many went."""
+        """Delete unlabelled clips older than KEEP_UNLABELLED_S, judged by the wake's time, and the files nothing can read.
+
+        Those are a WAV with no readable JSON, a JSON with no WAV and a temporary file left by a
+        crash, each judged by its modification time, so a save still under way is never touched.
+        Returns how many clips and files went.
+        """
         now = time.time() if now is None else now
-        old = [e for e in self.entries() if e.label is None and now - e.timestamp() > KEEP_UNLABELLED_S]
+        entries = self.entries()
+        old = [e for e in entries if e.label is None and now - e.timestamp() > KEEP_UNLABELLED_S]
         for entry in old:
             self.delete(entry)
         if old:
             LOG.info("Deleted %d unlabelled wake clips older than %d days", len(old), KEEP_UNLABELLED_S // 86400)
-        return len(old)
+        readable = {e.path for e in entries}
+        stray = self._delete_old([p for p in self.root.glob("*.wav") if p not in readable and p.is_file()], now)
+        stray += self._delete_old([p for p in self.root.glob("*.json") if not p.with_suffix(".wav").exists()], now)
+        stray += self._delete_old(self.root.glob(".*.tmp"), now)
+        if stray:
+            LOG.info(
+                "Deleted %d files older than %d days from %s that were not part of a readable wake clip: %s",
+                len(stray), KEEP_UNLABELLED_S // 86400, self.root, ", ".join(stray),
+            )
+        return len(old) + len(stray)
+
+    def _delete_old(self, paths: Iterable[Path], now: float) -> list[str]:
+        """Deletes each of the paths last modified more than KEEP_UNLABELLED_S before now, and returns their names."""
+        gone = []
+        for path in sorted(paths):
+            try:
+                if now - path.stat().st_mtime > KEEP_UNLABELLED_S:
+                    path.unlink()
+                    gone.append(path.name)
+            except FileNotFoundError:
+                pass
+        return gone
 
 
 def _write_atomically(path: Path, data: bytes) -> None:

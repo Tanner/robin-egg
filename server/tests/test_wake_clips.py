@@ -9,6 +9,7 @@ import asyncio
 import io
 import json
 import logging
+import os
 import wave
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -129,6 +130,34 @@ def test_trim_deletes_only_old_unlabelled_clips(tmp_path):
     assert store.entries() == [kept, recent]
     assert not old.path.exists()
     assert not old.path.with_suffix(".json").exists()
+
+
+def test_trim_deletes_old_files_that_cannot_be_read(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    old_s, recent_s = NOW.timestamp() - 15 * 86400, NOW.timestamp() - 86400
+
+    def aged(path: Path, when: float) -> Path:
+        os.utime(path, (when, when))
+        return path
+
+    broken = store.save(wav_bytes(tone(1.0)), entry(NOW, turn="t1", label=REAL))
+    broken.json_path().write_text("{not json")
+    lone_json = store.save(wav_bytes(tone(1.0)), entry(NOW, turn="t2", label=REAL))
+    lone_json.path.unlink()
+    recent_broken = store.save(wav_bytes(tone(1.0)), entry(NOW, turn="t3"))
+    recent_broken.json_path().write_text("{not json")
+    leftovers = [store.root / ".20261120-093000-t4.wav.tmp", store.root / ".20261120-093000-t5.json.tmp"]
+    for path in leftovers:
+        path.write_bytes(b"half")
+    recent_tmp = store.root / ".20261120-093000-t6.wav.tmp"
+    recent_tmp.write_bytes(b"half")
+    for path in (broken.path, broken.json_path(), lone_json.json_path(), *leftovers):
+        aged(path, old_s)
+    for path in (recent_broken.path, recent_broken.json_path(), recent_tmp):
+        aged(path, recent_s)
+
+    assert store.trim(NOW.timestamp()) == 5
+    assert sorted(p.name for p in store.root.iterdir()) == sorted([recent_broken.path.name, recent_broken.json_path().name, recent_tmp.name])
 
 
 def test_delete_removes_the_clip_and_its_takes(tmp_path):
