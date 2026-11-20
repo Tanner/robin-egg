@@ -2,7 +2,7 @@
 
 A short cylinder, 115 mm across and 81 mm tall, in four printed parts. `robin_cylinder.py` is the parametric source (CadQuery), with every dimension a named constant at the top. Run it again and it rewrites `stl/` and `step/`. The design and its reasoning are in [the design doc](../../docs/superpowers/specs/2026-11-17-squat-cylinder-enclosure-design.md).
 
-This is the first-print version. The top pushes straight on instead of twisting, and there are no sensor mounts yet.
+This is the first-print version. The top pushes straight on instead of twisting, and there are no sensor mounts yet. The first one was printed in black and assembled on 2026-11-19. See "Notes for the next version" below.
 
 ![Assembled](preview_assembled.png)
 
@@ -54,7 +54,7 @@ Also on hand: silicone for the ledge (not thick foam tape, see step 4), hot glue
    - Stick the 3 rubber feet in their recesses.
 6. **Board.**
    - Plug the speaker into the board's JST socket first. The bay under the board is only 10 mm deep, so it is hard to reach afterwards.
-   - Set the board on the standoffs, LED side up, with the XIAO's USB-C port facing the USB-C notch at the back.
+   - Set the board on the standoffs, LED side up. Its 3 holes form a triangle: put the **lone hole on the single standoff at the front** and the two close-together holes on the pair at the back. The board has two USB-C ports. The one at the triangle's point, beside the headphone jack, is the board's own and goes at the front. The one that must face the USB-C notch at the back is on the XIAO, the small module soldered underneath.
    - Fix it with the 3 M2 × 6 screws.
 7. **Top.**
    - Line up the slot inside the top's rim with the key tab at the front, and push it straight down.
@@ -64,6 +64,20 @@ Also on hand: silicone for the ledge (not thick foam tape, see step 4), hot glue
 To open it: unplug the USB-C cable, then pull the top straight up.
 
 **Check the mute tab.** Press the flexing tab on the right side. The mute LED should go red. If the board resets instead, mute is the other button. Set `MUTE_SIDE = -1` in `robin_cylinder.py`, run it, and reprint only the top.
+
+## Notes for the next version
+
+From the first assembly, 2026-11-19. Everything fitted once the speaker was mounted as described.
+
+- **Print the top in white or translucent filament.** The LEDs work, but they don't show through a black top at all, even over the 1.2 mm ring. Black blocks the light at any thickness. The body and base can stay any colour.
+- **Make the top hold on more firmly.** The push-on top sits loosely and doesn't pop on. Two ways:
+  - **Top only:** about 6 small vertical crush ribs inside the top's rim, each pressing about 0.2 mm into the body's lip. Gives a firm friction fit, but no click.
+  - **Top and body:** a groove round the body's lip and bumps in the top that snap into it, or the twist lock from the design doc. Gives a real click, but needs a new body.
+- **Mute tab not tested yet.** If pressing it resets the board instead of muting, set `MUTE_SIDE = -1`. Fold that into the same top reprint.
+- **The steps confused three things,** now spelled out above:
+  - which side the speaker's square plate goes on
+  - which holes take the inserts and which take the speaker screws
+  - which of the board's two USB-C ports faces the back notch
 
 ## Fit checks run
 
