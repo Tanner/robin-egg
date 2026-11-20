@@ -85,8 +85,8 @@ class Session:
         assert self.keys, f"review asked {prompt!r} after the last key"
         return self.keys.pop(0)
 
-    def run(self, store: WakeClipStore) -> int:
-        return review(store, self.play, self.ask, self.lines.append)
+    def run(self, store: WakeClipStore, **kw) -> int:
+        return review(store, self.play, self.ask, self.lines.append, **kw)
 
 
 # 1 s silence, 0.8 s tone, 0.2 s silence, 0.5 s tone, 2 s silence, 1 s tone
@@ -227,7 +227,7 @@ def test_the_screen_shows_the_clip_and_the_keys(tmp_path):
     session = Session("x", " ", "s", "s")
     session.run(store)
     assert session.lines[0] == "1 of 2   Thu 19 Nov 08:14   answered   tanner   probably real"
-    key_line = "[r] real  [f] false  [m] real, with a missed try before it  [d] delete  [space] play again  [s] skip  [q] quit"
+    key_line = "[r] real  [f] false  [m] real, with a missed try before it  [d] delete  [space] play again  [s] skip  [b] back  [q] quit"
     assert session.asked[:3] == [key_line] * 3  # an unknown key and a replay both show the keys again
     assert len(session.played) == 3  # the clip, its replay, then the next clip
     assert session.lines[1] == "2 of 2   Thu 19 Nov 08:15   stopped a reply   -   -"
@@ -258,6 +258,166 @@ def test_space_does_not_answer_the_delete_question(tmp_path):
     assert session.run(store) == 0
     assert len(session.played) == 1
     assert session.asked[1:3] == ["Delete this clip for good? [y/n]"] * 2
+
+
+KEY_LINE = "[r] real  [f] false  [m] real, with a missed try before it  [d] delete  [space] play again  [s] skip  [b] back  [q] quit"
+
+
+def exported_take(tmp_path: Path, entry: Entry, store: WakeClipStore) -> Path:
+    """A take file on disk, listed in the clip's JSON as exported from it."""
+    take = tmp_path / "takes" / "positive" / f"{entry.path.stem}.wav"
+    take.parent.mkdir(parents=True, exist_ok=True)
+    take.write_bytes(wav_bytes(tone(0.5)))
+    entry.exported = [str(take)]
+    store.write(entry)
+    return take
+
+
+def test_back_takes_the_label_off_the_clip_before_and_shows_it_again(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    save(store, TWO_SPANS, minutes=0)
+    save(store, THREE_SPANS, minutes=1)
+    session = Session("f", "b", "r", "n", "s")
+    assert session.run(store) == 1
+    first, second = store.entries()
+    assert (first.label, first.cut, first.misses) == (REAL, None, [])
+    assert second.label is None
+    screens = [line.split("   ")[0] for line in session.lines if "   " in line]
+    assert screens == ["1 of 2", "2 of 2", "1 of 2", "2 of 2"]
+    heard = [p for p in session.played if len(p) in (len(TWO_SPANS), len(THREE_SPANS))]
+    assert [len(p) for p in heard] == [len(TWO_SPANS), len(THREE_SPANS), len(TWO_SPANS), len(THREE_SPANS)]
+
+
+def test_back_deletes_the_takes_exported_from_the_clip(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    first = save(store, TWO_SPANS, minutes=0)
+    save(store, TWO_SPANS, minutes=1)
+    keys = ["f", "export", "b", "s", "q"]
+
+    def ask(prompt: str) -> str:
+        key = keys.pop(0)
+        if key == "export":  # an export run in another terminal while the second clip is showing
+            assert export(store, tmp_path / "takes", out=lambda line: None) == (0, 1)
+            key = keys.pop(0)
+        return key
+
+    review(store, lambda samples: None, ask, lambda line: None)
+    assert not (tmp_path / "takes" / "negative" / f"{first.path.stem}.wav").exists()
+    first = store.entries()[0]
+    assert (first.label, first.cut, first.misses, first.exported) == (None, None, [], [])
+
+
+def test_back_with_nothing_labelled_before_shows_the_keys_again(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    save(store, TWO_SPANS)
+    session = Session("b", "s")
+    assert session.run(store) == 0
+    assert session.asked == [KEY_LINE, KEY_LINE]
+    assert len(session.played) == 1
+
+
+def test_back_walks_further_back_each_time(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    for minutes in range(3):
+        save(store, TWO_SPANS, minutes=minutes)
+    session = Session("f", "f", "b", "b", "s", "s", "s")
+    assert session.run(store) == 0
+    assert [e.label for e in store.entries()] == [None, None, None]
+    screens = [line.split("   ")[0] for line in session.lines if "   " in line]
+    assert screens == ["1 of 3", "2 of 3", "3 of 3", "2 of 3", "1 of 3", "2 of 3", "3 of 3"]
+
+
+def test_a_skipped_or_deleted_clip_is_not_gone_back_to(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    for minutes in range(3):
+        save(store, TWO_SPANS, minutes=minutes)
+    session = Session("f", "d", "y", "b", "s", "s")
+    session.run(store)
+    first, third = store.entries()
+    assert first.label is None and third.label is None
+    screens = [line.split("   ")[0] for line in session.lines if "   " in line]
+    assert screens == ["1 of 3", "2 of 3", "3 of 3", "1 of 3", "3 of 3"]
+
+
+def test_all_shows_labelled_clips_with_their_label(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    save(store, TWO_SPANS, minutes=0, label=REAL, cut=(0, 100))
+    save(store, TWO_SPANS, minutes=1)
+    session = Session("s", "s")
+    assert session.run(store, everything=True) == 0
+    assert session.lines[0] == "1 of 2   Thu 19 Nov 08:14   answered   tanner   labelled real"
+    assert session.lines[1] == "2 of 2   Thu 19 Nov 08:15   answered   tanner   probably real"
+    labelled, _ = store.entries()
+    assert (labelled.label, labelled.cut) == (REAL, (0, 100))
+
+
+def test_all_relabels_a_clip_and_deletes_its_takes(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    found = spans(THREE_SPANS)
+    wrong = save(store, THREE_SPANS, minutes=0, label=REAL, cut=found[-1], misses=[found[0]])
+    take = exported_take(tmp_path, wrong, store)
+    assert Session("f").run(store, everything=True) == 1
+    [relabelled] = store.entries()
+    assert (relabelled.label, relabelled.misses, relabelled.exported) == (FALSE, [], [])
+    assert relabelled.cut == (len(THREE_SPANS) - int(FALSE_CUT_S * RATE), len(THREE_SPANS))
+    assert not take.exists()
+
+
+def test_all_relabelled_real_starts_from_no_cut(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    wrong = save(store, TWO_SPANS, minutes=0, label=FALSE, cut=(0, 3 * RATE))
+    take = exported_take(tmp_path, wrong, store)
+    assert Session("m", "n", "n").run(store, everything=True) == 1
+    [relabelled] = store.entries()
+    assert (relabelled.label, relabelled.cut, relabelled.misses, relabelled.exported) == (REAL, None, [], [])
+    assert not take.exists()
+
+
+def test_review_command_takes_all(tmp_path, monkeypatch):
+    from robin_egg_server import wakes
+
+    seen = {}
+    monkeypatch.setattr(wakes.shutil, "which", lambda name: "/usr/bin/afplay")
+    monkeypatch.setattr(wakes, "review", lambda store, play, ask, **kw: seen.update(kw) or 0)
+    main(["review", "--all", "--dir", str(tmp_path)])
+    assert seen == {"everything": True}
+    main(["review", "--dir", str(tmp_path)])
+    assert seen == {"everything": False}
+
+
+@pytest.mark.parametrize("damage", ["missing", "broken"])
+def test_review_passes_over_a_clip_that_cannot_be_opened(tmp_path, damage):
+    store = WakeClipStore(tmp_path / "wakes")
+    save(store, TWO_SPANS, minutes=0)
+    bad = save(store, TWO_SPANS, minutes=1)
+    save(store, TWO_SPANS, minutes=2)
+    session = Session("s", "f")
+    asked = session.ask
+
+    def ask(prompt: str) -> str:
+        if len(session.asked) == 0:
+            if damage == "missing":
+                bad.path.unlink()  # the daily trim, say, deleting it while the first clip is showing
+            else:
+                bad.path.write_bytes(b"not a wav")
+        return asked(prompt)
+
+    session.ask = ask
+    assert session.run(store) == 1
+    assert session.lines[1].startswith(f"Could not open {bad.path.name}")
+    assert session.lines[2].startswith("3 of 3   ")
+    assert [e.label for e in store.entries() if e.path != bad.path] == [None, FALSE]
+
+
+def test_export_passes_over_a_clip_that_cannot_be_opened(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    bad = save(store, TWO_SPANS, minutes=0, label=FALSE, cut=(0, 3 * RATE))
+    good = save(store, TWO_SPANS, minutes=1, label=FALSE, cut=(0, 3 * RATE))
+    bad.path.write_bytes(b"not a wav")
+    lines: list[str] = []
+    assert export(store, tmp_path / "takes", out=lines.append) == (0, 1)
+    assert [p.stem for p in (tmp_path / "takes" / "negative").glob("*.wav")] == [good.path.stem]
+    assert len(lines) == 1 and lines[0].startswith(f"Could not open {bad.path.name}")
 
 
 def test_play_says_when_afplay_fails():

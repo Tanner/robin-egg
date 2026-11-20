@@ -1,8 +1,10 @@
 """Listen to the saved wake clips, label them, count them and export them: python -m robin_egg_server.wakes --help
 
 review plays each unlabelled clip, oldest first, and takes one key for it: real, false, real
-with a missed try before it, delete, play again, skip or quit. A real clip's cut is the last
+with a missed try before it, delete, play again, skip, back or quit. A real clip's cut is the last
 loud span, the try that woke the egg, once the reviewer hears it on its own and approves it.
+Back takes the label off the clip labelled before, and review --all goes through the labelled
+clips too, so a wrong label can be put right.
 
 report prints the wake rates for each model round and cutoff, and export writes the labelled
 cuts into wakeword/recordings/egg_takes/ as takes for the training notebook.
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import logging
 import shutil
 import subprocess
@@ -33,7 +36,7 @@ FALSE_CUT_S = 3.0
 # The training notebook reads positive/ and negative/ in here as takes, as they are.
 DEFAULT_TAKES = Path(__file__).resolve().parents[2] / "wakeword" / "recordings" / "egg_takes"
 
-KEYS = "[r] real  [f] false  [m] real, with a missed try before it  [d] delete  [space] play again  [s] skip  [q] quit"
+KEYS = "[r] real  [f] false  [m] real, with a missed try before it  [d] delete  [space] play again  [s] skip  [b] back  [q] quit"
 CUT_QUESTION = "Is this cut a clean Hey Robin? [y/n]  [space] play again"
 MISS_QUESTION = "Was this a Hey Robin the egg missed? [y/n]  [space] play again"
 DELETE_QUESTION = "Delete this clip for good? [y/n]"
@@ -68,7 +71,8 @@ def spans(samples: np.ndarray) -> list[tuple[int, int]]:
 def _screen(n: int, total: int, entry: Entry) -> str:
     when = datetime.fromisoformat(entry.time)
     what = STOPPED_A_REPLY if entry.kind == STOPPED_A_REPLY else (entry.outcome or "-")
-    return f"{n} of {total}   {when:%a} {when.day} {when:%b %H:%M}   {what}   {entry.speaker or '-'}   {entry.suggested or '-'}"
+    hint = f"labelled {entry.label}" if entry.label is not None else (entry.suggested or "-")
+    return f"{n} of {total}   {when:%a} {when.day} {when:%b %H:%M}   {what}   {entry.speaker or '-'}   {hint}"
 
 
 def _yes(ask: Callable[[str], str], question: str, again: Callable[[], None] | None = None) -> bool:
@@ -81,57 +85,137 @@ def _yes(ask: Callable[[str], str], question: str, again: Callable[[], None] | N
             again()
 
 
-def review(store: WakeClipStore, play: Callable[[np.ndarray], None], ask: Callable[[str], str], out: Callable[[str], None] = print) -> int:
-    """Goes through the clips with no label, oldest first. Returns how many were labelled."""
-    todo = [e for e in store.entries() if e.label is None]
+# What one clip's keys came to.
+LABELLED, SKIPPED, DELETED, BACK, QUIT = "labelled", "skipped", "deleted", "back", "quit"
+
+# What reading a clip's WAV raises when it is missing, cut short or not a WAV.
+_UNREADABLE = (OSError, EOFError, wave.Error)
+
+
+def review(
+    store: WakeClipStore,
+    play: Callable[[np.ndarray], None],
+    ask: Callable[[str], str],
+    out: Callable[[str], None] = print,
+    *,
+    everything: bool = False,
+) -> int:
+    """Goes through the clips with no label, oldest first, or through every clip with everything. Returns how many were labelled.
+
+    Back returns to the clip labelled just before in this session, takes its label, cuts and
+    exported takes off, and shows it again; each further back goes one clip further. A clip
+    whose WAV cannot be opened is named in one line and passed over.
+    """
+    todo = store.entries()
+    if not everything:
+        todo = [e for e in todo if e.label is None]
     if not todo:
-        out(f"Every wake clip in {store.root} has a label.")
+        out(f"There are no wake clips in {store.root}." if everything else f"Every wake clip in {store.root} has a label.")
         return 0
-    labelled = 0
-    for n, entry in enumerate(todo, start=1):
-        samples = store.samples(entry)
-        out(_screen(n, len(todo), entry))
+    labelled: list[int] = []  # places in todo of the clips labelled in this session, in the order they were labelled
+    deleted: set[int] = set()
+    n = 0
+    while n < len(todo):
+        entry = todo[n]
+        if n in deleted:
+            n += 1
+            continue
+        try:
+            samples = store.samples(entry)
+        except _UNREADABLE as err:
+            out(f"Could not open {entry.path.name}, so it is passed over: {err}")
+            n += 1
+            continue
+        out(_screen(n + 1, len(todo), entry))
         play(samples)
-        while True:
-            key = ask(KEYS).lower()
-            if key == "q":
-                return labelled
-            if key == "s":
-                break
-            if key == " ":
-                play(samples)
-            elif key == "d":
-                if _yes(ask, DELETE_QUESTION):
-                    store.delete(entry)  # it logs what it deleted
-                    break
-            elif key in ("r", "m"):
-                found = spans(samples)
-                entry.label, entry.cut, entry.misses = REAL, None, []
-                if found:
-                    start, end = found[-1]
-                    cut = samples[start:end]
-                    play(cut)
-                    if _yes(ask, CUT_QUESTION, lambda: play(cut)):
-                        entry.cut = (start, end)
-                if key == "m":
-                    for start, end in found[:-1]:
-                        attempt = samples[start:end]
-                        play(attempt)
-                        if _yes(ask, MISS_QUESTION, lambda: play(attempt)):
-                            entry.misses.append((start, end))
-                store.write(entry)
-                labelled += 1
-                misses = f"{len(entry.misses)} missed {'try' if len(entry.misses) == 1 else 'tries'}"
-                out(f"Labelled {entry.path.name} real, {'with its cut' if entry.cut else 'with no cut'}, and {misses}.")
-                break
-            elif key == "f":
+        step = _label(store, entry, samples, play, ask, out, can_go_back=bool(labelled))
+        if step == QUIT:
+            break
+        if step == BACK:
+            n = labelled.pop()
+            back = todo[n]
+            back.label = None
+            takes = _clear_cuts(store, back)
+            out(f"Took the label off {back.path.name} and deleted {takes} exported {'take' if takes == 1 else 'takes'}.")
+            continue
+        if step == LABELLED:
+            labelled.append(n)
+        elif step == DELETED:
+            deleted.add(n)
+        n += 1
+    return len(labelled)
+
+
+def _clear_cuts(store: WakeClipStore, entry: Entry) -> int:
+    """Deletes every take exported from the clip, clears its cut, misses and exported list, and writes its JSON. Returns how many takes it listed.
+
+    The takes are those in the JSON on disk as well as those read at the start, since an
+    export may have run while the review was open.
+    """
+    try:
+        on_disk = [str(p) for p in json.loads(entry.json_path().read_text()).get("exported", [])]
+    except (OSError, ValueError, AttributeError, TypeError):
+        on_disk = []
+    takes = list(dict.fromkeys([*entry.exported, *on_disk]))
+    for path in takes:
+        Path(path).unlink(missing_ok=True)
+    entry.cut, entry.misses, entry.exported = None, [], []
+    store.write(entry)
+    return len(takes)
+
+
+def _label(
+    store: WakeClipStore,
+    entry: Entry,
+    samples: np.ndarray,
+    play: Callable[[np.ndarray], None],
+    ask: Callable[[str], str],
+    out: Callable[[str], None],
+    can_go_back: bool,
+) -> str:
+    """Takes keys for one clip until it is labelled, skipped, deleted or left, and says which."""
+    while True:
+        key = ask(KEYS).lower()
+        if key == "q":
+            return QUIT
+        if key == "s":
+            return SKIPPED
+        if key == "b":
+            if can_go_back:
+                return BACK
+        elif key == " ":
+            play(samples)
+        elif key == "d":
+            if _yes(ask, DELETE_QUESTION):
+                store.delete(entry)  # it logs what it deleted
+                return DELETED
+        elif key in ("r", "m", "f"):
+            if entry.label is not None:
+                _clear_cuts(store, entry)  # a new label starts from no cuts and no takes
+            if key == "f":
                 entry.label = FALSE
                 entry.cut = (max(0, len(samples) - int(FALSE_CUT_S * RATE)), len(samples))
                 store.write(entry)
-                labelled += 1
                 out(f"Labelled {entry.path.name} false, with its last {FALSE_CUT_S:g} seconds as the cut.")
-                break
-    return labelled
+                return LABELLED
+            found = spans(samples)
+            entry.label, entry.cut, entry.misses = REAL, None, []
+            if found:
+                start, end = found[-1]
+                cut = samples[start:end]
+                play(cut)
+                if _yes(ask, CUT_QUESTION, lambda: play(cut)):
+                    entry.cut = (start, end)
+            if key == "m":
+                for start, end in found[:-1]:
+                    attempt = samples[start:end]
+                    play(attempt)
+                    if _yes(ask, MISS_QUESTION, lambda: play(attempt)):
+                        entry.misses.append((start, end))
+            store.write(entry)
+            misses = f"{len(entry.misses)} missed {'try' if len(entry.misses) == 1 else 'tries'}"
+            out(f"Labelled {entry.path.name} real, {'with its cut' if entry.cut else 'with no cut'}, and {misses}.")
+            return LABELLED
 
 
 @dataclass
@@ -243,12 +327,13 @@ def _takes(entry: Entry, dest: Path) -> list[tuple[Path, tuple[int, int]]]:
     return takes
 
 
-def export(store: WakeClipStore, dest: Path = DEFAULT_TAKES) -> tuple[int, int]:
+def export(store: WakeClipStore, dest: Path = DEFAULT_TAKES, out: Callable[[str], None] = print) -> tuple[int, int]:
     """Writes each labelled cut as its own take, exactly the samples the reviewer heard, and returns how many positive and negative files were written.
 
     A relative dest is taken from the current folder and recorded as an absolute path.
     A take file that already exists is left as it is, so a second run writes nothing new. Each
     file is written to a temporary name and renamed, so a failed export leaves no half a WAV.
+    A clip whose WAV cannot be opened is named in one line and passed over.
     """
     dest = dest.expanduser().resolve()  # the paths go into each clip's JSON, which delete reads from any folder
     positive = negative = 0
@@ -256,7 +341,11 @@ def export(store: WakeClipStore, dest: Path = DEFAULT_TAKES) -> tuple[int, int]:
         takes = _takes(entry, dest)
         if not takes:
             continue
-        samples = store.samples(entry)
+        try:
+            samples = store.samples(entry)
+        except _UNREADABLE as err:
+            out(f"Could not open {entry.path.name}, so its takes were not written: {err}")
+            continue
         for path, (start, end) in takes:
             if not path.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -310,7 +399,8 @@ def main(argv: list[str] | None = None) -> None:
     where = argparse.ArgumentParser(add_help=False)
     where.add_argument("--dir", type=Path, default=DEFAULT_WAKES, help="Where the wake clips are kept (default ~/.robin-egg/wakes)")
     sub = p.add_subparsers(dest="command", required=True)
-    sub.add_parser("review", parents=[where], help="Play each unlabelled clip, oldest first, and label it real or false, or delete it")
+    look = sub.add_parser("review", parents=[where], help="Play each unlabelled clip, oldest first, and label it real or false, or delete it")
+    look.add_argument("--all", action="store_true", help="Go through every clip, labelled ones too, to put a wrong label right")
     sub.add_parser("report", parents=[where], help="Print the real and false wakes, false wakes per day and misses for each model round and cutoff, and per speaker")
     to = sub.add_parser("export", parents=[where], help="Write the labelled cuts as training takes, positive and negative")
     to.add_argument("--to", type=Path, default=DEFAULT_TAKES, metavar="DIR", help="Where the takes go (default wakeword/recordings/egg_takes)")
@@ -322,7 +412,7 @@ def main(argv: list[str] | None = None) -> None:
         if shutil.which("afplay") is None:
             p.error("afplay was not found: review plays clips through macOS's afplay")
         try:
-            labelled = review(store, play, ask)
+            labelled = review(store, play, ask, everything=args.all)
         except KeyboardInterrupt:
             print("\nStopped. Every label given before now is saved.")
             return
