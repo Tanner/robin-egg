@@ -9,6 +9,7 @@ import io
 import subprocess
 import wave
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -416,3 +417,23 @@ def test_export_command_takes_a_destination(tmp_path, capsys):
     main(["export", "--dir", str(tmp_path / "wakes"), "--to", str(tmp_path / "takes")])
     assert len(list((tmp_path / "takes" / "negative").glob("*.wav"))) == 1
     assert "0 positive and 1 negative" in capsys.readouterr().out
+
+
+def test_export_records_absolute_paths_for_a_relative_destination(tmp_path, monkeypatch):
+    store = WakeClipStore(tmp_path / "wakes")
+    save(store, TWO_SPANS, label=FALSE, cut=(0, 3 * RATE))
+    monkeypatch.chdir(tmp_path)
+    main(["export", "--dir", str(tmp_path / "wakes"), "--to", "takes"])
+    [entry] = store.entries()
+    assert entry.exported == [str(tmp_path.resolve() / "takes" / "negative" / f"{entry.path.stem}.wav")]
+    assert Path(entry.exported[0]).is_absolute()
+
+
+
+def test_export_called_directly_resolves_a_relative_destination(tmp_path, monkeypatch):
+    store = WakeClipStore(tmp_path / "wakes")
+    save(store, TWO_SPANS, label=FALSE, cut=(0, 3 * RATE))
+    monkeypatch.chdir(tmp_path)
+    assert export(store, Path("takes")) == (0, 1)
+    [entry] = store.entries()
+    assert entry.exported == [str(tmp_path.resolve() / "takes" / "negative" / f"{entry.path.stem}.wav")]

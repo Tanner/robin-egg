@@ -246,9 +246,11 @@ def _takes(entry: Entry, dest: Path) -> list[tuple[Path, tuple[int, int]]]:
 def export(store: WakeClipStore, dest: Path = DEFAULT_TAKES) -> tuple[int, int]:
     """Writes each labelled cut as its own take, exactly the samples the reviewer heard, and returns how many positive and negative files were written.
 
+    A relative dest is taken from the current folder and recorded as an absolute path.
     A take file that already exists is left as it is, so a second run writes nothing new. Each
     file is written to a temporary name and renamed, so a failed export leaves no half a WAV.
     """
+    dest = dest.expanduser().resolve()  # the paths go into each clip's JSON, which delete reads from any folder
     positive = negative = 0
     for entry in store.entries():
         takes = _takes(entry, dest)
@@ -329,7 +331,7 @@ def main(argv: list[str] | None = None) -> None:
         entries = store.entries()
         print(report(entries) if entries else f"There are no wake clips in {store.root} yet.")
     elif args.command == "export":
-        dest = args.to.expanduser()
+        dest = args.to.expanduser().resolve()
         positive, negative = export(store, dest)
         print(f"Wrote {positive} positive and {negative} negative takes to {dest}.")
 
