@@ -136,6 +136,7 @@ class FakeEgg:
         announce_success: bool = True,
         wake_stops: bool = False,
         reply_seconds: float = 0.0,
+        lead_s: float = 0.4,
     ) -> None:
         """wake_words, when given, says how each run starts, one per utterance: a wake word
         starts that run even if the server did not ask for a follow-up, and None means a follow-up.
@@ -147,11 +148,14 @@ class FakeEgg:
         wake_stops makes the wake word do what the firmware does while the voice assistant is
         busy: it only stops what is playing or running, and starts no run. The reply then plays
         for reply_seconds, or until the wake word stops it, and counts as having played for its
-        whole audio if nothing stopped it. Every reply and announcement ends with announce-finished."""
+        whole audio if nothing stopped it. Every reply and announcement ends with announce-finished.
+
+        lead_s is the room noise before each utterance; 0 is someone already talking when the mic opens."""
         self.volume, self.speaker_muted = volume, speaker_muted
         self.media_player_object_id = media_player_object_id
         self.volumes_set: list[float] = []  # every volume the server asked for, in order
         self.utterances = list(utterances)
+        self.lead_s = lead_s
         self.realtime = realtime
         self.wake_word = wake_word
         self.wake_words = list(wake_words) if wake_words is not None else None
@@ -375,7 +379,7 @@ class FakeEgg:
     async def _stream_mic(self) -> None:
         """Like the real egg: speech if someone is talking, then room noise until told to stop."""
         audio = self.utterances.pop(0) if self.utterances else b""
-        audio = silence(0.4) + audio + silence(8.0)
+        audio = silence(self.lead_s) + audio + silence(8.0)
         self._mic_open = True
         run = len(self.runs)
         for i in range(0, len(audio), CHUNK):

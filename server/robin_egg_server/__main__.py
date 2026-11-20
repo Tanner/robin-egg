@@ -19,6 +19,7 @@ from .health import OfflineAlert, keep_captures_trimmed, status
 from .hosted_tts import DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_VOICE, DEFAULT_TIME_LIMIT_S
 from .leds import DEFAULT_COLOURS_FILE, LedRing, PersonColours
 from .logs import setup as setup_logging
+from .overheard import OVERHEARD_MODES
 from .room import FLOOR_GAIN, parse_hours
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .vad import VAD_KINDS
@@ -87,6 +88,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--digest", action=argparse.BooleanOptionalAction, default=True, help="Speak several of Robin's own messages that are waiting together as one announcement, after one sound (default on; --no-digest speaks each on its own)")
     p.add_argument("--digest-max", type=digest_size, default=DEFAULT_DIGEST_MAX, metavar="N", help=f"The most messages in one digest, {MIN_DIGEST_MAX} to {MAX_DIGEST_MAX} (default {DEFAULT_DIGEST_MAX}); the rest are spoken in a following one")
     p.add_argument("--max-utterance", type=float, default=30.0, help="Longest request in seconds; listening stops here even if the speaker has not paused")
+    p.add_argument("--overheard", choices=OVERHEARD_MODES, default="log", help="What a follow-up does when it looks meant for someone else, because its transcript starts partway through a sentence or someone was already talking when the mic opened: log (default) records it in the console and turn log and still sends it to Robin, close ends the turn with the closing sound instead, off does not check. Wake word turns are never closed for it")
     p.add_argument("--unsure-retries", type=int, default=1, help="Times in a row to say \"Sorry, I didn't catch that\" and listen again when speech-to-text is unsure of what it heard (default 1; 0 never asks)")
     p.add_argument("--min-logprob", type=float, default=-1.0, help="Speech-to-text is unsure when Whisper's average log-probability is below this (default -1.0)")
     p.add_argument("--max-no-speech", type=float, default=0.8, help="Speech-to-text is unsure when Whisper's no-speech probability is above this (default 0.8)")
@@ -234,6 +236,7 @@ def build(args: argparse.Namespace):
         urgent_sound=Path(args.urgent_sound).expanduser() if args.urgent_sound else None,
         ready_sound=None if args.ready_sound == "off" else Path(args.ready_sound).expanduser(),
         unsure_retries=args.unsure_retries,
+        overheard=args.overheard,
         confidence=ConfidenceLimits(args.min_logprob, args.max_no_speech, args.max_compression),
         quiet_hours=args.quiet_hours,
         quiet_volume=args.quiet_volume / 100,

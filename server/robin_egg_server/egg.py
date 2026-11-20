@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Protocol
 
+from . import overheard
 from .audio import MIC_RATE, REPLY_RATE, EnergyVad, ReplyAudio, VadConfig, describe_level, load_sound
 from . import whoami
 from .brain import Brain, QuietTurn, RobinTooSlow, RobinUnavailable, sentences, strip_markdown
@@ -53,7 +54,7 @@ from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
 from .thinking import THINKING_CUE, ThinkingCue
 from .vad import ModelVad, make_vad
-from .turn_log import ANSWERED, ASKED_AGAIN, FAILED, LOCAL_COMMAND, NOBODY_SPOKE, NOTHING_RECOGNISED, QUIET, TurnLog, TurnRecord
+from .turn_log import ANSWERED, ASKED_AGAIN, FAILED, LOCAL_COMMAND, NOBODY_SPOKE, NOTHING_RECOGNISED, OVERHEARD, QUIET, TurnLog, TurnRecord
 from .voices import SpeechToText, TextToSpeech
 from .waiting import MessageWaiting, is_missed_question
 from .volume import MIN_VOLUME, EggVolume
@@ -122,6 +123,7 @@ class Options:
     digest: bool = True  # speak several waiting messages as one announcement, after one cue
     digest_max: int = digests.DEFAULT_MAX  # the most messages in one digest; the rest follow in another
     morning_mention: bool = True  # once speaking hours begin, end one reply by saying that messages are waiting
+    overheard: str = "log"  # what a follow-up that looks meant for someone else does: log | close | off
 
 
 @dataclass
@@ -428,6 +430,10 @@ class Robin:
                 await self._close_without_reply(t)
                 ended = "nothing_recognised"
                 return
+            if heard and not enrolling and self._overheard(t, heard):
+                await self._close_without_reply(t)
+                ended = "overheard"
+                return
             if heard and self.room_context is not None:
                 self.room_context.spoken_to(match.user, t.follow_up)
             if heard:
@@ -523,6 +529,28 @@ class Robin:
             if self.ring is not None and self.turn is t:
                 self.ring.give_back_at(time.monotonic() + max(0.0, self._playback_until - self.played_clock()))  # at once if nothing is playing
             self.turn_log.turn(t)
+
+    def _overheard(self, t: Turn, heard: str) -> bool:
+        """Records the signs that this turn's speech was meant for someone else, and says whether to close for them.
+
+        Only a follow-up is closed. A wake word means someone asked for Robin, whatever the transcript looks like.
+        """
+        if self.opts.overheard == "off":
+            return False
+        found = overheard.signs(heard, bytes(t.audio), follow_up=t.follow_up)
+        t.log.overheard = found
+        if not found:
+            return False
+        why = overheard.describe(found)
+        if not t.follow_up:
+            LOG.info("This turn looks overheard (%s). A wake word started this turn, so it goes to Robin", why)
+            return False
+        if self.opts.overheard != "close":
+            LOG.info("This follow-up looks overheard (%s), but --overheard is log, so it goes to Robin and the egg is only logging it", why)
+            return False
+        LOG.info("This follow-up looks overheard (%s); closing without sending it to Robin", why)
+        t.log.outcome = OVERHEARD
+        return True
 
     def _show_who(self, match: Match) -> None:
         """Puts the recognised speaker's colour on the ring. An unrecognised voice keeps the ring's own."""

@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .turn_log import ANSWERED, DEFAULT_TURN_LOG, DROPPED, FAILED, INTERRUPTED, LOCAL_COMMAND, NOBODY_SPOKE, NOTHING_RECOGNISED, SPOKEN, older
+from .turn_log import ANSWERED, DEFAULT_TURN_LOG, DROPPED, FAILED, INTERRUPTED, LOCAL_COMMAND, NOBODY_SPOKE, NOTHING_RECOGNISED, OVERHEARD, SPOKEN, older
 
 LOG = logging.getLogger("robin.stats")
 
@@ -62,6 +62,21 @@ def _counts(counter: Counter) -> str:
     return ", ".join(f"{name} {n}" for name, n in counter.most_common())
 
 
+def _overheard(checked: list[dict[str, Any]]) -> list[str]:
+    """How many checked turns showed signs of speech meant for someone else, by sign and by how the turn began."""
+    out = ["Turns that looked overheard:"]
+    for started_by, label in (("follow-up", "follow-ups"), ("wake word", "wake word turns")):
+        group = [t for t in checked if t.get("started_by") == started_by]
+        if not group:
+            continue
+        flagged = [t for t in group if t["overheard"]]
+        signs = Counter(sign for t in flagged for sign in t["overheard"])
+        closed = sum(1 for t in flagged if t.get("outcome") == OVERHEARD)
+        detail = f": {_counts(signs)}; {closed} closed without going to Robin" if flagged else ""
+        out.append(f"  {label:<18}{len(flagged)} of {len(group)}{detail}")
+    return out
+
+
 def summarise(entries: list[dict[str, Any]], since: date, until: date) -> str:
     """The report for the days from `since` to `until`, both included."""
     if entries:
@@ -104,6 +119,11 @@ def summarise(entries: list[dict[str, Any]], since: date, until: date) -> str:
     for word, total in Counter((t.get("wake_word") or NO_WAKE_WORD) for t in woken).most_common():
         lines.append(f"  {word:<24}{silent_by_word[word]} of {total}, {_per_day(silent_by_word[word], days)}; a sound but no words in {unrecognised[word]} more")
     lines.append("")
+
+    checked = [t for t in turns if t.get("overheard") is not None]
+    if checked:
+        lines += _overheard(checked)
+        lines.append("")
 
     failed = [t for t in turns if t.get("outcome") == FAILED]
     lines.append(f"Failed turns: {len(failed)}")
