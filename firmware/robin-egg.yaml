@@ -74,32 +74,33 @@ micro_wake_word:
     - model: https://raw.githubusercontent.com/formatBCE/Respeaker-Lite-ESPHome-integration/${satellite_core_ref}/microwakeword/models/v2/snooze.json
       id: snooze
       internal: true
-  # Runs after the base firmware's actions, so after its 300 ms wake sound delay when the
-  # wake sound is on. Freezes the clip of the wake and tells the server it can fetch it.
-  # Inside the same "mute switch is off" condition the base firmware uses, so a wake while
-  # muted freezes nothing.
-  on_wake_word_detected:
-    - if:
-        condition:
-          switch.is_off: mic_mute_switch
-        then:
-          - wake_clip.freeze:
-              id: wake_clip_capture
-              wake_word: !lambda return wake_word;
-          - homeassistant.event:
-              event: esphome.wake_clip_frozen
-              data:
-                count: !lambda return to_string(id(wake_clip_capture).get_count());
-                wake_word: !lambda return wake_word;
 
 # Wake clips: the last 5 seconds of what the wake word model heard before each wake, frozen
 # on the wake and served at http://<egg>:8080/wake-clip for the server to fetch. Removing
-# this block, external_components and the on_wake_word_detected hook above gives back the
-# firmware without clips.
+# this block, external_components and the script hook below gives back the firmware
+# without clips.
 external_components:
   - source:
       type: local
       path: components
+
+# The freeze hooks the base firmware's send_wake_word_event script rather than
+# on_wake_word_detected: the base firmware waits 300 ms after starting the wake sound
+# before anything appended to on_wake_word_detected runs, so a clip frozen there would end
+# late and could hold the chime. The base calls this script first, inside its "mute switch
+# is off" branch, so a wake while muted freezes nothing. These run after the script's own
+# esphome.wake_word_detected event.
+script:
+  - id: !extend send_wake_word_event
+    then:
+      - wake_clip.freeze:
+          id: wake_clip_capture
+          wake_word: !lambda return wake_word;
+      - homeassistant.event:
+          event: esphome.wake_clip_frozen
+          data:
+            count: !lambda return to_string(id(wake_clip_capture).get_count());
+            wake_word: !lambda return wake_word;
 
 wake_clip:
   id: wake_clip_capture
