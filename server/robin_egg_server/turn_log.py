@@ -13,7 +13,10 @@ A turn's line:
    "started_by": "wake word", "wake_word": "Okay Nabu", "heard_s": 2.4,
    "listening_ended": "end of speech", "outcome": "answered", "stt_s": 0.35,
    "speaker_s": 0.12, "first_audio_s": 1.84, "reply_done_s": 3.1, "reply_s": 6.2,
-   "speaker": {"recognised": true, "score": 0.71, "inherited": false}}
+   "speaker": {"recognised": true, "score": 0.71, "inherited": false}, "overheard": []}
+
+"overheard" names the signs, from overheard.py, that the speech was meant for someone else.
+It is null when the turn was not checked.
 
 A message's line:
 
@@ -47,6 +50,7 @@ LOCAL_COMMAND = "local command"
 ASKED_AGAIN = "asked again"
 FAILED = "failed"
 CANCELLED = "cancelled"
+OVERHEARD = "overheard"
 
 # Fates of a message Robin sent on its own.
 SPOKEN = "spoken"
@@ -71,6 +75,7 @@ class TurnRecord:
     match: Any = None  # a speakers.Match
     first_audio_s: float | None = None  # end of speech to the first sentence being ready to play
     reply_done_s: float | None = None  # end of speech to the whole reply being ready
+    overheard: list[str] | None = None  # signs the speech was meant for someone else; None when not checked
     written: bool = False
 
     def heard(self, stt_s: float, speaker_s: float, match: Any) -> None:
@@ -118,6 +123,7 @@ class TurnLog:
                 "reply_done_s": _round(r.reply_done_s),
                 "reply_s": _round(t.reply.seconds, 1) if r.outcome in (ANSWERED, LOCAL_COMMAND, ASKED_AGAIN) else None,
                 "speaker": self._speaker(r.match),
+                "overheard": r.overheard,
             }
             self._write(entry)
         except Exception as err:  # noqa: BLE001 - a turn must never fail because of its log line

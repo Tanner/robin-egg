@@ -384,6 +384,26 @@ Each number is checked on its own. Over a long request, `logprob` and `no-speech
 It asks once. If the next try is unsure too, the words go to Robin as heard, so nobody is kept in a loop; `--unsure-retries` changes how many times it asks in a row, and `0` turns the check off. The check is skipped while enrolling or forgetting a voice, where the sentence matching already asks again on a miss.
 
 The defaults are cautious: they are Whisper's own limits for a failed transcript, so a fluent mishearing still passes. To tune them, compare the numbers on the "Heard" lines of turns that went wrong with those that went right, then set `--min-logprob`, `--max-no-speech` and `--max-compression`.
+
+## Speech meant for someone else
+
+The follow-up window opens the mic with no wake word, so it can catch one side of a phone call or two people talking to each other. Two checks look for that, with no language model:
+
+| Sign | When | Checked on |
+| --- | --- | --- |
+| `mid-sentence` | The transcript starts in lowercase or with "...". Whisper writes a fresh sentence with a capital letter, so this is the mic catching the middle of one. | Every turn |
+| `already speaking` | The first 150 ms of audio are at speech level, against the quietest part of the same turn. Someone answering Robin starts after the listening sound; someone talking to another person is already going. | Follow-ups only, because people talk straight on after "Hey Robin" |
+
+`--overheard` decides what a follow-up with a sign does:
+
+- `log`, the default: the console says `This follow-up looks overheard (...)` and the turn log records the signs, but the turn goes to Robin as before.
+- `close`: the turn ends with the closing sound and is not sent to Robin, and the mic does not reopen. The turn log outcome is `overheard`.
+- `off`: nothing is checked.
+
+A wake word turn is never closed for these signs, since someone asked for Robin by name. Its signs are still logged. Neither check can tell a sentence to Robin from a sentence to someone else; the `follow_up=1` field sent to Robin is for that.
+
+Run `log` for a few days and read `stats`, which counts the signs for follow-ups and wake word turns. If the signs fire on follow-ups that were really for Robin, the check is not ready to close. The `already speaking` level is untried on the egg: whether its echo cancelling leaves the end of the listening sound at speech level is unmeasured, and that would make every follow-up look overheard.
+
 ## Showing who is talking
 
 When the server recognises the speaker, the egg's LED ring takes that person's colour while Robin thinks and replies. Listening stays in the ring's own colour, because nobody is recognised until the request has been heard. A voice it cannot place keeps the ring's own colour throughout. `--no-recognition-light` turns this off.
@@ -520,6 +540,9 @@ A turn ends as one of:
 | `local command` | The egg answered itself: enrolling or forgetting a voice, quiet by voice, "say that again", "who am I?". |
 | `failed` | The turn failed, whether or not the apology could be spoken. |
 | `cancelled` | The egg cancelled the turn, a new wake word replaced it, or the egg disconnected. |
+| `overheard` | With `--overheard close`, a follow-up looked meant for someone else and was not sent to Robin. See "Speech meant for someone else". |
+
+A turn's `overheard` field lists the signs it showed, `[]` for none, and is `null` with `--overheard off`.
 
 To summarise the last 7 days, from `server/`:
 
