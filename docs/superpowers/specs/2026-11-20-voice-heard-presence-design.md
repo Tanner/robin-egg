@@ -37,6 +37,12 @@ Robin decides for itself whether to speak first. It needs to know whether anyone
 
 Picked 1 for the low traffic and because it sends only what Robin needs.
 
+How Robin learns what the fact means:
+
+1. **A `description` field on the context API (picked).** The poster explains its own fact, the value stays clean for events and the admin view, and every egg fact gets explained at once. Needs a robin-assistant change.
+2. **The explanation inside the value.** No robin-assistant change, but the value does two jobs and events and the admin view see prose as data.
+3. **A line in Robin's prompt.** Splits the meaning from the fact across two repos, and every new fact needs a prompt edit.
+
 ## Design
 
 ### Firmware
@@ -55,9 +61,24 @@ Picked 1 for the low traffic and because it sends only what Robin needs.
 - A flag to turn it off, `--no-voice-heard`, matching the other `--no-*` flags.
 - If the firmware has no "Voice heard" entity (not reflashed yet), log once that voice-heard presence is unavailable and carry on.
 
-### robin-assistant
+### robin-assistant: fact descriptions
 
-- A line in Robin's instructions: `egg_last_heard` is when voices were last heard near the egg, not necessarily talking to it, and TV counts. Use it with `egg_last_speaker` to decide whether to speak first. That change is in the robin-assistant repo.
+Robin sees each fact as `- key: value (as of time)` (`src/scheduler/planner.ts`, `renderAmbientContext`), with nothing saying what the key means. None of the egg facts are explained today. Rather than adding lines to Robin's prompt, the fact carries its own description, so whoever posts a fact explains it.
+
+- `POST /api/context/:agent` takes an optional `description` string. It is sanitized like `value`, capped at 200 characters (413 over that, my call), and stored with the entry. A deposit with no description keeps no description: the field is replaced along with the value, not kept from an earlier deposit (my call, so a fact never carries a stale explanation).
+- `renderAmbientContext` appends it after the time: `- egg_last_heard: voices nearby (as of 2:14 PM). When voices were last heard near the egg, not necessarily talking to it; TV and radio count.` A fact without one renders exactly as now.
+- `GET /api/context/:agent` returns it, and the admin context view shows it.
+- `context_changed` events are unchanged: they still compare values only.
+- This work is in the robin-assistant repo and lands before the egg server sends descriptions. An older robin-assistant ignores the unknown field, so the order is not fragile.
+
+### Server: descriptions for every egg fact
+
+`ContextClient.post` takes a description, and each fact sends one (wording is the builder's, within 200 characters):
+
+- `egg_connection`: whether the egg in the room is connected to Robin.
+- `egg_last_speaker`: who last spoke to the egg; the time is when.
+- `egg_last_message`: what became of the last message Robin sent on its own.
+- `egg_last_heard`: when voices were last heard near the egg, not necessarily talking to it; TV and radio count. Use with `egg_last_speaker` to decide whether to speak first.
 
 ### Docs
 
@@ -76,6 +97,8 @@ Picked 1 for the low traffic and because it sends only what Robin needs.
 
 - The fake egg gains a "Voice heard" entity so the server tests can drive it: quiet to heard posts once; continued voices post at most every 5 minutes; voices during playback or a turn post nothing; a missing entity logs once and changes nothing else.
 - The existing room-fact, presence and announcement tests stay green, and `--presence-minutes` behaviour is unchanged.
+- robin-assistant: tests that a fact with no description renders, stores and returns exactly as before; that a description is sanitized, capped and rendered; and that a later deposit without one clears it. The existing context-route and ambient-render tests stay green.
+- The egg server's room-context tests check that each fact is posted with its description.
 - Bench check after the reflash: quiet room stays off, talking turns it on within a second, the egg's own reply does not post a fact.
 
 ## Left to the builder
