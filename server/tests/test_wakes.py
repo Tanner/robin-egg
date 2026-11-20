@@ -5,9 +5,15 @@ Run from server/:  python -m pytest tests/test_wakes.py -q
 
 from __future__ import annotations
 
+import glob
 import io
 import json
+import os
+import re
+import shutil
 import subprocess
+import sys
+import types
 import wave
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -448,3 +454,39 @@ def test_the_notebook_copies_egg_takes_without_cutting():
     assert "egg_takes" in source
     assert "    regions = librosa.effects.split(audio, top_db=35, frame_length=1024, hop_length=160)\n" in source
     compile(source, "cell8", "exec")
+
+
+def test_the_notebook_names_egg_takes_so_the_real_voice_check_groups_them(tmp_path, monkeypatch):
+    notebook = Path(__file__).resolve().parents[2] / "wakeword" / "hey_robin_training.ipynb"
+    source = "".join(json.loads(notebook.read_text())["cells"][8]["source"])
+    stems = {
+        "positive": ["20261119-081400-w12", "20261119-081400-w12-miss1", "20261119-081400-w1-2", "20261119-090000-t3f9a"],
+        "negative": ["20261119-093000-w7", "20261119-093000-w7-2"],
+    }
+    drive = tmp_path / "drive"
+    for kind, names in stems.items():
+        (drive / "recordings" / "egg_takes" / kind).mkdir(parents=True)
+        for stem in names:
+            (drive / "recordings" / "egg_takes" / kind / f"{stem}.wav").write_bytes(b"take")
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    for name in ["librosa", "soundfile"]:
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+
+    def sh(cmd):
+        src, dest = re.findall(r"'([^']*)'", cmd)
+        shutil.copy(src, dest)
+
+    def slug(text):
+        return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+
+    cell = {"DRIVE_DIR": str(drive), "sh": sh, "slug": slug, "glob": glob, "os": os, "shutil": shutil, "Path": Path}
+    exec(compile(source, "cell8", "exec"), cell)
+
+    assert cell["counts"] == {"egg_takes/positive": ("positive", 4), "egg_takes/negative": ("negative", 2)}
+    for kind, names in stems.items():
+        written = sorted((work / "real" / kind).glob("*.wav"))
+        assert len(written) == len(names)
+        assert all(f.name.startswith("egg_") for f in written)
+        assert {f.stem.rsplit("_", 1)[0] for f in written} == {"egg"}
