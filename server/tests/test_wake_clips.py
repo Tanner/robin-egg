@@ -9,9 +9,12 @@ import io
 import logging
 import wave
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
+import pytest
 
+from robin_egg_server import wake_clips
 from robin_egg_server.audio import MIC_RATE
 from robin_egg_server.wake_clips import (
     PROBABLY_FALSE,
@@ -143,3 +146,78 @@ def test_a_clip_with_a_broken_json_is_skipped(tmp_path, caplog):
 
 def test_an_empty_folder_has_no_entries(tmp_path):
     assert WakeClipStore(tmp_path / "missing").entries() == []
+
+
+def test_a_json_that_is_not_an_object_is_skipped(tmp_path, caplog):
+    store = WakeClipStore(tmp_path / "wakes")
+    odd = store.save(wav_bytes(tone(1.0)), entry(turn="t1"))
+    good = store.save(wav_bytes(tone(1.0)), entry(turn="t2"))
+    odd.path.with_suffix(".json").write_text("[]")
+    with caplog.at_level(logging.WARNING, logger="robin.wake_clips"):
+        assert store.entries() == [good]
+    assert any(odd.path.name in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("failing_suffix", [".json", ".wav"])
+def test_a_failed_save_leaves_nothing_behind(tmp_path, monkeypatch, failing_suffix):
+    store = WakeClipStore(tmp_path / "wakes")
+    real_write = wake_clips._write_atomically
+
+    def failing(path, data):
+        if path.suffix == failing_suffix:
+            raise OSError("disk full")
+        real_write(path, data)
+
+    monkeypatch.setattr(wake_clips, "_write_atomically", failing)
+    with pytest.raises(OSError):
+        store.save(wav_bytes(tone(1.0)), entry())
+    assert list((tmp_path / "wakes").glob("*.wav")) == []
+    assert list((tmp_path / "wakes").glob("*.json")) == []
+
+
+def test_save_writes_the_json_before_the_wav(tmp_path, monkeypatch):
+    store = WakeClipStore(tmp_path / "wakes")
+    real_write = wake_clips._write_atomically
+    written = []
+
+    def recording(path, data):
+        written.append(path.suffix)
+        real_write(path, data)
+
+    monkeypatch.setattr(wake_clips, "_write_atomically", recording)
+    store.save(wav_bytes(tone(1.0)), entry())
+    assert written == [".json", ".wav"]
+
+
+def test_a_failed_delete_keeps_the_record(tmp_path, monkeypatch):
+    store = WakeClipStore(tmp_path / "wakes")
+    saved = store.save(wav_bytes(tone(1.0)), entry(label=REAL))
+    take = tmp_path / "egg_takes" / "positive" / f"{saved.path.stem}.wav"
+    take.parent.mkdir(parents=True)
+    take.write_bytes(wav_bytes(tone(0.5)))
+    saved.exported = [str(take)]
+    store.write(saved)
+    real_unlink = Path.unlink
+
+    def failing(self, missing_ok=False):
+        if self == saved.path:
+            raise OSError("busy")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", failing)
+    with pytest.raises(OSError):
+        store.delete(saved)
+    assert not take.exists()
+    assert saved.path.with_suffix(".json").exists()
+    assert store.entries() == [saved]
+
+
+def test_a_second_clip_of_the_same_name_is_kept_beside_the_first(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    first = store.save(wav_bytes(tone(1.0)), entry())
+    second = store.save(wav_bytes(tone(1.0, freq=440.0)), entry())
+    assert first.path.name == "20261120-093000-t12.wav"
+    assert second.path.name == "20261120-093000-t12-2.wav"
+    assert sorted(store.entries(), key=lambda e: e.path.name) == sorted([first, second], key=lambda e: e.path.name)
+    assert np.array_equal(store.samples(first), tone(1.0))
+

@@ -111,16 +111,31 @@ class WakeClipStore:
         self.root = root
 
     def save(self, wav: bytes, entry: Entry) -> Entry:
-        """Write the clip and its JSON, naming them by the wake's time and its turn tag, or its count when it had no turn."""
+        """Write the clip and its JSON, naming them by the wake's time and its turn tag, or its count when it had no turn.
+
+        A name already taken gets a suffix, -2, -3 and on. The JSON goes first, so a WAV is only
+        ever on disk with its record beside it; if the WAV cannot be written, the JSON is removed.
+        """
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root.chmod(0o700)  # audio of a voice is biometric data: the owner's eyes only
         stamp = datetime.fromisoformat(entry.time).strftime("%Y%m%d-%H%M%S")
         tag = entry.turn if entry.turn else f"w{entry.count}"
-        entry.path = self.root / f"{stamp}-{tag}.wav"
-        _write_atomically(entry.path, wav)
+        entry.path = self._free_path(f"{stamp}-{tag}")
         self.write(entry)
+        try:
+            _write_atomically(entry.path, wav)
+        except OSError:
+            entry.json_path().unlink(missing_ok=True)
+            raise
         LOG.info("Saved the wake clip from %s as %s", entry.time, entry.path.name)
         return entry
+
+    def _free_path(self, stem: str) -> Path:
+        path, n = self.root / f"{stem}.wav", 1
+        while path.exists() or path.with_suffix(".json").exists():
+            n += 1
+            path = self.root / f"{stem}-{n}.wav"
+        return path
 
     def write(self, entry: Entry) -> None:
         """Rewrite the clip's JSON from the entry."""
@@ -133,7 +148,10 @@ class WakeClipStore:
         found = []
         for path in sorted(self.root.glob("*.wav")):
             try:
-                found.append(_from_json(path, json.loads(path.with_suffix(".json").read_text())))
+                data = json.loads(path.with_suffix(".json").read_text())
+                if not isinstance(data, dict):
+                    raise ValueError("it is not a JSON object")
+                found.append(_from_json(path, data))
             except (OSError, ValueError, KeyError, TypeError, IndexError) as err:
                 LOG.warning("Skipping the wake clip %s: its JSON could not be read (%s)", path.name, err)
         return sorted(found, key=lambda e: (e.timestamp(), e.path.name))
@@ -144,8 +162,11 @@ class WakeClipStore:
             return np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.int16)
 
     def delete(self, entry: Entry) -> None:
-        """Remove the clip, its JSON and every take file exported from it."""
-        for path in (entry.path, entry.json_path(), *(Path(p) for p in entry.exported)):
+        """Remove every take file exported from the clip, then the clip, then its JSON.
+
+        The JSON goes last, so a failure partway leaves the clip listed and a later delete can finish.
+        """
+        for path in (*(Path(p) for p in entry.exported), entry.path, entry.json_path()):
             path.unlink(missing_ok=True)
         LOG.info("Deleted the wake clip %s, its JSON and %d exported take files", entry.path.name, len(entry.exported))
 
