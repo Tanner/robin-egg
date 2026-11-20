@@ -17,7 +17,7 @@
 - Do not use `get_azimuth_degrees()` (not in the release) or `beam_direction.has_state()` (publishes only on change).
 - Fact key `egg_last_heard`, value `voices nearby`, TTL 2 hours (7200 s).
 - Re-post at most every 10 minutes (600 s); check once a minute (60 s) while the sensor stays on.
-- Ignore the sensor during a turn, during playback, for 3 s after playback, and while the mic is muted.
+- Ignore the sensor during a turn, for 4 s after a turn ends, during playback, for 4 s after playback, and while the mic is muted. (4 s, not the spec's 3 s: the firmware's off state can lag 3 s hold + 0.5 s poll + API latency, and the beam is locked during a turn.)
 - `description` on robin-assistant: optional, sanitized like `value`, at most 200 characters (413 over), replaced with each deposit, never compared for `context_changed`.
 - Egg fact descriptions stay near 100 characters; the test caps them at 120.
 - Logs are plain sentences for a human, no emojis. No comments that narrate the change.
@@ -72,7 +72,7 @@ Tanner flashes the egg; the agent cannot. Stop and ask for this before Task 6.
 
 - [ ] **Step 1: Ask Tanner to flash** with `cd firmware && .venv/bin/esphome run robin-egg.yaml` from the main checkout, and to watch the "Voice Heard" state with `--logs` or the ESPHome logs.
 
-- [ ] **Step 2: Record each case** from the spec's bench list: quiet room, fan or dishwasher, talking, TV, the egg playing a reply, mic muted. Plus: LED beam tracking and beam lock behave as before.
+- [ ] **Step 2: Record each case** from the spec's bench list: quiet room, fan or dishwasher, talking, TV, the egg playing a reply, mic muted. Plus: during a wake word turn and for a few seconds after it ends (the beam is locked then), including a turn where nobody speaks after the wake word; and LED beam tracking and beam lock behave as before.
 
 - [ ] **Step 3: Decide.** If a quiet room does not stay off, stop the plan and go back to the design. Otherwise commit:
 
@@ -215,9 +215,9 @@ Only after Task 2 says the sensor works.
 - Test: `server/tests/test_voice_heard.py`, `server/tests/test_main.py`
 
 **Interfaces:**
-- Consumes: `EGG_LAST_HEARD`, `LAST_HEARD_TTL_S` (Task 5); `MicMute.muted`; `Robin._busy_reason()`; `Robin._playback_until`; `Robin.played_clock()`.
+- Consumes: `EGG_LAST_HEARD`, `LAST_HEARD_TTL_S` (Task 5); `MicMute.muted`; `Robin._busy_reason()`; `Robin._playback_until`; `Robin.played_clock()`; the point a turn ends, which Task 6 records as `Robin._turn_ended_at` on `played_clock()`.
 - Produces:
-  - `VOICE_HEARD_OBJECT_ID = "voice_heard"`, `REPOST_S = 600.0`, `CHECK_S = 60.0`, `AFTER_PLAYBACK_S = 3.0`.
+  - `VOICE_HEARD_OBJECT_ID = "voice_heard"`, `REPOST_S = 600.0`, `CHECK_S = 60.0`, `SETTLE_S = 4.0` (after playback and after a turn).
   - `class VoiceHeard(ignore_reason: Callable[[], str | None], report: Callable[[], None], clock: Callable[[], float] = time.monotonic, repost_s: float = REPOST_S, check_s: float = CHECK_S)` with `on: bool`, `async watch(client) -> None` (never raises), `reset() -> None`, `consider() -> bool` (True when it reported).
   - `RoomContext.voices_heard() -> None`: `note(EGG_LAST_HEARD, "voices nearby", LAST_HEARD_TTL_S, again=True)`.
   - `Options.voice_heard: bool = True`; `Robin._voice_ignore_reason() -> str | None`.
@@ -235,7 +235,8 @@ Unit tests on `VoiceHeard` with a list-backed fake clock and `report` appending 
 Through the fake egg (pattern from `test_mic_mute.py`'s `with_egg`, with a `FakeRobinAssistant` and `RoomContext`):
 - `test_voices_post_egg_last_heard`: `egg.set_voice_heard(True)` → one `egg_last_heard` post with value `voices nearby` and its description.
 - `test_voices_while_muted_post_nothing`.
-- `test_voices_during_and_just_after_a_reply_post_nothing`: during a reply, and within 3 s after its `_playback_until`.
+- `test_voices_during_and_just_after_a_reply_post_nothing`: during a reply, and within 4 s after its `_playback_until`.
+- `test_voices_just_after_a_turn_with_no_reply_post_nothing`: a wake word run where nobody speaks, sensor on as it ends; nothing posts within 4 s of the turn ending, and the next minute check after that does post.
 - `test_voices_already_on_at_connect_post`: `FakeEgg` starts with the sensor on.
 - `test_egg_without_the_sensor_logs_once`: `FakeEgg(voice_heard_sensor=False)`; `caplog` has exactly one line containing `no voice_heard sensor`; no `egg_last_heard` posts.
 - `test_no_voice_heard_flag_ignores_the_sensor`: `Options(voice_heard=False)` → no posts.
@@ -250,7 +251,7 @@ Expected: FAIL on import of `robin_egg_server.voice_heard`.
 - [ ] **Step 3: Implement**
 
 - `voice_heard.py` follows `mic_mute.py`: list entities, match `BinarySensorInfo` by `object_id`, `subscribe_states`, ignore other keys and states with `missing_state`. `watch` starts a task that calls `consider()` every `check_s` while connected; `reset` cancels it. `consider()` logs skips at debug level with the ignore reason, for example `Heard voices near the egg but not telling Robin: the microphone is muted`. Missing entity: `LOG.info("The egg has no voice_heard sensor, so Robin will not be told when voices are heard nearby")`.
-- `Robin._voice_ignore_reason()`: `"the microphone is muted"` if `self.mic_mute.muted`; else `self._busy_reason()`; else `"the egg finished playing a moment ago"` if `self.played_clock() < self._playback_until + AFTER_PLAYBACK_S`; else None. Mute is checked directly, not through `_mic_muted()`, so `--no-quiet-when-muted` does not turn it off.
+- `Robin._voice_ignore_reason()`: `"the microphone is muted"` if `self.mic_mute.muted`; else `self._busy_reason()`; else `"the egg finished playing a moment ago"` if `self.played_clock() < self._playback_until + SETTLE_S`; else `"a conversation ended a moment ago"` if `self.played_clock() < self._turn_ended_at + SETTLE_S`; else None. Set `_turn_ended_at` where the turn is cleared. Mute is checked directly, not through `_mic_muted()`, so `--no-quiet-when-muted` does not turn it off.
 - `report` calls `self.room_context.voices_heard()` when `room_context` is set.
 - When `opts.voice_heard` is False, do not watch, and log once at start that voice-heard presence is off.
 - Fake egg: `ListEntitiesBinarySensorResponse(object_id="voice_heard", key=VOICE_HEARD_KEY, name="Voice Heard")` in the entity list and `BinarySensorStateResponse(key=VOICE_HEARD_KEY, state=...)` on subscribe and from `set_voice_heard`, both only when `voice_heard_sensor` is True. Pick a `VOICE_HEARD_KEY` that differs from the other keys.

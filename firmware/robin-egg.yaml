@@ -72,8 +72,11 @@ micro_wake_word:
 
 # Whether the board hears voices nearby, for the server to tell Robin someone is
 # around. Only this on/off state leaves the egg: no audio and no direction.
-# read_led_beam_direction() returns -1 when the DSP has no voice direction,
-# which it reports only while someone is speaking. It is published from an
+# read_led_beam_direction() returns -1 when the DSP has no voice direction. The
+# formatBCE source says the DSP gives none in silence; the bench check in
+# docs/bench-test.md records whether that holds. While a wake word turn has the
+# beam locked it reads the fixed beam, so the state means nothing then, and the
+# server ignores it during and just after a turn. It is published from an
 # interval because a template lambda would read the DSP on every loop pass.
 binary_sensor:
   - platform: template
