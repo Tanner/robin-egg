@@ -1,5 +1,6 @@
 #include "wake_clip.h"
 
+#include "esphome/core/hal.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
@@ -22,6 +23,10 @@ static constexpr size_t WAV_HEADER_BYTES = 44;
 // count, so the server sees the mismatch and drops it instead of filing it under the new wake.
 static constexpr TickType_t FREEZE_WAIT = pdMS_TO_TICKS(100);
 static constexpr TickType_t RESPONSE_WAIT = pdMS_TO_TICKS(1000);
+
+// The microphone sends audio every few tens of milliseconds while it runs. A longer gap means
+// it was stopped and started again, so the audio before the gap is not joined to what follows.
+static constexpr uint32_t RESTART_GAP_MS = 500;
 
 static void put_le16(uint8_t *out, uint16_t value) {
   out[0] = value & 0xFF;
@@ -100,7 +105,13 @@ void WakeClip::on_audio_(const std::vector<uint8_t> &data) {
     len = this->capacity_bytes_;
   }
 
+  const uint32_t now = millis();
   xSemaphoreTake(this->ring_lock_, portMAX_DELAY);
+  if (now - this->last_audio_ms_ > RESTART_GAP_MS) {
+    this->ring_write_ = 0;
+    this->ring_filled_ = 0;
+  }
+  this->last_audio_ms_ = now;
   const size_t first = std::min(len, this->capacity_bytes_ - this->ring_write_);
   std::memcpy(this->ring_ + this->ring_write_, src, first);
   std::memcpy(this->ring_, src + first, len - first);
@@ -138,6 +149,17 @@ void WakeClip::freeze(const std::string &wake_word) {
 
   ESP_LOGI(TAG, "Froze %.2f s of audio for wake %" PRIu32 " (%s)",
            filled / (float) (SAMPLE_RATE * (BITS_PER_SAMPLE / 8) * CHANNELS), this->wake_count_, wake_word.c_str());
+}
+
+void WakeClip::clear() {
+  if (this->is_failed()) {
+    return;
+  }
+  xSemaphoreTake(this->ring_lock_, portMAX_DELAY);
+  this->ring_write_ = 0;
+  this->ring_filled_ = 0;
+  xSemaphoreGive(this->ring_lock_);
+  ESP_LOGD(TAG, "Emptied the wake clip buffer, so the next clip holds only audio heard from now on");
 }
 
 void WakeClip::write_wav_header_(size_t data_bytes) {

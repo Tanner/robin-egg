@@ -39,6 +39,10 @@ class WakeClip : public Component {
   /// Runs on the main loop.
   void freeze(const std::string &wake_word);
 
+  /// Empties the ring buffer, so the next clip holds only audio heard from now on. The frozen
+  /// clip is left as it is. Runs on the main loop.
+  void clear();
+
   /// The number of wakes since boot, frozen or not.
   uint32_t get_count() const { return this->wake_count_; }
 
@@ -56,10 +60,12 @@ class WakeClip : public Component {
   std::string cutoff_;
 
   // The ring buffer. ring_write_ is where the next byte goes; ring_filled_ stops growing at
-  // capacity_bytes_. All three are guarded by ring_lock_.
+  // capacity_bytes_. last_audio_ms_ is when audio last arrived, to tell a microphone that
+  // stopped and started again. All four are guarded by ring_lock_.
   uint8_t *ring_{nullptr};
   size_t ring_write_{0};
   size_t ring_filled_{0};
+  uint32_t last_audio_ms_{0};
   SemaphoreHandle_t ring_lock_{nullptr};
 
   // The frozen clip: a 44-byte WAV header followed by up to capacity_bytes_ of audio, so a

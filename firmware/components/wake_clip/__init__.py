@@ -93,3 +93,13 @@ automation.register_apply_action(
     ),
     automation.ApplyField(CONF_WAKE_WORD, "freeze", cg.std_string),
 )
+
+automation.register_apply_action(
+    "wake_clip.clear",
+    automation.maybe_simple_id(
+        {
+            cv.GenerateID(): cv.use_id(WakeClip),
+        }
+    ),
+    automation.ApplyCall("clear()"),
+)
