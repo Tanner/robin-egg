@@ -36,11 +36,11 @@ Directions: the **front** is the side with the small key tab on the body's top l
 
 Also on hand: silicone for the ledge (not thick foam tape, see step 4), hot glue, and a loose handful of polyester fill.
 
-1. **Inserts.** Turn the body upside down. Press the 4 M3 heat-set inserts into the 4 holes around the big speaker hole, using a soldering iron.
+1. **Inserts.** Turn the body upside down. Press the 4 M3 heat-set inserts into the 4 larger (4 mm) holes, at the front, back, left and right of the big speaker hole, using a soldering iron. Leave the 4 smaller holes on the diagonals alone: those take the speaker screws.
 2. **Speaker.**
    - Solder the JST pigtail to the speaker, red to +.
    - With the body still upside down, set the speaker over the big hole, cone facing you and magnet down into the body. **The square flange sits on the outside face of the body, not inside the box.** The magnet needs all of the box's height: it ends 3.4 mm under the chassis this way, and hits the chassis if the flange is inside.
-   - Line its 4 corner holes up with the 4 small holes and fix it with the 4 M3 × 8 screws.
+   - Line its 4 corner holes up with the 4 small diagonal holes and fix it with the 4 M3 × 8 screws, driven straight into the plastic.
 3. **Fill.** Turn the body upright. Loosely fill the chamber with polyester fill through the open top. Keep it loose.
 4. **Chassis.**
    - Put a thin bead of silicone on the ledge inside the body. Don't use thick foam tape. It lifts the chassis, and the board with it, and the top's mic posts only clear the board by 0.6 mm.
