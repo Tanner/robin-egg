@@ -230,7 +230,7 @@ class Row:
     false_stopped_a_reply: int
     misses: int
     unreviewed: int
-    days: int  # calendar days from the first to the last clip of this round and cutoff, inclusive
+    days: int  # calendar days from the first to the last reviewed clip of this row, inclusive; 0 when none is reviewed
 
     @property
     def false_share(self) -> float | None:
@@ -241,39 +241,39 @@ class Row:
         return self.false / self.days if self.reviewed else None
 
 
-def _row(model_round: str, cutoff: float, speaker: str | None, group: list[Entry], days: int) -> Row:
+def _row(model_round: str, cutoff: float, speaker: str | None, group: list[Entry]) -> Row:
     real = [e for e in group if e.label == REAL]
     false = [e for e in group if e.label == FALSE]
+    reviewed = [datetime.fromisoformat(e.time).date() for e in group if e.label is not None]
     return Row(
         model_round=model_round,
         cutoff=cutoff,
         speaker=speaker,
-        reviewed=sum(1 for e in group if e.label is not None),
+        reviewed=len(reviewed),
         real=len(real),
         false=len(false),
         real_stopped_a_reply=sum(1 for e in real if e.kind == STOPPED_A_REPLY),
         false_stopped_a_reply=sum(1 for e in false if e.kind == STOPPED_A_REPLY),
         misses=sum(len(e.misses) for e in group),
         unreviewed=sum(1 for e in group if e.label is None),
-        days=days,
+        days=(max(reviewed) - min(reviewed)).days + 1 if reviewed else 0,
     )
 
 
 def summarise(entries: list[Entry]) -> list[Row]:
     """One all-speakers row per model round and cutoff, in the order each was first used, then one row per recognised speaker.
 
-    A speaker's false wakes per day are over the days the whole round was in use.
+    Each row's false wakes per day are over the days its reviewed clips span, so clips still
+    waiting for review neither add to the false wakes nor stretch the days they are shared over.
     """
     rounds: dict[tuple[str, float], list[Entry]] = {}
     for entry in entries:
         rounds.setdefault((entry.model_round, entry.cutoff), []).append(entry)
     rows = []
     for (model_round, cutoff), group in rounds.items():
-        dates = [datetime.fromisoformat(e.time).date() for e in group]
-        days = (max(dates) - min(dates)).days + 1
-        rows.append(_row(model_round, cutoff, None, group, days))
+        rows.append(_row(model_round, cutoff, None, group))
         for speaker in sorted({e.speaker for e in group if e.speaker is not None}):
-            rows.append(_row(model_round, cutoff, speaker, [e for e in group if e.speaker == speaker], days))
+            rows.append(_row(model_round, cutoff, speaker, [e for e in group if e.speaker == speaker]))
     return rows
 
 
@@ -299,6 +299,7 @@ def report(entries: list[Entry]) -> str:
             "",
             'Misses are a lower bound: a missed "Hey Robin" is only seen when a second try woke the egg within 5 seconds.',
             f"These rates cover reviewed clips only. {waiting} {'clip is' if waiting == 1 else 'clips are'} waiting for review.",
+            "A wake whose clip could not be fetched is not counted here; the server log names each one.",
         ]
     )
 

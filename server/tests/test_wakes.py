@@ -502,9 +502,33 @@ def test_a_round_with_nothing_reviewed_has_no_rates(tmp_path):
     save(store, TWO_SPANS, minutes=0)
     save(store, TWO_SPANS, minutes=on_day(1, 0))
     for row in summarise(store.entries()):
-        assert (row.reviewed, row.unreviewed, row.days) == (0, 2, 2)
+        assert (row.reviewed, row.unreviewed, row.days) == (0, 2, 0)
         assert row.false_share is None
         assert row.false_per_day is None
+
+
+def test_days_run_over_the_reviewed_clips_only(tmp_path):
+    store = WakeClipStore(tmp_path)
+    save(store, TWO_SPANS, minutes=on_day(0, 0), label=FALSE, cut=(0, 100))
+    save(store, TWO_SPANS, minutes=on_day(0, 1), label=FALSE, cut=(0, 100))
+    for day in range(1, 5):
+        save(store, TWO_SPANS, minutes=on_day(day, 2))  # review has fallen behind
+    everyone, tanner = summarise(store.entries())
+    assert (everyone.reviewed, everyone.unreviewed, everyone.days) == (2, 4, 1)
+    assert everyone.false_per_day == 2.0
+    assert tanner.days == 1
+
+
+def test_each_speaker_has_the_days_of_their_own_reviewed_clips(tmp_path):
+    store = WakeClipStore(tmp_path)
+    save(store, TWO_SPANS, minutes=on_day(0, 0), speaker="tanner", label=REAL, cut=(0, 100))
+    save(store, TWO_SPANS, minutes=on_day(2, 1), speaker="tanner", label=FALSE, cut=(0, 100))
+    save(store, TWO_SPANS, minutes=on_day(1, 2), speaker="ryan", label=FALSE, cut=(0, 100))
+    save(store, TWO_SPANS, minutes=on_day(3, 3), speaker="ryan")
+    everyone, ryan, tanner = summarise(store.entries())
+    assert (everyone.days, ryan.days, tanner.days) == (3, 1, 3)
+    assert ryan.false_per_day == 1.0
+    assert tanner.false_per_day == pytest.approx(1 / 3)
 
 
 def read_take(path) -> tuple[tuple[int, int, int], np.ndarray]:
@@ -555,7 +579,7 @@ def test_export_twice_writes_nothing_new(tmp_path):
     assert {p: p.stat().st_mtime_ns for p in dest.rglob("*.wav")} == stamps
 
 
-def test_report_prints_the_two_cautions(tmp_path, capsys):
+def test_report_prints_the_cautions(tmp_path, capsys):
     store = WakeClipStore(tmp_path)
     save(store, TWO_SPANS, minutes=0, label=REAL, cut=(0, 100))
     save(store, TWO_SPANS, minutes=1, label=FALSE, cut=(0, 100))
@@ -563,9 +587,10 @@ def test_report_prints_the_two_cautions(tmp_path, capsys):
     save(store, TWO_SPANS, minutes=3)
     main(["report", "--dir", str(tmp_path)])
     out = capsys.readouterr().out.splitlines()
-    assert out[-2:] == [
+    assert out[-3:] == [
         'Misses are a lower bound: a missed "Hey Robin" is only seen when a second try woke the egg within 5 seconds.',
         "These rates cover reviewed clips only. 2 clips are waiting for review.",
+        "A wake whose clip could not be fetched is not counted here; the server log names each one.",
     ]
     assert any(line.split()[:3] == ["v1", "0.9", "everyone"] for line in out)
     assert any(line.split()[:3] == ["v1", "0.9", "tanner"] for line in out)
@@ -575,7 +600,7 @@ def test_report_with_one_clip_waiting_says_clip(tmp_path, capsys):
     store = WakeClipStore(tmp_path)
     save(store, TWO_SPANS)
     main(["report", "--dir", str(tmp_path)])
-    assert capsys.readouterr().out.splitlines()[-1] == "These rates cover reviewed clips only. 1 clip is waiting for review."
+    assert capsys.readouterr().out.splitlines()[-2] == "These rates cover reviewed clips only. 1 clip is waiting for review."
 
 
 def test_export_command_takes_a_destination(tmp_path, capsys):
