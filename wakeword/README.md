@@ -42,6 +42,34 @@ Say the takes at your everyday speed, from the places you normally talk to the e
 
 The cut clips are written back to `MyDrive/robin_wakeword/recordings_cut/` so you can listen to them. Deleting a bad cut there does nothing, because every run cuts the memos in `recordings/` again. To drop a take, rebuild the memo without it: join the good takes with a second of silence between them and save it as a WAV under the same name. Keep the original memo in `recordings/originals/`. The notebook skips folders. A bad take in a "Hey Robin" memo matters most: a breath, a click, or half of a split take teaches the model to wake on it. Stray sounds in a don't-wake memo do no harm.
 
+### From everyday use
+
+The egg keeps the 5 seconds of audio before each "Hey Robin" wake. After a round has been in use for a while, turn those clips into takes for the next round. Run the commands from `server/`; [server/README.md](../server/README.md#reviewing-wake-clips) has the details.
+
+1. Review the clips. Label each one real or false, and say whether the cut it plays is a clean "Hey Robin".
+
+   ```sh
+   .venv/bin/python -m robin_egg_server.wakes review
+   ```
+
+2. Print the wake rates, and copy the table into the round's write-up in `results/`.
+
+   ```sh
+   .venv/bin/python -m robin_egg_server.wakes report
+   ```
+
+3. Export the takes. Confirmed real wakes and misses go to `wakeword/recordings/egg_takes/positive/`, and false-wake cuts go to `egg_takes/negative/`.
+
+   ```sh
+   .venv/bin/python -m robin_egg_server.wakes export
+   ```
+
+4. Upload the `egg_takes/` folder to Drive at `MyDrive/robin_wakeword/recordings/`, next to the memos.
+
+The notebook adds these takes as they are and does not cut them again, so each take trains exactly as you heard it in review. In `recordings_cut/` their names start with `egg_`.
+
+The takes are not committed, unlike the memos. A false-wake take can hold 3 seconds of whatever was being said in the room, and git history cannot forget it. They stay on the Mac mini and in Drive, and `egg_takes/` is in `.gitignore`.
+
 ## Load it into the firmware
 
 Copy `hey_robin.json` and `hey_robin.tflite` into `firmware/`, next to `robin-egg.yaml`, then build and flash as usual. The device YAML already lists the model.

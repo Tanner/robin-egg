@@ -14,3 +14,6 @@ server/voices/
 
 # ESPHome build output
 firmware/.esphome/
+
+# Wake word takes exported from wake clips: household audio, uploaded to Drive instead
+wakeword/recordings/egg_takes/

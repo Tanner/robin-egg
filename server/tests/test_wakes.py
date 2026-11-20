@@ -6,6 +6,7 @@ Run from server/:  python -m pytest tests/test_wakes.py -q
 from __future__ import annotations
 
 import io
+import json
 import subprocess
 import wave
 from datetime import datetime, timedelta
@@ -437,3 +438,13 @@ def test_export_called_directly_resolves_a_relative_destination(tmp_path, monkey
     assert export(store, Path("takes")) == (0, 1)
     [entry] = store.entries()
     assert entry.exported == [str(tmp_path.resolve() / "takes" / "negative" / f"{entry.path.stem}.wav")]
+
+
+def test_the_notebook_copies_egg_takes_without_cutting():
+    notebook = Path(__file__).resolve().parents[2] / "wakeword" / "hey_robin_training.ipynb"
+    cell = json.loads(notebook.read_text())["cells"][8]
+    source = "".join(cell["source"])
+    assert cell["cell_type"] == "code"
+    assert "egg_takes" in source
+    assert "    regions = librosa.effects.split(audio, top_db=35, frame_length=1024, hop_length=160)\n" in source
+    compile(source, "cell8", "exec")
