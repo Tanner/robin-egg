@@ -231,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m robin_egg_server.vad", description="Compare the end-of-speech detectors on saved mic captures")
     sub = p.add_subparsers(dest="command", required=True)
     cmp_ = sub.add_parser("compare", help="Run the energy and model detectors over WAV captures and print where each would have ended the turn")
-    cmp_.add_argument("dir", type=Path, help="A folder of 16 kHz WAV captures, saved with --save-audio. Subfolders are read too")
+    cmp_.add_argument("dir", type=Path, help="A folder of 16 kHz WAV captures, saved with --save-audio-requests. Subfolders are read too")
     cmp_.add_argument("--no-speech-timeout", type=float, default=defaults.no_speech_timeout_s, help="Seconds to wait for speech to start (default 6; a follow-up waits 5)")
     cmp_.add_argument("--max-utterance", type=float, default=defaults.max_utterance_s, help="Longest request in seconds (default 30)")
     cmp_.add_argument("--threshold", type=float, default=ModelVadConfig.threshold, help="Speech probability the model detector counts as speech (default 0.5)")

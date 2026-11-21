@@ -24,6 +24,11 @@ substitutions:
   mute_switch_on_sound_file: sounds/mute_switch_on.flac
   mute_switch_off_sound_file: sounds/mute_switch_off.flac
 
+  # The "Hey Robin" model in use: its round in wakeword/results/ and its cutoff.
+  # Each wake clip carries both, so a clip can be traced to the model that heard it.
+  hey_robin_round: v1
+  hey_robin_cutoff: "0.9"
+
 packages:
   respeaker:
     url: https://github.com/formatBCE/Respeaker-XVF3800-ESPHome-integration
@@ -54,7 +59,7 @@ micro_wake_word:
     - model: hey_robin.json
       id: hey_robin
       # Trained at 0.97. Lowered because Ryan had to slow down to wake the egg.
-      probability_cutoff: 0.9
+      probability_cutoff: ${hey_robin_cutoff}
     - model: https://github.com/OHF-Voice/micro-wake-word/releases/download/okay_nabu_20241226.3/okay_nabu.json
       id: okay_nabu
     - model: https://raw.githubusercontent.com/formatBCE/Respeaker-Lite-ESPHome-integration/${satellite_core_ref}/microwakeword/models/v2/kenobi.json
@@ -69,6 +74,53 @@ micro_wake_word:
     - model: https://raw.githubusercontent.com/formatBCE/Respeaker-Lite-ESPHome-integration/${satellite_core_ref}/microwakeword/models/v2/snooze.json
       id: snooze
       internal: true
+
+# Wake clips: the last 5 seconds of what the wake word model heard before each wake, frozen
+# on the wake and served at http://<egg>:8080/wake-clip for the server to fetch. Capture is
+# off until a server started with --save-wake-clips turns the "Wake clips" switch on, and goes off
+# again when that server's connection ends. Removing this block, external_components and the
+# script, mute switch, switch, voice_assistant and api hooks below gives back the firmware
+# without clips.
+external_components:
+  - source:
+      type: local
+      path: components
+
+# The freeze hooks the base firmware's send_wake_word_event script rather than
+# on_wake_word_detected: the base firmware waits 300 ms after starting the wake sound
+# before anything appended to on_wake_word_detected runs, so a clip frozen there would end
+# late and could hold the chime. The base calls this script first, inside its "mute switch
+# is off" branch, so a wake while muted freezes nothing. These run after the script's own
+# esphome.wake_word_detected event, and only while capture is on, so with it off a wake sends
+# no event that no client has subscribed to.
+script:
+  - id: !extend send_wake_word_event
+    then:
+      - if:
+          condition:
+            switch.is_on: wake_clips_switch
+          then:
+            - wake_clip.freeze:
+                id: wake_clip_capture
+                wake_word: !lambda return wake_word;
+            - homeassistant.event:
+                event: esphome.wake_clip_frozen
+                data:
+                  count: !lambda return to_string(id(wake_clip_capture).get_count());
+                  wake_word: !lambda return wake_word;
+
+wake_clip:
+  id: wake_clip_capture
+  # Must match micro_wake_word's microphone settings, so a clip is what the model heard.
+  # The core package sets i2s_mics channel 1, and the XVF3800 package sets gain factor 1.
+  microphone:
+    microphone: i2s_mics
+    channels: 1
+    gain_factor: 1
+  seconds: 5
+  port: 8080
+  model_round: ${hey_robin_round}
+  cutoff: ${hey_robin_cutoff}
 
 # Whether the board hears voices nearby, for the server to tell Robin someone is
 # around. Only this on/off state leaves the egg: no audio and no direction.
@@ -88,6 +140,13 @@ respeaker_xvf3800:
       - binary_sensor.template.publish:
           id: voice_heard
           state: OFF
+  # Audio heard while muted is not kept in a wake clip: unmuting empties the clip buffer, so a
+  # wake soon after freezes only what was heard since. The mute switch is part of the base
+  # firmware's respeaker_xvf3800 block, so it cannot be extended by id under switch:. A package
+  # merge adds this action after the base firmware's own on_turn_off actions.
+  mute_switch:
+    on_turn_off:
+      - wake_clip.clear: wake_clip_capture
 
 binary_sensor:
   - platform: template
@@ -96,6 +155,41 @@ binary_sensor:
     disabled_by_default: true
     filters:
       - delayed_off: 10s
+
+# The server turns this on when it was started with --save-wake-clips, and off otherwise, each time
+# it connects. It is never restored, so the egg keeps no audio after a reboot until asked.
+switch:
+  - platform: template
+    id: wake_clips_switch
+    name: Wake clips
+    icon: "mdi:waveform"
+    entity_category: config
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - wake_clip.enable: wake_clip_capture
+    turn_off_action:
+      - wake_clip.disable: wake_clip_capture
+
+# Capture follows the server that turned it on. The server is the voice assistant's client, and
+# this trigger fires when that one connection closes or unsubscribes, whatever else stays
+# connected. A package merge adds this action after the base firmware's own
+# on_client_disconnected actions.
+voice_assistant:
+  on_client_disconnected:
+    - switch.turn_off: wake_clips_switch
+
+# A second net: with no client connected at all, the egg stops keeping audio. The same merge
+# appends this, and the trigger fires after the client is removed, so api.connected is already
+# false when the last one goes.
+api:
+  on_client_disconnected:
+    - if:
+        condition:
+          not:
+            api.connected:
+        then:
+          - switch.turn_off: wake_clips_switch
 
 wifi:
   ssid: !secret wifi_ssid

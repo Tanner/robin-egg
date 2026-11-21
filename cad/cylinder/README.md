@@ -83,7 +83,7 @@ From the first assembly, 2026-11-19. Everything fitted once the speaker was moun
 - **Reprint the top for the mics.** With the first top on, speech-to-text got questions wrong that it got right with the top lifted off. Captures on 2026-11-21 showed why: speech from 1 to 2 kHz was 12 to 22 dB weaker with the top on. Each mic post stopped 0.6 mm above the board, so the mic heard the air inside the top more than the room, through a hole only 1.2 mm wide.
   - Both tops now have posts that end 0.1 mm above the board and holes of 2 mm. No gasket is needed.
   - If a print comes out tall, the posts rest on the board and the top sits a fraction of a millimetre high. That is fine.
-  - Test it by asking the same question with the top on and off, with the server's `--save-audio` on, and comparing the captures. If the top still muffles speech, add a ring of 1 mm closed-cell foam on each post and raise `MIC_BOSS_GAP` to about 0.7.
+  - Test it by asking the same question with the top on and off, with the server's `--save-audio-requests` on, and comparing the captures. If the top still muffles speech, add a ring of 1 mm closed-cell foam on each post and raise `MIC_BOSS_GAP` to about 0.7.
 - **Seal the speaker chamber.** The first assembly used screws only: no silicone on the ledge, no hot glue in the wire hole and no fill. The chamber leaks into the bay under the board, where the mics are. Seal it as the assembly steps describe.
 - **Mute tab not tested yet.** If pressing it resets the board instead of muting, set `MUTE_SIDE = -1`. Fold that into the same top reprint.
 - **The steps confused three things,** now spelled out above:

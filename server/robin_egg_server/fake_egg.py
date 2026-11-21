@@ -11,6 +11,11 @@ played for its whole audio: played_clock() moves on by the rest, so the server c
 against its length without the tests waiting in real time. A reply is the same with
 wake_stops, over reply_seconds. Without wake_stops a reply is only fetched, not played:
 a test that needs it to have played says so with skip_played().
+
+With clips, it also does what the egg's wake clip component does: it lists the "Wake clips"
+switch, off until the server turns it on and off again when the server goes. While it is on,
+every wake word heard while the mic is not muted freezes a clip and sends the wake_clip_frozen
+event, and the frozen clip is served over HTTP on clip_port.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ import asyncio
 import io
 import time
 import urllib.request
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,6 +36,8 @@ from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
 from .audio import MIC_RATE, resample
 from .mic_mute import MUTE_OBJECT_ID
 from .voice_heard import VOICE_HEARD_OBJECT_ID
+from .wake_clip_switch import SWITCH_OBJECT_ID as CLIPS_OBJECT_ID
+from .wake_clips import CLIP_PATH, FROZEN_EVENT
 
 PROTO_TO_TYPE = {v: k for k, v in MESSAGE_TYPE_TO_PROTO.items()}
 RING_EFFECTS = ["Breathe", "Twinkle", "Comet CW", "Comet CCW"]
@@ -40,6 +48,7 @@ VOICE_HEARD_KEY = 0x564F4943  # the "Voice Heard" binary sensor's entity key
 RING_KEY = 0x1ED  # the LED ring light's entity key
 MEDIA_PLAYER_KEY = 0x5EA4E401  # entity keys are hashes on the real egg, so nothing may assume a value
 GROUP_PLAYER_KEY = 0x5EA4E402
+CLIPS_KEY = 0xC11B5  # the "Wake clips" switch's entity key
 
 
 def varint(n: int) -> bytes:
@@ -141,6 +150,10 @@ class FakeEgg:
         wake_stops: bool = False,
         reply_seconds: float = 0.0,
         lead_s: float = 0.4,
+        clips: bool = False,
+        clip_audio: bytes | None = None,
+        model_round: str = "v1",
+        cutoff: float = 0.9,
     ) -> None:
         """wake_words, when given, says how each run starts, one per utterance: a wake word
         starts that run even if the server did not ask for a follow-up, and None means a follow-up.
@@ -155,7 +168,12 @@ class FakeEgg:
         for reply_seconds, or until the wake word stops it, and counts as having played for its
         whole audio if nothing stopped it. Every reply and announcement ends with announce-finished.
 
-        lead_s is the room noise before each utterance; 0 is someone already talking when the mic opens."""
+        lead_s is the room noise before each utterance; 0 is someone already talking when the mic opens.
+
+        clips turns on the wake clip component. While its switch is on, every wake freezes a clip:
+        the first run, a run wake_words starts and wake(), but not a follow-up. Each freeze copies clip_audio, 16 kHz 16-bit
+        mono PCM, or 5 s of silence when it is None, and the clip is served with model_round and
+        cutoff in its headers."""
         self.volume, self.speaker_muted = volume, speaker_muted
         self.media_player_object_id = media_player_object_id
         self.volumes_set: list[float] = []  # every volume the server asked for, in order
@@ -192,15 +210,31 @@ class FakeEgg:
         self._fetch: asyncio.Task | None = None
         self._server: asyncio.base_events.Server | None = None
         self.port = 0
+        self.clips = clips
+        self.clip_audio = clip_audio
+        self.model_round, self.cutoff = model_round, cutoff
+        self.clip_port = 0  # the HTTP port the frozen clip is served on, once started with clips
+        self.clip_count = 0  # the wake counter: bumped by each freeze
+        self.clip_delay_s = 0.0  # how long the fake waits before answering a clip fetch
+        self._frozen: tuple[int, str, bytes] | None = None  # count, wake word, WAV
+        self._clips_enabled = False  # the "Wake clips" switch, off at boot like the firmware's
+        self.clip_switch_commands: list[bool] = []  # every state the server set the switch to, in order
+        self._services_subscribed = False
+        self._clip_server: asyncio.base_events.Server | None = None
 
     async def start(self, host: str = "127.0.0.1", port: int = 0) -> int:
         self._server = await asyncio.start_server(self._handle, host, port)
         self.port = self._server.sockets[0].getsockname()[1]
+        if self.clips:
+            self._clip_server = await asyncio.start_server(self._serve_clip, host, 0)
+            self.clip_port = self._clip_server.sockets[0].getsockname()[1]
         return self.port
 
     async def stop(self) -> None:
         if self._server is not None:
             self._server.close()
+        if self._clip_server is not None:
+            self._clip_server.close()
 
     def drop(self) -> None:
         """Hangs up on the server, as a reboot or a Wi-Fi drop does."""
@@ -221,6 +255,7 @@ class FakeEgg:
                 return
             self._w = w
             self._states_subscribed = False
+            self._services_subscribed = False
             first = True
             while True:
                 if not first and (await r.readexactly(1)) != b"\x00":
@@ -233,6 +268,9 @@ class FakeEgg:
                 await self._on_message(msg)
         except (asyncio.IncompleteReadError, ConnectionResetError):
             return
+        finally:
+            if self._w is w:  # the last client went, so, like the firmware, the egg stops keeping audio
+                self._set_clips_enabled(False)
 
     async def _on_message(self, msg) -> None:
         if isinstance(msg, pb.HelloRequest):
@@ -248,6 +286,12 @@ class FakeEgg:
                 self.send(pb.ListEntitiesSwitchResponse(object_id=MUTE_OBJECT_ID, key=MUTE_KEY, name="Microphone Mute"))
             if self.voice_heard_sensor:
                 self.send(pb.ListEntitiesBinarySensorResponse(object_id=VOICE_HEARD_OBJECT_ID, key=VOICE_HEARD_KEY, name="Voice Heard"))
+            if self.clips:
+                self.send(
+                    pb.ListEntitiesSwitchResponse(
+                        object_id=CLIPS_OBJECT_ID, key=CLIPS_KEY, name="Wake clips", icon="mdi:waveform", entity_category=pb.ENTITY_CATEGORY_CONFIG
+                    )
+                )
             self.send(pb.ListEntitiesLightResponse(object_id="led_ring", key=RING_KEY, name="LED Ring", supported_color_modes=[pb.COLOR_MODE_RGB], effects=RING_EFFECTS))
             # The firmware lists a Sendspin group player as well as the speaker's own.
             self.send(pb.ListEntitiesMediaPlayerResponse(object_id="sendspin_group", key=GROUP_PLAYER_KEY, name="Sendspin Group"))
@@ -260,14 +304,22 @@ class FakeEgg:
                 self.send(pb.BinarySensorStateResponse(key=VOICE_HEARD_KEY, state=self.voice_heard))
             if self.mute_switch:
                 self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=self.muted))
+            if self.clips:
+                self.send(pb.SwitchStateResponse(key=CLIPS_KEY, state=self._clips_enabled))
             self._send_ring_state()
             self.send(pb.MediaPlayerStateResponse(key=GROUP_PLAYER_KEY, state=pb.MEDIA_PLAYER_STATE_IDLE, volume=1.0))
             self._send_volume()
+        elif isinstance(msg, pb.SubscribeHomeassistantServicesRequest):
+            self._services_subscribed = True
         elif isinstance(msg, pb.LightCommandRequest) and msg.key == RING_KEY:
             self._on_ring_command(msg)
+        elif isinstance(msg, pb.SwitchCommandRequest) and self.clips and msg.key == CLIPS_KEY:
+            self.clip_switch_commands.append(msg.state)
+            self._set_clips_enabled(msg.state)
         elif isinstance(msg, pb.SubscribeVoiceAssistantRequest) and msg.subscribe:
             await asyncio.sleep(0.05)
             first = self.wake_words[0] if self.wake_words else None
+            self._freeze(first or self.wake_word)  # the first run stands for a wake word heard
             self._start_run(first or self.wake_word)
         elif isinstance(msg, pb.VoiceAssistantResponse):
             assert msg.port == 0 and not msg.error
@@ -363,7 +415,10 @@ class FakeEgg:
         only stops it. Before TTS_END a run is stopped with a stop request, which the server
         sees as handle_stop(True); after it, only the playing reply is stopped. Either way the
         media player reports announce-finished with success, and the mic does not reopen.
+
+        With clips, the wake word freezes a clip first, whatever it then starts or stops.
         """
+        self._freeze()
         if not self.wake_stops:
             self._announce_cut.set()
             self._start_run(self.wake_word)
@@ -386,6 +441,75 @@ class FakeEgg:
             self.send(pb.VoiceAssistantAnnounceFinished(success=True))
         self._active = None
         self.done.set()
+
+    # ---- the wake clip ----
+
+    @property
+    def clips_enabled(self) -> bool:
+        """Whether the "Wake clips" switch is on, so a wake freezes a clip."""
+        return self._clips_enabled
+
+    def _set_clips_enabled(self, on: bool) -> None:
+        """Like the firmware's switch: turning it off wipes the frozen clip, and the new state is reported back."""
+        if not self.clips:
+            return
+        self._clips_enabled = on
+        if not on:
+            self._frozen = None
+        if self._states_subscribed and self._w is not None and not self._w.is_closing():
+            self.send(pb.SwitchStateResponse(key=CLIPS_KEY, state=on))
+
+    def freeze_only(self) -> None:
+        """Freeze a clip and send its event, as a wake does, without starting or stopping a run."""
+        self._freeze()
+
+    def _freeze(self, wake_word: str | None = None) -> None:
+        """Like the firmware: with capture on and the mute switch off, freeze the clip, then tell the server if it has subscribed.
+
+        wake_word is the phrase heard, the egg's own wake word unless a run says otherwise.
+        """
+        if not self.clips or not self._clips_enabled or self.muted:
+            return
+        wake_word = wake_word or self.wake_word
+        self.clip_count += 1
+        pcm = self.clip_audio if self.clip_audio is not None else bytes(5 * MIC_RATE * 2)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(MIC_RATE)
+            w.writeframes(pcm)
+        self._frozen = (self.clip_count, wake_word, buf.getvalue())
+        if self._services_subscribed and self._w is not None:
+            data = {"count": str(self.clip_count), "wake_word": wake_word}
+            self.send(
+                pb.HomeassistantActionRequest(
+                    service=FROZEN_EVENT, is_event=True, data=[pb.HomeassistantServiceMap(key=k, value=v) for k, v in data.items()]
+                )
+            )
+
+    async def _serve_clip(self, r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
+        """A minimal HTTP server for GET /wake-clip: the frozen clip with its headers, or 404."""
+        try:
+            request = await r.readuntil(b"\r\n\r\n")
+            path = request.split(b" ")[1].decode() if request.count(b" ") >= 2 else ""
+            if self.clip_delay_s:
+                await asyncio.sleep(self.clip_delay_s)
+            if path != CLIP_PATH or self._frozen is None:
+                w.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            else:
+                count, wake_word, wav = self._frozen
+                head = (
+                    "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\n"
+                    f"Content-Length: {len(wav)}\r\nX-Wake-Count: {count}\r\nX-Wake-Word: {wake_word}\r\n"
+                    f"X-Model-Round: {self.model_round}\r\nX-Cutoff: {self.cutoff}\r\nConnection: close\r\n\r\n"
+                )
+                w.write(head.encode() + wav)
+            await w.drain()
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionError):
+            pass
+        finally:
+            w.close()
 
     # ---- the voice run ----
 
@@ -476,6 +600,7 @@ class FakeEgg:
     def _after_run(self, run: Run) -> None:
         following = self.wake_words[len(self.runs)] if self.wake_words and len(self.runs) < len(self.wake_words) else None
         if following is not None:
+            self._freeze(following)
             self._start_run(following)  # someone said the wake word instead of waiting
         elif run.data(pb.VOICE_ASSISTANT_INTENT_END).get("continue_conversation") == "1":
             # The firmware reopens its mic without listening for a wake word, but still
