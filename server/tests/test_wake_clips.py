@@ -132,18 +132,22 @@ def test_trim_deletes_only_old_unlabelled_clips(tmp_path):
     assert not old.path.with_suffix(".json").exists()
 
 
+OLD_S, RECENT_S = NOW.timestamp() - 15 * 86400, NOW.timestamp() - 86400
+
+
+def aged(path: Path, when: float) -> Path:
+    os.utime(path, (when, when))
+    return path
+
+
 def test_trim_deletes_old_files_that_cannot_be_read(tmp_path):
     store = WakeClipStore(tmp_path / "wakes")
-    old_s, recent_s = NOW.timestamp() - 15 * 86400, NOW.timestamp() - 86400
-
-    def aged(path: Path, when: float) -> Path:
-        os.utime(path, (when, when))
-        return path
-
     broken = store.save(wav_bytes(tone(1.0)), entry(NOW, turn="t1", label=REAL))
     broken.json_path().write_text("{not json")
     lone_json = store.save(wav_bytes(tone(1.0)), entry(NOW, turn="t2", label=REAL))
     lone_json.path.unlink()
+    lone_wav = store.save(wav_bytes(tone(1.0)), entry(NOW, turn="t7"))
+    lone_wav.json_path().unlink()
     recent_broken = store.save(wav_bytes(tone(1.0)), entry(NOW, turn="t3"))
     recent_broken.json_path().write_text("{not json")
     leftovers = [store.root / ".20261120-093000-t4.wav.tmp", store.root / ".20261120-093000-t5.json.tmp"]
@@ -151,13 +155,53 @@ def test_trim_deletes_old_files_that_cannot_be_read(tmp_path):
         path.write_bytes(b"half")
     recent_tmp = store.root / ".20261120-093000-t6.wav.tmp"
     recent_tmp.write_bytes(b"half")
-    for path in (broken.path, broken.json_path(), lone_json.json_path(), *leftovers):
-        aged(path, old_s)
+    for path in (broken.path, broken.json_path(), lone_json.json_path(), lone_wav.path, *leftovers):
+        aged(path, OLD_S)
     for path in (recent_broken.path, recent_broken.json_path(), recent_tmp):
-        aged(path, recent_s)
+        aged(path, RECENT_S)
 
-    assert store.trim(NOW.timestamp()) == 5
-    assert sorted(p.name for p in store.root.iterdir()) == sorted([recent_broken.path.name, recent_broken.json_path().name, recent_tmp.name])
+    assert store.trim(NOW.timestamp()) == 4  # the lone JSON, the lone WAV and the two temporary files
+    kept = [broken.path, broken.json_path(), recent_broken.path, recent_broken.json_path(), recent_tmp]
+    assert sorted(p.name for p in store.root.iterdir()) == sorted(p.name for p in kept)
+
+
+@pytest.mark.parametrize("damage", ["not json", "not an object", "missing a field", "a bad time", "unreadable"])
+def test_trim_keeps_an_old_clip_whose_json_cannot_be_read(tmp_path, monkeypatch, damage):
+    store = WakeClipStore(tmp_path / "wakes")
+    labelled = store.save(wav_bytes(tone(1.0)), entry(NOW - timedelta(days=30), label=REAL))
+    data = json.loads(labelled.json_path().read_text())
+    if damage == "not json":
+        labelled.json_path().write_text("{not json")
+    elif damage == "not an object":
+        labelled.json_path().write_text("[]")
+    elif damage == "missing a field":
+        del data["kind"]
+        labelled.json_path().write_text(json.dumps(data))
+    elif damage == "a bad time":
+        data["time"] = "last Tuesday"
+        labelled.json_path().write_text(json.dumps(data))
+    else:
+        real_read = Path.read_text
+
+        def failing(self, *args, **kwargs):
+            if self == labelled.json_path():
+                raise OSError("Too many open files")
+            return real_read(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", failing)
+    aged(labelled.path, OLD_S)
+    aged(labelled.json_path(), OLD_S)
+    assert store.trim(NOW.timestamp()) == 0
+    assert labelled.path.exists() and labelled.json_path().exists()
+
+
+def test_trim_deletes_an_old_wav_with_no_json_at_all(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    lone = store.save(wav_bytes(tone(1.0)), entry(NOW - timedelta(days=30)))
+    lone.json_path().unlink()
+    aged(lone.path, OLD_S)
+    assert store.trim(NOW.timestamp()) == 1
+    assert not lone.path.exists()
 
 
 def test_delete_removes_the_clip_and_its_takes(tmp_path):

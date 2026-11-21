@@ -234,11 +234,12 @@ class WakeClipStore:
         LOG.info("Deleted the wake clip %s, its JSON and %d exported take files", entry.path.name, len(entry.exported))
 
     def trim(self, now: float | None = None) -> int:
-        """Delete unlabelled clips older than KEEP_UNLABELLED_S, judged by the wake's time, and the files nothing can read.
+        """Delete unlabelled clips older than KEEP_UNLABELLED_S, judged by the wake's time, and the files left with no partner.
 
-        Those are a WAV with no readable JSON, a JSON with no WAV and a temporary file left by a
+        Those are a WAV with no JSON beside it, a JSON with no WAV and a temporary file left by a
         crash, each judged by its modification time, so a save still under way is never touched.
-        Returns how many clips and files went.
+        A WAV whose JSON is there but cannot be read is kept, however old, since it may be
+        labelled; entries() warns about it. Returns how many clips and files went.
         """
         now = time.time() if now is None else now
         entries = self.entries()
@@ -247,13 +248,12 @@ class WakeClipStore:
             self.delete(entry)
         if old:
             LOG.info("Deleted %d unlabelled wake clips older than %d days", len(old), KEEP_UNLABELLED_S // 86400)
-        readable = {e.path for e in entries}
-        stray = self._delete_old([p for p in self.root.glob("*.wav") if p not in readable and p.is_file()], now)
-        stray += self._delete_old([p for p in self.root.glob("*.json") if not p.with_suffix(".wav").exists()], now)
+        stray = self._delete_old([p for p in self.root.glob("*.wav") if p.is_file() and not _present(p.with_suffix(".json"))], now)
+        stray += self._delete_old([p for p in self.root.glob("*.json") if not _present(p.with_suffix(".wav"))], now)
         stray += self._delete_old(self.root.glob(".*.tmp"), now)
         if stray:
             LOG.info(
-                "Deleted %d files older than %d days from %s that were not part of a readable wake clip: %s",
+                "Deleted %d files older than %d days from %s that were not part of a whole wake clip: %s",
                 len(stray), KEEP_UNLABELLED_S // 86400, self.root, ", ".join(stray),
             )
         return len(old) + len(stray)
@@ -269,6 +269,17 @@ class WakeClipStore:
             except FileNotFoundError:
                 pass
         return gone
+
+
+def _present(path: Path) -> bool:
+    """Whether the path is there. Only a definite "no such file" counts as absent; any other failure to look counts as there."""
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def _write_atomically(path: Path, data: bytes) -> None:
