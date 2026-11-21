@@ -249,8 +249,9 @@ void WakeClip::write_wav_header_(size_t data_bytes) {
 bool WakeClip::start_server_() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = this->port_;
-  // Its own control port, so it cannot collide with another ESP-IDF HTTP server on the default.
-  config.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 1;
+  // Its own control port. ESPHome's web_server takes the default and Sendspin's WebSocket
+  // server takes the default + 1, and a second server on a taken port never starts.
+  config.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 2;
   config.max_uri_handlers = 1;
   config.max_open_sockets = this->max_client_sockets_;
   config.lru_purge_enable = true;
