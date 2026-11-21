@@ -15,6 +15,7 @@ This is the first-print version. The top pushes straight on instead of twisting,
 | `stl/cylinder_body.stl` | Smooth sleeve, speaker baffle, sealed speaker chamber, ledge for the chassis, push-on lip with a key at the front | First. Flat bottom (the baffle) down, as saved. No supports. Blue, or white for now |
 | `stl/cylinder_chassis.stl` | Plate that seals the top of the chamber, with 3 standoffs for the board | Flat side down. No supports. Any colour |
 | `stl/cylinder_top.stl` | Push-on top: lid with 4 mic holes and bosses, thinned ring over the LEDs, mute flexure (+x), reset pinhole (−x), USB-C pocket (back) | **Flip it in the slicer** so the flat top face is on the bed. No supports. White, so the LEDs glow through |
+| `stl/cylinder_top_holes.stl` | The same top for filament that blocks light, such as black: 12 holes of 4 mm, one over each LED, and 6 crush ribs inside the rim for a firmer fit | As the top: **flip it** so the flat face is on the bed. No supports. Any colour |
 | `stl/cylinder_base.stl` | Dark base band, deflector cone, 4 screw posts, rubber-foot recesses | Flat side down. No supports. Dark |
 
 Print the body first, as it's the longest print and everything fits against it. Then the top, to try the push-on fit. If the top is too tight or too loose, change `LAP_CLEAR` and reprint only the top.
@@ -71,6 +72,11 @@ From the first assembly, 2026-11-19. Everything fitted once the speaker was moun
 
 - **Print the body in matte robin's-egg blue** (about `#ADE5E7`, as in the renders). The first one was black.
 - **Print the top in white or translucent filament.** The LEDs work, but they don't show through a black top at all, even over the 1.2 mm ring. Black blocks the light at any thickness. The body and base can stay any colour.
+- **Until the white filament arrives, print `cylinder_top_holes.stl`.** It has a 4 mm hole over each of the 12 LEDs, so they show through a black top. Not printed yet as of 2026-11-20.
+  - The bare LEDs show as 12 sharp points. For soft dots, lay a ring of baking paper or frosted tape in the channel on the underside (37 to 43 mm from the centre).
+  - It also carries the crush ribs described below, as their first trial. If it goes on too tight, lower `RIB_PRESS` and reprint. If the ribs work, turn them on for the plain top too: `make_top(crush_ribs=True)`.
+
+  ![Holed top](preview_top_holes.png)
 - **Make the top hold on more firmly.** The push-on top sits loosely and doesn't pop on. Two ways:
   - **Top only:** about 6 small vertical crush ribs inside the top's rim, each pressing about 0.2 mm into the body's lip. Gives a firm friction fit, but no click.
   - **Top and body:** a groove round the body's lip and bumps in the top that snap into it, or the twist lock from the design doc. Gives a real click, but needs a new body.
@@ -84,7 +90,8 @@ From the first assembly, 2026-11-19. Everything fitted once the speaker was moun
 
 `check_cylinder.py` checks the parts against Seeed's board model and a DMA70-4 envelope.
 
-- Board against body, chassis and top: no clashes.
+- Board against body, chassis and both tops: no clashes.
+- Holed top: all 12 LEDs sit under a hole, and it touches the body only at the 6 crush ribs.
 - Speaker against base, body and chassis: no overlap.
 - Parts against each other: no overlap.
 - Speaker chamber: 0.36 L of air, about 0.34 L once the speaker is in.
