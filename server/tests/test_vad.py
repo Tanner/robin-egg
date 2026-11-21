@@ -118,9 +118,9 @@ def test_unknown_detector_is_refused():
         make_vad("loud", VadConfig())
 
 
-def test_vad_option_defaults_to_energy():
-    assert parse_args(["egg.local", "--echo"]).vad == "energy"
-    assert parse_args(["egg.local", "--echo", "--vad", "model"]).vad == "model"
+def test_vad_option_defaults_to_model():
+    assert parse_args(["egg.local", "--echo"]).vad == "model"
+    assert parse_args(["egg.local", "--echo", "--vad", "energy"]).vad == "energy"
 
 
 def test_conversation_with_the_model_detector_and_a_stand_in_model(monkeypatch):
