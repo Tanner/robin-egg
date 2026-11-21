@@ -577,8 +577,9 @@ This task needs the egg and Tanner. No subagent runs it.
 - [ ] **Step 1: Before flashing,** run `tools/bench-voice-test` against the egg and keep its output. Say "Hey Robin" ten times from the usual spot and note how many wake it.
 - [ ] **Step 2: Flash** with `esphome run robin-egg.yaml`. The boot log shows no memory or tensor arena error and names the wake clip component.
 - [ ] **Step 3: Repeat step 1.** The wake count is not lower, and the time from wake to the listening chime has not grown.
-- [ ] **Step 4: Fetch a clip by hand.** After a wake, `curl -D - http://<egg>:8080/wake-clip -o clip.wav`. The headers are right, the clip is 5 seconds, it does not clip, and "Hey Robin" is at its end with no chime.
+- [ ] **Step 4: Fetch a clip by hand.** With the server running with `--wake-clips`, so the egg's capture is on: after a wake, `curl -D - http://<egg>:8080/wake-clip -o clip.wav`. The headers are right, the clip is 5 seconds, it does not clip, and "Hey Robin" is at its end with no chime.
 - [ ] **Step 5: Mute check.** Fetch a clip and note `X-Wake-Count`. Turn the mute switch on, say "Hey Robin", fetch again. The count and the audio are unchanged.
-- [ ] **Step 6: Run the server for a few turns.** One clip per wake appears in `~/.robin-egg/wakes/`, including one from saying "Hey Robin" over a reply. Turn timings in the turn log match those from before.
-- [ ] **Step 7: Decide the fetch time.** If a fetch during the request stream costs nothing here, note it in the spec as a possible later change. The plan keeps the fetch at the end of listening.
-- [ ] **Step 8: Run `review`, `report` and `export` on the real clips.** Write what was found in `docs/bench-test.md` and commit.
+- [ ] **Step 6: Switch check.** Start the server without `--wake-clips` and say "Hey Robin": `/wake-clip` answers 404, and the egg's log (start the server with `--logs`) shows no wake clip warning. Restart it with `--wake-clips`: clips arrive in `~/.robin-egg/wakes/`. Stop the server, with no other API client connected: within a moment `/wake-clip` answers 404 again. Watch for this over USB serial, not `esphome logs`, which is an API client itself and keeps the capture on.
+- [ ] **Step 7: Run the server for a few turns.** One clip per wake appears in `~/.robin-egg/wakes/`, including one from saying "Hey Robin" over a reply. Turn timings in the turn log match those from before.
+- [ ] **Step 8: Decide the fetch time.** If a fetch during the request stream costs nothing here, note it in the spec as a possible later change. The plan keeps the fetch at the end of listening.
+- [ ] **Step 9: Run `review`, `report` and `export` on the real clips.** Write what was found in `docs/bench-test.md` and commit.

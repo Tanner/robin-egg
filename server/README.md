@@ -560,7 +560,7 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 
 ## Reviewing wake clips
 
-Nothing is kept unless the server is started with `--wake-clips`. With it, the server fetches the 5 seconds of audio the egg froze before each "Hey Robin" wake and saves it to `~/.robin-egg/wakes/` as a WAV with a JSON file beside it: when it woke, which model round and cutoff were loaded, how the turn ended and who was recognised. No audio goes into the turn log. Three commands, run from `server/`, turn these clips into numbers and training takes:
+Nothing is kept unless the server is started with `--wake-clips`. The flag governs the egg too: the egg keeps the audio before a wake only while a server started with `--wake-clips` is connected, and holds and serves nothing otherwise. Its "Wake clips" switch is off at boot, the server sets it on every connection, and the egg turns it off when the last client disconnects. Firmware without the switch keeps no clips, and the server warns once per connection. With the flag, the server fetches the 5 seconds of audio the egg froze before each "Hey Robin" wake and saves it to `~/.robin-egg/wakes/` as a WAV with a JSON file beside it: when it woke, which model round and cutoff were loaded, how the turn ended and who was recognised. No audio goes into the turn log. Three commands, run from `server/`, turn these clips into numbers and training takes:
 
 ```sh
 .venv/bin/python -m robin_egg_server.wakes review
@@ -635,7 +635,7 @@ Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin
 | `--turn-log FILE` | `~/.robin-egg/turns.jsonl` | Where each turn's outcome and timings are recorded for `stats`. Not used with `--demo` or `--echo`. |
 | `--no-turn-log` | off | Record nothing about turns. |
 | `--turn-log-names` | off | Also record who spoke each turn, not only whether they were recognised. |
-| `--wake-clips` | off | Keep the 5-second clip of each "Hey Robin" wake for review and training. Without it nothing is fetched or kept. |
+| `--wake-clips` | off | Keep the 5-second clip of each "Hey Robin" wake for review and training. The flag governs the egg too: the egg keeps the audio before a wake only while a server started with `--wake-clips` is connected. Without it nothing is held on the egg, fetched or kept. |
 | `--wake-clips-dir DIR` | `~/.robin-egg/wakes` | Where the 5-second clip of each "Hey Robin" wake is kept with `--wake-clips`. Unlabelled clips are deleted after 14 days, and the folder is still trimmed when the server runs without `--wake-clips`. |
 | `--wake-clip-port PORT` | 8080 | The egg's HTTP port for its frozen wake clip. |
 

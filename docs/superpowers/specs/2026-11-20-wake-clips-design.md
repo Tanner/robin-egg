@@ -26,6 +26,7 @@ The egg cannot improve from its own use today, because the audio that woke it ne
 ## Anti-goals
 
 - Audio leaving the egg without a wake. The egg sends a clip only after a wake word fired with the mute switch off.
+- Audio kept on the egg that nobody asked for. The egg captures nothing unless a server started with `--wake-clips` is connected and has turned capture on.
 - A clip fetch that slows or breaks a turn. A fetch that fails or runs late costs the clip, never the conversation.
 - Unreviewed audio piling up. Clips nobody reviews are deleted after 14 days.
 - Bad takes in the "Hey Robin" training set. `wakeword/README.md` says a bad positive take teaches the model to wake on it, so nothing reaches the positive export without a person having heard that exact cut.
@@ -59,9 +60,11 @@ A new local component in `firmware/components/`, loaded by `robin-egg.yaml` with
 - Its main action is "freeze". Freeze copies the ring buffer into a second 160 KB buffer, bumps a wake counter, and stores the wake word's name. The frozen clip stays until the next freeze.
 - `robin-egg.yaml` adds the freeze, and the `esphome.wake_clip_frozen` event after it, to the base firmware's `send_wake_word_event` script with `!extend`. Anything appended to `micro_wake_word`'s `on_wake_word_detected` runs only after the base firmware starts the wake sound and waits 300 ms, so a clip frozen there would end late and could hold the chime. The base firmware calls the script first, inside its "mute switch is off" branch, so a wake while muted freezes nothing.
 - A second action, "clear", empties the ring buffer and leaves the frozen clip alone. `robin-egg.yaml` calls it when the mute switch turns off, so a wake soon after unmuting holds no audio from before. Audio that arrives more than 500 ms after the last also empties the ring first, since the microphone was stopped and started again.
-- It serves the frozen clip over HTTP on the egg as a WAV. The response headers carry the wake counter, the wake word, the model round and the cutoff. Before the first wake after boot it answers 404.
+- It has an on/off setting, off at boot and never restored from flash. `wake_clip.enable` turns capture on from an empty ring. `wake_clip.disable` turns it off, zeroes the ring and wipes the frozen clip; the wake counter keeps counting, so counts never repeat within one boot. If a clip is being sent when capture is turned off, the egg waits briefly for it, and if the response is still going it wipes the clip as soon as the response ends. While capture is off the ring is not written, a wake freezes nothing, and no event is sent.
+- `robin-egg.yaml` exposes the setting as a config switch named "Wake clips" (`restore_mode: ALWAYS_OFF`). The freeze and its event in `send_wake_word_event` run only while it is on. The egg turns it off when the last API client disconnects, from the `api:` block's `on_client_disconnected` with an `api.connected` check, so it holds no audio while no server is connected.
+- It serves the frozen clip over HTTP on the egg as a WAV. The response headers carry the wake counter, the wake word, the model round and the cutoff. While capture is off, and before the first wake after it is turned on, it answers 404.
 - The model round and cutoff come from substitutions in `robin-egg.yaml` (`hey_robin_round: v1`), set by hand when a new model is copied in. `wakeword/README.md` gains that step.
-- The endpoint has no password, like the egg's OTA. Anyone on the local network can fetch the last frozen clip. It never serves the live ring buffer.
+- The endpoint has no password, like the egg's OTA. Anyone on the local network can fetch the last frozen clip, and only while capture is on. It never serves the live ring buffer.
 
 Freeze happens at the moment of detection, with no tail after it, so the listening chime is not in the clip.
 
@@ -78,7 +81,8 @@ A new module, `robin_egg_server/wake_clips.py`.
 - The fetch has a short timeout. Any failure logs one human-readable warning with the turn's tag and is dropped.
 - A daily trim deletes clips with no review label that are older than 14 days. Labelled clips stay until someone deletes them.
 - Clips are opt-in: the server keeps them only when started with `--wake-clips`. Tanner decided this on 2026-11-20. The 14-day trim still runs on the folder whenever it exists.
-- `fake_egg.py` learns to serve a clip, so tests and the bench script can run the whole path without hardware.
+- The flag governs the egg too. On every connection, before it says it is ready, the server sets the egg's "Wake clips" switch: on with `--wake-clips`, off without it (`wake_clip_switch.py`). An egg with no such switch gets one warning per connection when clips are on, and nothing when they are off. A failure to set it is one warning and never stops the connection. Tanner decided on 2026-11-20 that the egg and the server must match.
+- `fake_egg.py` learns to serve a clip, so tests and the bench script can run the whole path without hardware. With clips it lists the "Wake clips" switch, starts with it off, turns it off when its client goes, and freezes only while it is on.
 
 ### Review, report and export
 
@@ -120,6 +124,8 @@ The notebook gains one step: it copies the files in `egg_takes/positive` and `eg
 - On the bench, before and after flashing the component: the egg wakes on the same takes, the time from wake to the listening chime does not grow, and the boot log shows no memory or tensor arena error. Run `tools/bench-voice-test` both times.
 - On the bench, confirm a fetched clip is channel 1 audio at the wake word model's gain with no clipping, and that "Hey Robin" sits at its end.
 - Confirm by hand that a wake with the mute switch on changes nothing the endpoint serves.
+- On the bench, with the server started without `--wake-clips`, a wake leaves `/wake-clip` answering 404 and the egg's log shows no wake clip warning. With `--wake-clips`, clips arrive. Stopping the server turns the egg's switch off within a moment, and `/wake-clip` answers 404 again.
+- Server tests cover the switch: on after connect with `--wake-clips`, off without it, set again on a reconnect, one warning for an egg without the switch when clips are on, and nothing logged about clips when they are off.
 - Run the notebook's new step once with an empty `egg_takes/` and once with a few takes, and check the take counts it prints for the phone memos do not change.
 - The capture component sits behind one block in `robin-egg.yaml`. Removing the block gives back today's firmware.
 
@@ -132,7 +138,6 @@ The notebook gains one step: it copies the files in `egg_takes/positive` and `eg
 
 ## Calls Claude made that Tanner has not confirmed
 
-- Clips are opt-in, with `--wake-clips` to turn them on. Tanner decided this on 2026-11-20, replacing on by default with `--no-wake-clips`.
 - Only "Hey Robin" wakes are kept.
 - A wake that stops a reply gets no suggested label.
 - The model round is a substitution set by hand.
