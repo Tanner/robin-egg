@@ -77,7 +77,7 @@ A new module, `robin_egg_server/wake_clips.py`.
 - The suggested label is "probably false" when the outcome is nobody spoke or nothing recognised. It is "probably real" for answered, local command and asked again. Other outcomes get no suggestion, and neither does a wake that stopped a reply. That one is real when someone meant to stop Robin and false when Robin's own voice or the room set it off, and only listening tells them apart.
 - The fetch has a short timeout. Any failure logs one human-readable warning with the turn's tag and is dropped.
 - A daily trim deletes clips with no review label that are older than 14 days. Labelled clips stay until someone deletes them.
-- Clips are on by default. `--no-wake-clips` turns them off.
+- Clips are opt-in: the server keeps them only when started with `--wake-clips`. Tanner decided this on 2026-11-20. The 14-day trim still runs on the folder whenever it exists.
 - `fake_egg.py` learns to serve a clip, so tests and the bench script can run the whole path without hardware.
 
 ### Review, report and export
@@ -132,7 +132,7 @@ The notebook gains one step: it copies the files in `egg_takes/positive` and `eg
 
 ## Calls Claude made that Tanner has not confirmed
 
-- Clips are on by default, with `--no-wake-clips` to turn them off.
+- Clips are opt-in, with `--wake-clips` to turn them on. Tanner decided this on 2026-11-20, replacing on by default with `--no-wake-clips`.
 - Only "Hey Robin" wakes are kept.
 - A wake that stops a reply gets no suggested label.
 - The model round is a substitution set by hand.

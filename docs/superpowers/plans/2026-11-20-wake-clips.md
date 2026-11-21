@@ -28,6 +28,8 @@
 
 "Forget my voice" does not touch wake clips. Tanner dropped that on 2026-11-20. A clip can be deleted by hand in `review`.
 
+After the build, clips became opt-in: the server keeps them only when started with `--wake-clips`, and `--no-wake-clips` is gone. Task 3 below still describes the earlier default.
+
 ## One change from the spec
 
 The spec said the server learns of wakes from `esphome.wake_word_detected`. That event carries no clip number, so the server would have to guess which wake a fetched clip belongs to. The firmware instead sends its own event, `esphome.wake_clip_frozen`, with the clip's number and wake word, right after it freezes. An egg without the component sends no such event, so the server makes no fetches and needs no "missing component" warning. The spec has been updated to say so.

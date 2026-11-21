@@ -116,7 +116,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--turn-log", metavar="FILE", default=str(DEFAULT_TURN_LOG), help="Where to record each turn's outcome and timings, for `python -m robin_egg_server.stats` (default ~/.robin-egg/turns.jsonl). No audio or words are recorded. Not used with --demo or --echo")
     p.add_argument("--no-turn-log", action="store_true", help="Do not record turns")
     p.add_argument("--turn-log-names", action="store_true", help="Also record who spoke each turn, not only whether they were recognised")
-    p.add_argument("--no-wake-clips", action="store_true", help="Do not keep a clip of each Hey Robin wake. Clips are on by default")
+    p.add_argument("--wake-clips", action="store_true", help="Keep a clip of the 5 seconds before each Hey Robin wake, for review and training. Off unless given")
     p.add_argument("--wake-clips-dir", metavar="DIR", type=lambda s: Path(s).expanduser(), default=DEFAULT_WAKES, help="Where the 5-second clip of each Hey Robin wake is kept for review and training (default ~/.robin-egg/wakes). Unlabelled clips are deleted after 14 days")
     p.add_argument("--wake-clip-port", type=int, default=DEFAULT_CLIP_PORT, metavar="PORT", help=f"The egg's HTTP port for its frozen wake clip (default {DEFAULT_CLIP_PORT})")
     p.add_argument("--message-waiting", action=argparse.BooleanOptionalAction, default=True, help="Hold the messages Robin sends on its own outside --speaking-hours, breathe the egg's ring while any wait, and read them out to 'what did I miss?' (default on; off drops them)")
@@ -261,7 +261,7 @@ def build(args: argparse.Namespace):
         min_volume=args.min_volume,
         digest=args.digest,
         digest_max=args.digest_max,
-        wake_clips=None if args.no_wake_clips else args.wake_clips_dir,
+        wake_clips=args.wake_clips_dir if args.wake_clips else None,
         wake_clip_port=args.wake_clip_port,
     )
     if opts.thinking_cue and not opts.stream:
@@ -330,7 +330,7 @@ def wake_clip_trimmer(folder: Path, keeping: bool, stop: asyncio.Event) -> async
     if not keeping:
         if not folder.is_dir():
             return None
-        LOG.info("Wake clips are off (--no-wake-clips), but the unlabelled clips already in %s are still deleted after %d days", folder, KEEP_UNLABELLED_S // 86400)
+        LOG.info("Wake clips are off (start with --wake-clips to keep them), but the unlabelled clips already in %s are still deleted after %d days", folder, KEEP_UNLABELLED_S // 86400)
     return asyncio.create_task(keep_trimmed(WakeClipStore(folder), stop))
 
 

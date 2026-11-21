@@ -79,22 +79,51 @@ def test_enrolment_audio_is_kept_beside_the_voiceprints_unless_told_otherwise(tm
     assert parse_args(["egg.local", "--echo", "--enrolment-audio", str(tmp_path)]).enrolment_audio == str(tmp_path)
 
 
-def test_wake_clips_are_on_by_default_and_can_be_turned_off(tmp_path, monkeypatch):
+def test_wake_clips_are_off_unless_asked_for(tmp_path, monkeypatch):
     from robin_egg_server import voices
     from robin_egg_server.__main__ import build
     from robin_egg_server.wake_clips import DEFAULT_CLIP_PORT, DEFAULT_WAKES, WakeClips
 
     monkeypatch.setattr(voices.WhisperSTT, "load", lambda self: None)
     args = parse_args(["egg.local", "--echo"])
+    assert args.wake_clips is False
     assert args.wake_clips_dir == DEFAULT_WAKES
     assert args.wake_clip_port == DEFAULT_CLIP_PORT
     common = ["egg.local", "--echo", "--tts", "say", "--no-speaker-recognition"]
-    robin, _ = build(parse_args([*common, "--wake-clips-dir", str(tmp_path / "wakes"), "--wake-clip-port", "8081"]))
+    robin, _ = build(parse_args(common))
+    assert robin.wake_clips is None and robin.opts.wake_clips is None
+    robin, _ = build(parse_args([*common, "--wake-clips"]))
     assert isinstance(robin.wake_clips, WakeClips)
+    assert robin.wake_clips.store.root == DEFAULT_WAKES and robin.opts.wake_clips == DEFAULT_WAKES
+    robin, _ = build(parse_args([*common, "--wake-clips", "--wake-clips-dir", str(tmp_path / "wakes"), "--wake-clip-port", "8081"]))
     assert robin.wake_clips.store.root == tmp_path / "wakes" and robin.wake_clips.port == 8081
     assert robin.opts.wake_clips == tmp_path / "wakes"
-    robin, _ = build(parse_args([*common, "--no-wake-clips"]))
-    assert robin.wake_clips is None and robin.opts.wake_clips is None
+
+
+def test_no_wake_clips_is_no_longer_an_option(capsys):
+    with pytest.raises(SystemExit):
+        parse_args(["egg.local", "--echo", "--no-wake-clips"])
+    assert "--no-wake-clips" in capsys.readouterr().err
+
+
+def test_the_trim_is_started_without_wake_clips(tmp_path, monkeypatch):
+    from robin_egg_server import voices
+
+    class Stop(Exception):
+        pass
+
+    started: list = []
+
+    def trimmer(folder, keeping, stop):
+        started.append((folder, keeping))
+        raise Stop  # nothing after the trim decision is needed here
+
+    monkeypatch.setattr(voices.WhisperSTT, "load", lambda self: None)
+    monkeypatch.setattr(main_module, "wake_clip_trimmer", trimmer)
+    args = parse_args(["egg.local", "--echo", "--tts", "say", "--no-speaker-recognition", "--wake-clips-dir", str(tmp_path)])
+    with pytest.raises(Stop):
+        asyncio.run(main_module.run(args))
+    assert started == [(tmp_path, False)]
 
 
 def test_old_wake_clips_are_still_trimmed_when_clips_are_off(tmp_path, caplog):
@@ -120,7 +149,7 @@ def test_old_wake_clips_are_still_trimmed_when_clips_are_off(tmp_path, caplog):
     with caplog.at_level("INFO"):
         asyncio.run(go())
     assert store.entries() == []
-    assert "--no-wake-clips" in caplog.text and str(folder) in caplog.text
+    assert "--wake-clips" in caplog.text and "--no-wake-clips" not in caplog.text and str(folder) in caplog.text
 
 
 def test_no_wake_clip_folder_and_clips_off_means_no_trimming(tmp_path):

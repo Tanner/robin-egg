@@ -355,7 +355,7 @@ The sentences of each enrolment are kept as audio beside them, in `~/.robin-egg/
 - Only a finished enrolment is kept. One that is stopped, runs out of good sentences or sounds like someone else writes nothing.
 - Enrolling again replaces the person's audio. "Forget my voice" deletes it along with the voiceprint.
 - The folders and files are readable only by the account that runs the server.
-- The only other audio kept is the 5 seconds before each "Hey Robin" wake, saved in `~/.robin-egg/wakes/` for review and training; unlabelled clips are deleted after 14 days and labelled ones stay until you delete them (see [Reviewing wake clips](#reviewing-wake-clips)). The rest of everyday turns is not saved, and what a voiceprint learns from them is numbers only.
+- The only other audio kept, and only when the server is started with `--wake-clips`, is the 5 seconds before each "Hey Robin" wake, saved in `~/.robin-egg/wakes/` for review and training; unlabelled clips are deleted after 14 days and labelled ones stay until you delete them (see [Reviewing wake clips](#reviewing-wake-clips)). The rest of everyday turns is not saved, and what a voiceprint learns from them is numbers only.
 - At startup the server finishes a save that was cut off partway, for example by a crash, and removes what it left behind. The log says so.
 - `--enrolment-audio DIR` changes where they are kept.
 
@@ -560,7 +560,7 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 
 ## Reviewing wake clips
 
-The egg keeps the 5 seconds of audio before each "Hey Robin" wake, and the server saves it to `~/.robin-egg/wakes/` as a WAV with a JSON file beside it: when it woke, which model round and cutoff were loaded, how the turn ended and who was recognised. No audio goes into the turn log. Three commands, run from `server/`, turn these clips into numbers and training takes:
+Nothing is kept unless the server is started with `--wake-clips`. With it, the server fetches the 5 seconds of audio the egg froze before each "Hey Robin" wake and saves it to `~/.robin-egg/wakes/` as a WAV with a JSON file beside it: when it woke, which model round and cutoff were loaded, how the turn ended and who was recognised. No audio goes into the turn log. Three commands, run from `server/`, turn these clips into numbers and training takes:
 
 ```sh
 .venv/bin/python -m robin_egg_server.wakes review
@@ -572,7 +572,7 @@ The egg keeps the 5 seconds of audio before each "Hey Robin" wake, and the serve
 - `report` prints, for each model round and cutoff and then for each recognised speaker, the clips reviewed, real and false wakes, how many of each stopped a reply, the false share, false wakes per day, the misses found, the clips still unreviewed and the days. The days are the calendar days from the first to the last reviewed clip of that row, counting both, and false wakes per day are spread over those, so clips waiting for review do not make the rate read low; with nothing reviewed the days are 0 and there are no rates. Misses are a lower bound, since a missed "Hey Robin" leaves a clip only when a second try woke the egg within 5 seconds, the rates cover reviewed clips only, and a wake whose clip could not be fetched is not counted at all (the server log names each one).
 - `export` writes each confirmed real cut and each confirmed miss to `wakeword/recordings/egg_takes/positive/`, and each false-wake cut to `egg_takes/negative/`, as 16 kHz mono 16-bit WAVs holding exactly the samples you heard. A clip's JSON lists the files written from it, and running export again writes only what is new. `--to DIR` writes somewhere else.
 
-Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin-egg/wakes`. Unlabelled clips are deleted after 14 days; labelled ones stay until you delete them, and deleting one in `review` also deletes its exported takes. Copies already uploaded to Google Drive are not touched: delete those in Drive by hand.
+Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin-egg/wakes`. Unlabelled clips are deleted after 14 days, also when the server later runs without `--wake-clips`; labelled ones stay until you delete them, and deleting one in `review` also deletes its exported takes. Copies already uploaded to Google Drive are not touched: delete those in Drive by hand.
 
 ## Useful options
 
@@ -635,8 +635,8 @@ Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin
 | `--turn-log FILE` | `~/.robin-egg/turns.jsonl` | Where each turn's outcome and timings are recorded for `stats`. Not used with `--demo` or `--echo`. |
 | `--no-turn-log` | off | Record nothing about turns. |
 | `--turn-log-names` | off | Also record who spoke each turn, not only whether they were recognised. |
-| `--no-wake-clips` | off | Keep no clip of each "Hey Robin" wake. Clips are kept by default. |
-| `--wake-clips-dir DIR` | `~/.robin-egg/wakes` | Where the 5-second clip of each "Hey Robin" wake is kept for review and training. Unlabelled clips are deleted after 14 days. |
+| `--wake-clips` | off | Keep the 5-second clip of each "Hey Robin" wake for review and training. Without it nothing is fetched or kept. |
+| `--wake-clips-dir DIR` | `~/.robin-egg/wakes` | Where the 5-second clip of each "Hey Robin" wake is kept with `--wake-clips`. Unlabelled clips are deleted after 14 days, and the folder is still trimmed when the server runs without `--wake-clips`. |
 | `--wake-clip-port PORT` | 8080 | The egg's HTTP port for its frozen wake clip. |
 
 ## Talking in the speaker chat
