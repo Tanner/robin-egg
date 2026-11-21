@@ -72,7 +72,7 @@ From the first assembly, 2026-11-19. Everything fitted once the speaker was moun
 
 - **Print the body in matte robin's-egg blue** (about `#ADE5E7`, as in the renders). The first one was black.
 - **Print the top in white or translucent filament.** The LEDs work, but they don't show through a black top at all, even over the 1.2 mm ring. Black blocks the light at any thickness. The body and base can stay any colour.
-- **Until the white filament arrives, print `cylinder_top_holes.stl`.** It has a 4 mm hole over each of the 12 LEDs, so they show through a black top. Not printed yet as of 2026-11-20.
+- **Until the white filament arrives, print `cylinder_top_holes.stl`.** It has a 4 mm hole over each of the 12 LEDs, so they show through a black top. First printed in black on 2026-11-21.
   - The bare LEDs show as 12 sharp points. For soft dots, lay a ring of baking paper or frosted tape in the channel on the underside (37 to 43 mm from the centre).
   - It also carries the crush ribs described below, as their first trial. If it goes on too tight, lower `RIB_PRESS` and reprint. If the ribs work, turn them on for the plain top too: `make_top(crush_ribs=True)`.
 
