@@ -78,8 +78,9 @@ micro_wake_word:
 # Wake clips: the last 5 seconds of what the wake word model heard before each wake, frozen
 # on the wake and served at http://<egg>:8080/wake-clip for the server to fetch. Capture is
 # off until a server started with --wake-clips turns the "Wake clips" switch on, and goes off
-# again when the last API client disconnects. Removing this block, external_components and
-# the script, mute switch, switch and api hooks below gives back the firmware without clips.
+# again when that server's connection ends. Removing this block, external_components and the
+# script, mute switch, switch, voice_assistant and api hooks below gives back the firmware
+# without clips.
 external_components:
   - source:
       type: local
@@ -170,10 +171,17 @@ switch:
     turn_off_action:
       - wake_clip.disable: wake_clip_capture
 
-# With no client connected there is no server to fetch a clip, so the egg stops keeping audio.
-# A package merge adds this action after the base firmware's own on_client_disconnected
-# actions, and the trigger fires after the client is removed, so api.connected is already false
-# when the last one goes.
+# Capture follows the server that turned it on. The server is the voice assistant's client, and
+# this trigger fires when that one connection closes or unsubscribes, whatever else stays
+# connected. A package merge adds this action after the base firmware's own
+# on_client_disconnected actions.
+voice_assistant:
+  on_client_disconnected:
+    - switch.turn_off: wake_clips_switch
+
+# A second net: with no client connected at all, the egg stops keeping audio. The same merge
+# appends this, and the trigger fires after the client is removed, so api.connected is already
+# false when the last one goes.
 api:
   on_client_disconnected:
     - if:
