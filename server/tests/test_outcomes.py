@@ -621,6 +621,32 @@ def test_a_reply_the_wake_word_cuts_off_while_robin_is_still_answering_is_report
     assert sent == [(124, "dropped", "interrupted by the wake word")]  # 125 never came, so there is nothing to report for it
 
 
+def test_a_reply_that_starts_just_as_the_wake_word_is_heard_is_reported():
+    """The server's word that the reply is starting and the egg's new run pass each other on the wire."""
+    brain = IdBrain([DENTIST, REMINDER], pause_s=3.0)
+    runs = []
+
+    async def scenario(egg, robin):
+        send = robin.send
+
+        def send_then_wake(event, data=None):
+            send(event, data)
+            if event == VoiceAssistantEventType.VOICE_ASSISTANT_INTENT_PROGRESS and len(egg.runs) == 1:
+                egg.utterances.append(speech())
+                egg.wake()  # the egg has not read the event yet, and the server has not heard of the new run
+
+        robin.send = send_then_wake
+        runs.append(egg.runs)
+        await eventually(lambda: len(egg.runs) == 2 and pb.VOICE_ASSISTANT_RUN_END in egg.runs[1].types())
+
+    sent = turn_reports(brain, scenario)
+    assert sent == [(124, "dropped", "interrupted by the wake word")]
+    first, second = runs[0]
+    assert pb.VOICE_ASSISTANT_INTENT_PROGRESS in first.types()  # it was about the reply the wake word cut off
+    assert second.types()[0] == pb.VOICE_ASSISTANT_RUN_START
+    assert first.streamed == b""  # the egg had left that run, so it played none of it
+
+
 
 class LinkBrain:
     """Like RobinBrain when a reply is only a link or a table: its id comes, with no words to say."""

@@ -389,10 +389,25 @@ class FakeEgg:
             await self._w.drain()
             await asyncio.sleep(CHUNK / 2 / MIC_RATE if self.realtime else 0)
 
+    def _run_of(self, t: int) -> Run:
+        """The run an event from the server is about.
+
+        The server answers every run with RUN_START before anything else. An event that comes
+        while the newest run still waits for its RUN_START was sent before the server knew of
+        that run: the two passed each other on the wire, and the event is about the run the
+        server was still on.
+        """
+        newest = self.runs[-1]
+        if t == pb.VOICE_ASSISTANT_RUN_START or pb.VOICE_ASSISTANT_RUN_START in newest.types():
+            return newest
+        return next((r for r in reversed(self.runs) if pb.VOICE_ASSISTANT_RUN_START in r.types()), newest)
+
     async def _on_event(self, t: int, data: dict[str, str]) -> None:
-        run = self.runs[-1]
+        run = self._run_of(t)
         run.events.append((t, data))
         run.ring.append(self.ring_rgb)
+        if run is not self.runs[-1]:
+            return  # the egg has left that run, so the event changes nothing it is doing now
         if t == pb.VOICE_ASSISTANT_STT_VAD_END:
             self._mic_open = False
         elif t == pb.VOICE_ASSISTANT_INTENT_PROGRESS and data.get("tts_start_streaming") == "1":
