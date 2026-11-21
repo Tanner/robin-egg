@@ -184,19 +184,21 @@ curl -X DELETE http://localhost:8765/quiet   # Robin may speak first again
 
 ## Telling Robin about the room
 
-The server posts a few facts about the egg to robin-assistant's ambient context (`POST /api/context/:agent`). That stores a fact without waking Robin. Robin sees the live facts, each with the time it was posted, the next time it runs or answers.
+The server posts a few facts about the egg to robin-assistant's ambient context (`POST /api/context/:agent`). That stores a fact without waking Robin. Robin sees the live facts, each with the time it was posted and a one-line description of what it means, the next time it runs or answers. The descriptions are in `DESCRIPTIONS` in `room_context.py`.
 
 | Key | Value | Expires after |
 | --- | --- | --- |
 | `egg_connection` | `connected` or `disconnected` | 6 hours, posted again after about 5 while it still holds |
 | `egg_last_speaker` | Who last spoke to the egg: their robin-assistant name, or `Unknown Speaker`. The fact's own time says when. | 2 hours |
 | `egg_last_message` | What became of the last message Robin sent on its own, by id and task label: `message 124 (Dentist reminder) spoken`, `held, outside speaking hours`, `interrupted, the wake word interrupted it` and so on. Messages spoken as one announcement are one fact naming each of them. | 1 hour |
+| `egg_last_heard` | Always `voices nearby`. The time says voices were heard near the egg, not necessarily talking to it, within 10 minutes of then. A TV counts. | 2 hours |
 
 - Facts about the egg only. Nothing anyone said and none of Robin's words are posted.
 - A fact is posted only when it changes, because every change adds a block to the next turn of each chat on the robin-assistant side. A follow-up by the same person is the same conversation and is not posted again. A new conversation is, so the time moves on.
 - If the server dies without saying so, `egg_connection` can read `connected` for up to 6 hours before it expires. Its time shows how old it is.
 - Posting happens in the background. A robin-assistant that is down, slow or refusing only logs a warning. A failed `egg_connection` post is tried again every minute. The other two are not retried, since a late post would carry the wrong time.
-- robin-assistant keeps at most 20 facts per agent and refuses new keys beyond that. These are three of them.
+- `egg_last_heard` comes from the firmware's "Voice Heard" sensor, which is on while the DSP's voice direction keeps moving. Only that on/off state leaves the egg. The server posts on the first voice that counts, then at most every 10 minutes while voices go on. Voices do not count while the microphone is muted, while the egg is busy, or for 12 s after it plays or a conversation ends. Firmware without the sensor logs that once, and `--no-voice-heard` turns it off.
+- robin-assistant keeps at most 20 facts per agent and refuses new keys beyond that. These are four of them.
 - `/announce` messages are not reported, only the ones Robin sent.
 - `--no-room-context` turns all of this off. It is not used with `--echo` or `--demo`.
 
