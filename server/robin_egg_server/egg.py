@@ -58,6 +58,7 @@ from .vad import ModelVad, make_vad
 from .turn_log import ANSWERED, ASKED_AGAIN, FAILED, LOCAL_COMMAND, NOBODY_SPOKE, NOTHING_RECOGNISED, OVERHEARD, QUIET, TurnLog, TurnRecord
 from .voices import SpeechToText, TextToSpeech
 from .waiting import MessageWaiting, is_missed_question
+from .wake_clip_switch import set_wake_clips
 from .wake_clips import DEFAULT_CLIP_PORT, FROZEN_EVENT, WakeClips
 from .volume import MIN_VOLUME, EggVolume
 from .web import AudioServer
@@ -1601,6 +1602,8 @@ class Robin:
                 if self.waiting is not None:
                     await self.waiting.attach(client)
                 await self.volume.attach(client)
+                # On every connection: the egg turns its capture off at boot and when the last client goes.
+                await set_wake_clips(client, keep=self.wake_clips is not None)
                 if self.wake_clips is not None:
                     self.wake_clips.connected(host)
                     # Before the voice assistant: the egg tells only a subscriber about a wake it froze.

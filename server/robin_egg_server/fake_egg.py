@@ -12,9 +12,10 @@ against its length without the tests waiting in real time. A reply is the same w
 wake_stops, over reply_seconds. Without wake_stops a reply is only fetched, not played:
 a test that needs it to have played says so with skip_played().
 
-With clips, it also does what the egg's wake clip component does: every wake word heard while
-the mic is not muted freezes a clip and sends the wake_clip_frozen event, and the frozen clip
-is served over HTTP on clip_port.
+With clips, it also does what the egg's wake clip component does: it lists the "Wake clips"
+switch, off until the server turns it on and off again when the server goes. While it is on,
+every wake word heard while the mic is not muted freezes a clip and sends the wake_clip_frozen
+event, and the frozen clip is served over HTTP on clip_port.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
 from .audio import MIC_RATE, resample
 from .mic_mute import MUTE_OBJECT_ID
 from .voice_heard import VOICE_HEARD_OBJECT_ID
+from .wake_clip_switch import SWITCH_OBJECT_ID as CLIPS_OBJECT_ID
 from .wake_clips import CLIP_PATH, FROZEN_EVENT
 
 PROTO_TO_TYPE = {v: k for k, v in MESSAGE_TYPE_TO_PROTO.items()}
@@ -46,6 +48,7 @@ VOICE_HEARD_KEY = 0x564F4943  # the "Voice Heard" binary sensor's entity key
 RING_KEY = 0x1ED  # the LED ring light's entity key
 MEDIA_PLAYER_KEY = 0x5EA4E401  # entity keys are hashes on the real egg, so nothing may assume a value
 GROUP_PLAYER_KEY = 0x5EA4E402
+CLIPS_KEY = 0xC11B5  # the "Wake clips" switch's entity key
 
 
 def varint(n: int) -> bytes:
@@ -167,8 +170,8 @@ class FakeEgg:
 
         lead_s is the room noise before each utterance; 0 is someone already talking when the mic opens.
 
-        clips turns on the wake clip component. Every wake freezes a clip: the first run, a run
-        wake_words starts and wake(), but not a follow-up. Each freeze copies clip_audio, 16 kHz 16-bit
+        clips turns on the wake clip component. While its switch is on, every wake freezes a clip:
+        the first run, a run wake_words starts and wake(), but not a follow-up. Each freeze copies clip_audio, 16 kHz 16-bit
         mono PCM, or 5 s of silence when it is None, and the clip is served with model_round and
         cutoff in its headers."""
         self.volume, self.speaker_muted = volume, speaker_muted
@@ -214,6 +217,8 @@ class FakeEgg:
         self.clip_count = 0  # the wake counter: bumped by each freeze
         self.clip_delay_s = 0.0  # how long the fake waits before answering a clip fetch
         self._frozen: tuple[int, str, bytes] | None = None  # count, wake word, WAV
+        self._clips_enabled = False  # the "Wake clips" switch, off at boot like the firmware's
+        self.clip_switch_commands: list[bool] = []  # every state the server set the switch to, in order
         self._services_subscribed = False
         self._clip_server: asyncio.base_events.Server | None = None
 
@@ -263,6 +268,9 @@ class FakeEgg:
                 await self._on_message(msg)
         except (asyncio.IncompleteReadError, ConnectionResetError):
             return
+        finally:
+            if self._w is w:  # the last client went, so, like the firmware, the egg stops keeping audio
+                self._set_clips_enabled(False)
 
     async def _on_message(self, msg) -> None:
         if isinstance(msg, pb.HelloRequest):
@@ -278,6 +286,12 @@ class FakeEgg:
                 self.send(pb.ListEntitiesSwitchResponse(object_id=MUTE_OBJECT_ID, key=MUTE_KEY, name="Microphone Mute"))
             if self.voice_heard_sensor:
                 self.send(pb.ListEntitiesBinarySensorResponse(object_id=VOICE_HEARD_OBJECT_ID, key=VOICE_HEARD_KEY, name="Voice Heard"))
+            if self.clips:
+                self.send(
+                    pb.ListEntitiesSwitchResponse(
+                        object_id=CLIPS_OBJECT_ID, key=CLIPS_KEY, name="Wake clips", icon="mdi:waveform", entity_category=pb.ENTITY_CATEGORY_CONFIG
+                    )
+                )
             self.send(pb.ListEntitiesLightResponse(object_id="led_ring", key=RING_KEY, name="LED Ring", supported_color_modes=[pb.COLOR_MODE_RGB], effects=RING_EFFECTS))
             # The firmware lists a Sendspin group player as well as the speaker's own.
             self.send(pb.ListEntitiesMediaPlayerResponse(object_id="sendspin_group", key=GROUP_PLAYER_KEY, name="Sendspin Group"))
@@ -290,6 +304,8 @@ class FakeEgg:
                 self.send(pb.BinarySensorStateResponse(key=VOICE_HEARD_KEY, state=self.voice_heard))
             if self.mute_switch:
                 self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=self.muted))
+            if self.clips:
+                self.send(pb.SwitchStateResponse(key=CLIPS_KEY, state=self._clips_enabled))
             self._send_ring_state()
             self.send(pb.MediaPlayerStateResponse(key=GROUP_PLAYER_KEY, state=pb.MEDIA_PLAYER_STATE_IDLE, volume=1.0))
             self._send_volume()
@@ -297,6 +313,9 @@ class FakeEgg:
             self._services_subscribed = True
         elif isinstance(msg, pb.LightCommandRequest) and msg.key == RING_KEY:
             self._on_ring_command(msg)
+        elif isinstance(msg, pb.SwitchCommandRequest) and self.clips and msg.key == CLIPS_KEY:
+            self.clip_switch_commands.append(msg.state)
+            self._set_clips_enabled(msg.state)
         elif isinstance(msg, pb.SubscribeVoiceAssistantRequest) and msg.subscribe:
             await asyncio.sleep(0.05)
             first = self.wake_words[0] if self.wake_words else None
@@ -425,16 +444,31 @@ class FakeEgg:
 
     # ---- the wake clip ----
 
+    @property
+    def clips_enabled(self) -> bool:
+        """Whether the "Wake clips" switch is on, so a wake freezes a clip."""
+        return self._clips_enabled
+
+    def _set_clips_enabled(self, on: bool) -> None:
+        """Like the firmware's switch: turning it off wipes the frozen clip, and the new state is reported back."""
+        if not self.clips:
+            return
+        self._clips_enabled = on
+        if not on:
+            self._frozen = None
+        if self._states_subscribed and self._w is not None and not self._w.is_closing():
+            self.send(pb.SwitchStateResponse(key=CLIPS_KEY, state=on))
+
     def freeze_only(self) -> None:
         """Freeze a clip and send its event, as a wake does, without starting or stopping a run."""
         self._freeze()
 
     def _freeze(self, wake_word: str | None = None) -> None:
-        """Like the firmware: with the mute switch off, freeze the clip, then tell the server if it has subscribed.
+        """Like the firmware: with capture on and the mute switch off, freeze the clip, then tell the server if it has subscribed.
 
         wake_word is the phrase heard, the egg's own wake word unless a run says otherwise.
         """
-        if not self.clips or self.muted:
+        if not self.clips or not self._clips_enabled or self.muted:
             return
         wake_word = wake_word or self.wake_word
         self.clip_count += 1

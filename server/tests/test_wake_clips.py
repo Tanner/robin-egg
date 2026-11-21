@@ -24,6 +24,7 @@ from robin_egg_server.audio import MIC_RATE
 from robin_egg_server.egg import Options
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.logs import TagFilter
+from robin_egg_server.wake_clip_switch import NO_SWITCH, set_wake_clips
 from robin_egg_server.wake_clips import (
     FROZEN_EVENT,
     PROBABLY_FALSE,
@@ -307,14 +308,18 @@ def test_a_second_clip_of_the_same_name_is_kept_beside_the_first(tmp_path):
     assert np.array_equal(store.samples(first), tone(1.0))
 
 
-async def connected(egg: FakeEgg) -> tuple[APIClient, list]:
-    """A client on the fake egg that has subscribed to its service calls, as the server does."""
+async def connected(egg: FakeEgg, subscribe: bool = True) -> tuple[APIClient, list]:
+    """A client on the fake egg that has turned its wake clips on and subscribed to its service calls, as the server does."""
     port = await egg.start()
     client = APIClient("127.0.0.1", port, None)
     await client.connect(login=True)
+    if egg.clips:
+        await set_wake_clips(client, True)
+        await eventually(lambda: egg.clips_enabled)
     calls: list = []
-    client.subscribe_service_calls(calls.append)
-    await eventually(lambda: egg._services_subscribed)
+    if subscribe:
+        client.subscribe_service_calls(calls.append)
+        await eventually(lambda: egg._services_subscribed)
     return client, calls
 
 
@@ -390,11 +395,12 @@ def test_fetch_times_out():
 def test_freeze_only_starts_no_run_and_the_event_waits_for_the_subscription():
     async def go():
         egg = FakeEgg([], wake_word="Hey Robin", clips=True)
-        await egg.start()
+        client, _ = await connected(egg, subscribe=False)
         try:
-            egg.freeze_only()  # nothing has connected, so there is no one to tell
+            egg.freeze_only()  # nothing has subscribed, so there is no one to tell
             clip = await fetch_clip("127.0.0.1", egg.clip_port)
         finally:
+            await client.disconnect()
             await egg.stop()
         return egg, clip
 
@@ -726,3 +732,140 @@ def test_a_recorded_turn_whose_fetch_ends_after_the_egg_drops_keeps_its_clip(tmp
     assert dropped_warnings(caplog) == []
     [e] = store.entries()
     assert (e.turn, e.outcome) == ("t9", "answered")
+
+
+# ---- the egg keeps clips only while the server asks for them ----
+
+
+def test_with_a_collector_the_server_turns_the_egg_capture_on(tmp_path, caplog):
+    seen: list[bool] = []
+
+    async def scenario(egg, store):
+        await eventually(lambda: len(store.entries()) == 1)
+        seen.append(egg.clips_enabled)  # while the server is still connected
+
+    with caplog.at_level(logging.INFO, logger="robin.wake_clips"):
+        egg, _, store = run_with_clips([speech()], ["hi"], [["Hello. "]], tmp_path, scenario=scenario)
+    assert seen == [True]
+    assert egg.clip_switch_commands == [True]
+    [e] = store.entries()
+    assert (e.turn, e.count) == ("t1", 1)
+    assert "Told the egg to keep the audio before each wake" in caplog.text
+
+
+async def talk(egg: FakeEgg, scenario, **robin_kwargs):
+    """One conversation against the fake egg with no wake clip collector, running scenario(egg) while it is connected."""
+    until = asyncio.Event()
+    result: list = []
+
+    async def drive():
+        try:
+            result.append(await scenario(egg))
+        finally:
+            until.set()
+
+    runner = asyncio.create_task(drive())
+    await converse([], FakeSTT(["hi"]), SlowBrain([["Hello. "]], pause=0), ToneTTS(), Options(follow_up="off"), egg=egg, until=until, **robin_kwargs)
+    await runner
+    return result[0]
+
+
+def test_without_a_collector_the_server_turns_the_egg_capture_off(caplog):
+    async def scenario(egg):
+        await eventually(lambda: egg.done.is_set())  # the turn the first wake started is over
+        return egg.clips_enabled, egg.clip_count, await fetch_clip("127.0.0.1", egg.clip_port)
+
+    egg = FakeEgg([speech()], wake_word="Hey Robin", clips=True)
+    with caplog.at_level(logging.INFO, logger="robin.wake_clips"):
+        enabled, count, clip = asyncio.run(talk(egg, scenario))
+    assert (enabled, count, clip) == (False, 0, None)
+    assert egg.clip_switch_commands == [False]
+    assert egg.runs[0].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Hello."
+    assert "Told the egg not to keep the audio before each wake" in caplog.text
+
+
+def test_a_reconnect_turns_the_egg_capture_on_again(tmp_path):
+    seen: list[bool] = []
+
+    async def scenario(egg, store):
+        await eventually(lambda: len(store.entries()) == 1)
+        egg.drop()
+        await eventually(lambda: len(egg.clip_switch_commands) == 2)
+        await eventually(lambda: len(store.entries()) == 2)
+        seen.append(egg.clips_enabled)
+
+    egg, _, store = run_with_clips([speech(), speech()], ["hi", "hi again"], [["Hello. "], ["Hello again. "]], tmp_path, scenario=scenario)
+    assert egg.clip_switch_commands == [True, True]
+    assert seen == [True]
+    assert sorted(e.turn for e in store.entries()) == ["t1", "t2"]
+
+
+def test_an_egg_without_the_switch_gets_one_warning_and_the_turn_is_answered(tmp_path, caplog):
+    store = WakeClipStore(tmp_path / "wakes")
+    egg = FakeEgg([speech()], wake_word="Hey Robin")
+    with caplog.at_level(logging.WARNING):
+        egg, _, _ = run_with_clips([speech()], ["hi"], [["Hello. "]], tmp_path, egg=egg, clips=collector(store, egg))
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING and r.name == "robin.wake_clips"] == [NO_SWITCH]
+    assert NO_SWITCH == (
+        "This egg's firmware has no wake clip setting, so no wake clips will be kept. Flash the firmware in firmware/ to keep them."
+    )
+    assert egg.runs[0].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Hello."
+    assert store.entries() == []
+
+
+def test_an_egg_without_the_switch_and_no_collector_logs_nothing_about_clips(caplog):
+    with caplog.at_level(logging.DEBUG):
+        egg, _ = asyncio.run(
+            converse([speech()], FakeSTT(["hi"]), SlowBrain([["Hello. "]], pause=0), ToneTTS(), Options(follow_up="off"), egg=FakeEgg([speech()], wake_word="Hey Robin"))
+        )
+    assert egg.runs[0].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "Hello."
+    assert [r.getMessage() for r in caplog.records if r.name == "robin.wake_clips" or "wake clip" in r.getMessage().lower()] == []
+
+
+def test_turning_the_fake_egg_capture_off_wipes_its_clip():
+    async def go():
+        egg = FakeEgg([], wake_word="Hey Robin", clips=True)
+        client, _ = await connected(egg)
+        try:
+            egg.wake()
+            before = await fetch_clip("127.0.0.1", egg.clip_port)
+            await set_wake_clips(client, False)
+            await eventually(lambda: not egg.clips_enabled)
+            after = await fetch_clip("127.0.0.1", egg.clip_port)
+            egg.freeze_only()
+        finally:
+            await client.disconnect()
+            await egg.stop()
+        return egg, before, after
+
+    egg, before, after = asyncio.run(go())
+    assert before is not None and before.count == 1
+    assert after is None
+    assert egg.clip_count == 1  # a wake with capture off is not counted
+
+
+def test_the_fake_egg_turns_capture_off_when_the_server_goes():
+    async def go():
+        egg = FakeEgg([], wake_word="Hey Robin", clips=True)
+        client, _ = await connected(egg)
+        egg.wake()
+        await client.disconnect()
+        try:
+            await eventually(lambda: not egg.clips_enabled)
+            return await fetch_clip("127.0.0.1", egg.clip_port)
+        finally:
+            await egg.stop()
+
+    assert asyncio.run(go()) is None
+
+
+class BrokenClient:
+    async def list_entities_services(self):
+        raise ConnectionError("the egg went away")
+
+
+def test_a_failure_to_set_the_switch_is_one_warning_and_never_raises(caplog):
+    with caplog.at_level(logging.WARNING, logger="robin.wake_clips"):
+        asyncio.run(set_wake_clips(BrokenClient(), True))
+    [warning] = [r.getMessage() for r in caplog.records if r.name == "robin.wake_clips"]
+    assert "the egg went away" in warning
