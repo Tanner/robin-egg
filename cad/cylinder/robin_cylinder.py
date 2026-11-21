@@ -1,8 +1,8 @@
 """Robin Egg enclosure v2: squat cylinder, parametric CadQuery model.
 
 Run:  python3 robin_cylinder.py [outdir]
-Writes stl/cylinder_base.stl, cylinder_body.stl, cylinder_chassis.stl, cylinder_top.stl
-and the same in step/. outdir defaults to this folder.
+Writes stl/cylinder_base.stl, cylinder_body.stl, cylinder_chassis.stl, cylinder_top.stl,
+cylinder_top_holes.stl and the same in step/. outdir defaults to this folder.
 
 Coordinates: z is up, in mm, from the table. +y is the back (USB-C side), +x is the
 mute side. Board numbers come from Seeed's STEP model, re-centred on the board with the
@@ -72,6 +72,12 @@ USB_POCKET_W, USB_POCKET_Z0, USB_POCKET_Z1 = 13.5, XIAO_USB_Z - 4.5, XIAO_USB_Z 
 FLEX_W, FLEX_Z0, FLEX_Z1, FLEX_SLOT = 9.0, Z_SEAM + LAP_H + 0.5, Z_LID - 0.5, 1.0
 RESET_HOLE_D = 1.8
 
+# holed top: for filament that blocks light, such as black
+LED_R, LED_ANGLES = 40.0, tuple(range(15, 360, 30))   # the 12 LEDs, from Seeed's STEP model
+LED_HOLE_D = 4.0
+RIB_ANGLES = tuple(range(15, 360, 60))   # clear of the key, USB-C pocket, mute flexure and reset hole
+RIB_W, RIB_PRESS, RIB_LEAD = 1.2, 0.2, 0.8   # each rib presses RIB_PRESS into the body's lip
+
 # ---------------------------------------------------------------- helpers
 def cyl(d, z0, z1, x=0, y=0):
     return cq.Workplane("XY").workplane(offset=z0).center(x, y).circle(d / 2).extrude(z1 - z0)
@@ -133,7 +139,7 @@ def make_chassis():
     c = c.cut(cyl(WIRE_HOLE[2], Z_CHASSIS - 1, Z_CHASSIS + CHASSIS_T + 1, WIRE_HOLE[0], WIRE_HOLE[1]))
     return c
 
-def make_top():
+def make_top(led_holes=False, crush_ribs=False):
     outer = cq.Workplane("XY").workplane(offset=Z_SEAM).circle(R).extrude(H - Z_SEAM).faces(">Z").edges().chamfer(TOP_BEVEL)
     t = outer.cut(cyl(2 * R_IN, Z_SEAM - 1, Z_LID))
     # the top's wall is thinned at the bottom to sit over the body's lip
@@ -157,6 +163,18 @@ def make_top():
     t = t.cut(slot.rotate((0, 0, 0), (0, 0, 1), ang)).union(nub.rotate((0, 0, 0), (0, 0, 1), ang))
     # paperclip hole for the other (reset) button
     t = t.cut(cq.Workplane("YZ").circle(RESET_HOLE_D / 2).extrude(20).translate((R - 10, 0, BTN_Z)).rotate((0, 0, 0), (0, 0, 1), ang + 180))
+    if led_holes:
+        for a in LED_ANGLES:
+            x, y = polar(LED_R, a)
+            t = t.cut(cyl(LED_HOLE_D, Z_LID - 1, H + 1, x, y))
+    if crush_ribs:
+        r_rib, r_lap = R_IN + LAP_T - RIB_PRESS, R_IN + LAP_T + LAP_CLEAR
+        # a ring that presses into the body's lip, tapered at the mouth so the top starts on before it bites
+        ring = tube(r_rib, r_lap + 0.3, Z_SEAM, Z_SEAM + LAP_H)
+        lead = cq.Workplane("XY").workplane(offset=Z_SEAM - 0.01).circle(r_lap + 0.05).workplane(offset=RIB_LEAD).circle(r_rib - 0.05).loft()
+        ring = ring.cut(lead)
+        for a in RIB_ANGLES:
+            t = t.union(ring.intersect(radial_box(a, r_lap, 4, RIB_W, Z_SEAM - 1, Z_SEAM + LAP_H + 1)))
     return t
 
 def export(part, name, outdir):
@@ -167,7 +185,8 @@ if __name__ == "__main__":
     outdir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
     os.makedirs(os.path.join(outdir, "stl"), exist_ok=True)
     os.makedirs(os.path.join(outdir, "step"), exist_ok=True)
-    parts = {"base": make_base(), "body": make_body(), "chassis": make_chassis(), "top": make_top()}
+    parts = {"base": make_base(), "body": make_body(), "chassis": make_chassis(), "top": make_top(),
+             "top_holes": make_top(led_holes=True, crush_ribs=True)}
     for n, p in parts.items():
         print("Exporting %s: valid %s, volume %.1f cm3" % (n, p.val().isValid(), p.val().Volume() / 1000), flush=True)
         export(p, n, outdir)
