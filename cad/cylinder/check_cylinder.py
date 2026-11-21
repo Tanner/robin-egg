@@ -34,6 +34,12 @@ for s in leds:
         print("  LED at (%.1f, %.1f) has no hole over it" % (c.x, c.y))
 print("LEDs under a hole in top_holes: %d of %d" % (len(leds) - covered, len(leds)), flush=True)
 
+# every mic should have a clear hole to the outside, through a post that ends just above the board
+for n, p in (("top", top), ("top_holes", top_holes)):
+    blocked = sum(1 for x, y in MICS if p.val().intersect(cyl(MIC_HOLE_D - 0.2, Z_PCB + PCB_T, H + 1, x, y).val()).Volume() > 0.001)
+    gaps = [p.val().intersect(cyl(MIC_BOSS_D, Z_PCB, H, x, y).val()).BoundingBox().zmin - (Z_PCB + PCB_T) for x, y in MICS]
+    print("Mics with a clear hole in %s: %d of %d, posts end %.2f to %.2f mm above the board" % (n, len(MICS) - blocked, len(MICS), min(gaps), max(gaps)), flush=True)
+
 # the plain top should not touch the body; the holed top should touch it only at the crush ribs
 print("Top against body: %.2f mm3 overlap" % top.val().intersect(body.val()).Volume())
 ribs = top_holes.val().intersect(body.val())

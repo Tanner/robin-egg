@@ -14,7 +14,7 @@ This is the first-print version. The top pushes straight on instead of twisting,
 | --- | --- | --- |
 | `stl/cylinder_body.stl` | Smooth sleeve, speaker baffle, sealed speaker chamber, ledge for the chassis, push-on lip with a key at the front | First. Flat bottom (the baffle) down, as saved. No supports. Blue, or white for now |
 | `stl/cylinder_chassis.stl` | Plate that seals the top of the chamber, with 3 standoffs for the board | Flat side down. No supports. Any colour |
-| `stl/cylinder_top.stl` | Push-on top: lid with 4 mic holes and bosses, thinned ring over the LEDs, mute flexure (+x), reset pinhole (−x), USB-C pocket (back) | **Flip it in the slicer** so the flat top face is on the bed. No supports. White, so the LEDs glow through |
+| `stl/cylinder_top.stl` | Push-on top: lid with 4 mic holes in posts that reach down to the board, thinned ring over the LEDs, mute flexure (+x), reset pinhole (−x), USB-C pocket (back) | **Flip it in the slicer** so the flat top face is on the bed. No supports. White, so the LEDs glow through |
 | `stl/cylinder_top_holes.stl` | The same top for filament that blocks light, such as black: 12 holes of 4 mm, one over each LED, and 6 crush ribs inside the rim for a firmer fit | As the top: **flip it** so the flat face is on the bed. No supports. Any colour |
 | `stl/cylinder_base.stl` | Dark base band, deflector cone, 4 screw posts, rubber-foot recesses | Flat side down. No supports. Dark |
 
@@ -44,7 +44,7 @@ Also on hand: silicone for the ledge (not thick foam tape, see step 4), hot glue
    - Line its 4 corner holes up with the 4 small diagonal holes and fix it with the 4 M3 × 8 screws, driven straight into the plastic.
 3. **Fill.** Turn the body upright. Loosely fill the chamber with polyester fill through the open top. Keep it loose.
 4. **Chassis.**
-   - Put a thin bead of silicone on the ledge inside the body. Don't use thick foam tape. It lifts the chassis, and the board with it, and the top's mic posts only clear the board by 0.6 mm.
+   - Put a thin bead of silicone on the ledge inside the body. Don't use thick foam tape. It lifts the chassis, and the board with it, and the top's mic posts only clear the board by 0.1 mm.
    - Thread the speaker pigtail up through the chassis's wire hole. The hole is 8 mm so the JST plug fits through. A chassis printed before 2026-11-17 has a 4 mm hole: drill it out to 8 mm.
    - Drop the chassis onto the ledge, standoffs up. Turn it so the **single standoff points to the front and the pair to the back**. Only one of the three ways its screw holes line up is right, so check this.
    - Fix it with the 3 M2.5 screws. Use 6 mm ones if the kit has them. An 8 mm screw pokes about 1.5 mm into the box, so put a dab of hot glue over each tip.
@@ -80,6 +80,11 @@ From the first assembly, 2026-11-19. Everything fitted once the speaker was moun
 - **Make the top hold on more firmly.** The push-on top sits loosely and doesn't pop on. Two ways:
   - **Top only:** about 6 small vertical crush ribs inside the top's rim, each pressing about 0.2 mm into the body's lip. Gives a firm friction fit, but no click.
   - **Top and body:** a groove round the body's lip and bumps in the top that snap into it, or the twist lock from the design doc. Gives a real click, but needs a new body.
+- **Reprint the top for the mics.** With the first top on, speech-to-text got questions wrong that it got right with the top lifted off. Captures on 2026-11-21 showed why: speech from 1 to 2 kHz was 12 to 22 dB weaker with the top on. Each mic post stopped 0.6 mm above the board, so the mic heard the air inside the top more than the room, through a hole only 1.2 mm wide.
+  - Both tops now have posts that end 0.1 mm above the board and holes of 2 mm. No gasket is needed.
+  - If a print comes out tall, the posts rest on the board and the top sits a fraction of a millimetre high. That is fine.
+  - Test it by asking the same question with the top on and off, with the server's `--save-audio` on, and comparing the captures. If the top still muffles speech, add a ring of 1 mm closed-cell foam on each post and raise `MIC_BOSS_GAP` to about 0.7.
+- **Seal the speaker chamber.** The first assembly used screws only: no silicone on the ledge, no hot glue in the wire hole and no fill. The chamber leaks into the bay under the board, where the mics are. Seal it as the assembly steps describe.
 - **Mute tab not tested yet.** If pressing it resets the board instead of muting, set `MUTE_SIDE = -1`. Fold that into the same top reprint.
 - **The steps confused three things,** now spelled out above:
   - which side the speaker's square plate goes on
@@ -92,6 +97,7 @@ From the first assembly, 2026-11-19. Everything fitted once the speaker was moun
 
 - Board against body, chassis and both tops: no clashes.
 - Holed top: all 12 LEDs sit under a hole, and it touches the body only at the 6 crush ribs.
+- Both tops: all 4 mics have a clear hole, and the posts end 0.1 mm above the board.
 - Speaker against base, body and chassis: no overlap.
 - Parts against each other: no overlap.
 - Speaker chamber: 0.36 L of air, about 0.34 L once the speaker is in.
