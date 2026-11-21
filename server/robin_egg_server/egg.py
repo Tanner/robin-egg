@@ -58,7 +58,7 @@ from .vad import ModelVad, make_vad
 from .turn_log import ANSWERED, ASKED_AGAIN, FAILED, LOCAL_COMMAND, NOBODY_SPOKE, NOTHING_RECOGNISED, OVERHEARD, QUIET, TurnLog, TurnRecord
 from .voices import SpeechToText, TextToSpeech
 from .waiting import MessageWaiting, is_missed_question
-from .wake_clip_switch import set_wake_clips
+from .wake_clip_switch import set_wake_clips, wake_clips_off
 from .wake_clips import DEFAULT_CLIP_PORT, FROZEN_EVENT, WakeClips
 from .volume import MIN_VOLUME, EggVolume
 from .web import AudioServer
@@ -1580,6 +1580,7 @@ class Robin:
                 delay = min(delay * 2, 30)
                 continue
             set_up = False
+            clips_key: int | None = None  # the egg's Wake clips switch, when this connection turned it on
             try:
                 info = await client.device_info()
                 LOG.info("Egg: %s, ESPHome %s, %s %s", info.name, info.esphome_version, info.project_name, info.project_version)
@@ -1602,8 +1603,8 @@ class Robin:
                 if self.waiting is not None:
                     await self.waiting.attach(client)
                 await self.volume.attach(client)
-                # On every connection: the egg turns its capture off at boot and when the last client goes.
-                await set_wake_clips(client, keep=self.wake_clips is not None)
+                # On every connection: the egg turns its capture off at boot and when the server's connection closes.
+                clips_key = await set_wake_clips(client, keep=self.wake_clips is not None)
                 if self.wake_clips is not None:
                     self.wake_clips.connected(host)
                     # Before the voice assistant: the egg tells only a subscriber about a wake it froze.
@@ -1663,6 +1664,8 @@ class Robin:
                 self._ready_task = None
                 if self.ring is not None:
                     self.ring.detach()
+                if clips_key is not None and stop.is_set() and not disconnected.is_set():
+                    wake_clips_off(client, clips_key)
                 with contextlib.suppress(Exception):
                     await client.disconnect()
             if not set_up and not stop.is_set():

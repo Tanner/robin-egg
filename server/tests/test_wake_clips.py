@@ -24,7 +24,7 @@ from robin_egg_server.audio import MIC_RATE
 from robin_egg_server.egg import Options
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.logs import TagFilter
-from robin_egg_server.wake_clip_switch import NO_SWITCH, set_wake_clips
+from robin_egg_server.wake_clip_switch import NO_SWITCH, set_wake_clips, wake_clips_off
 from robin_egg_server.wake_clips import (
     FROZEN_EVENT,
     PROBABLY_FALSE,
@@ -747,7 +747,7 @@ def test_with_a_collector_the_server_turns_the_egg_capture_on(tmp_path, caplog):
     with caplog.at_level(logging.INFO, logger="robin.wake_clips"):
         egg, _, store = run_with_clips([speech()], ["hi"], [["Hello. "]], tmp_path, scenario=scenario)
     assert seen == [True]
-    assert egg.clip_switch_commands == [True]
+    assert egg.clip_switch_commands[0] is True
     [e] = store.entries()
     assert (e.turn, e.count) == ("t1", 1)
     assert "Told the egg to keep the audio before each wake" in caplog.text
@@ -795,7 +795,7 @@ def test_a_reconnect_turns_the_egg_capture_on_again(tmp_path):
         seen.append(egg.clips_enabled)
 
     egg, _, store = run_with_clips([speech(), speech()], ["hi", "hi again"], [["Hello. "], ["Hello again. "]], tmp_path, scenario=scenario)
-    assert egg.clip_switch_commands == [True, True]
+    assert egg.clip_switch_commands == [True, True, False]  # on at each connect, off at the clean stop
     assert seen == [True]
     assert sorted(e.turn for e in store.entries()) == ["t1", "t2"]
 
@@ -867,5 +867,34 @@ class BrokenClient:
 def test_a_failure_to_set_the_switch_is_one_warning_and_never_raises(caplog):
     with caplog.at_level(logging.WARNING, logger="robin.wake_clips"):
         asyncio.run(set_wake_clips(BrokenClient(), True))
+    [warning] = [r.getMessage() for r in caplog.records if r.name == "robin.wake_clips"]
+    assert "the egg went away" in warning
+
+
+def test_a_clean_stop_turns_the_egg_capture_off_before_disconnecting(tmp_path, caplog):
+    with caplog.at_level(logging.INFO, logger="robin.wake_clips"):
+        egg, _, store = run_with_clips([speech()], ["hi"], [["Hello. "]], tmp_path)
+    assert egg.clip_switch_commands == [True, False]  # the fake's own disconnect handling records nothing
+    assert len(store.entries()) == 1
+    assert "Told the egg to stop keeping the audio before each wake, because the server is stopping" in caplog.text
+
+
+def test_a_server_without_a_collector_sends_nothing_more_at_stop():
+    async def scenario(egg):
+        await eventually(lambda: egg.done.is_set())
+
+    egg = FakeEgg([speech()], wake_word="Hey Robin", clips=True)
+    asyncio.run(talk(egg, scenario))
+    assert egg.clip_switch_commands == [False]
+
+
+class RefusingClient:
+    def switch_command(self, key, state):
+        raise ConnectionError("the egg went away")
+
+
+def test_a_failure_to_turn_capture_off_at_stop_is_one_warning_and_never_raises(caplog):
+    with caplog.at_level(logging.WARNING, logger="robin.wake_clips"):
+        wake_clips_off(RefusingClient(), 7)
     [warning] = [r.getMessage() for r in caplog.records if r.name == "robin.wake_clips"]
     assert "the egg went away" in warning
