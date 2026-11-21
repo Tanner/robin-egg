@@ -113,6 +113,10 @@ class RoomContext:
         """What became of a message Robin sent on its own, named by its id and label, never its words."""
         self.note(EGG_LAST_MESSAGE, f"message {message} {outcome}", LAST_MESSAGE_TTL_S, again=True)
 
+    def voices_heard(self) -> None:
+        """Voices were heard near the egg. Each report is new: the time it is posted at is the news."""
+        self.note(EGG_LAST_HEARD, "voices nearby", LAST_HEARD_TTL_S, again=True)
+
     def digest_outcome(self, fact: str) -> None:
         """What became of several messages spoken as one announcement, as one fact."""
         self.note(EGG_LAST_MESSAGE, fact, LAST_MESSAGE_TTL_S, again=True)

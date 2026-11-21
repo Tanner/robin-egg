@@ -103,6 +103,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--led-colours", default=str(DEFAULT_COLOURS_FILE), help="JSON file of ring colours by robin-assistant user key, e.g. {\"tanner\": \"orange\"} (default ~/.robin-egg/led-colours.json; people it leaves out get a default colour)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 20-8 runs past midnight; 0-24 for always")
     p.add_argument("--quiet-state", default=str(DEFAULT_QUIET_STATE), help="Where a pause asked for by voice ('quiet for an hour') is kept, so a restart does not end it early (default ~/.robin-egg/quiet.json)")
+    p.add_argument("--voice-heard", action=argparse.BooleanOptionalAction, default=True, help="Tell Robin when the egg's Voice Heard sensor hears voices nearby, as the egg_last_heard fact, at most every 10 minutes. Only the time is sent, never audio (default on; needs the firmware with the sensor)")
     p.add_argument("--quiet-when-muted", action=argparse.BooleanOptionalAction, default=True, help="While the egg's microphone is muted, Robin does not speak first: its own messages and /announce are dropped (default on; --no-quiet-when-muted turns it off)")
     p.add_argument("--presence-minutes", type=float, metavar="N", help="Speak Robin's own messages only if someone spoke to the egg in the last N minutes, a stand-in for a presence sensor; otherwise drop them (default off; /announce is always spoken)")
     p.add_argument("--quiet-hours", default="21-7", help="Hours when Robin speaks more quietly, replies and announcements alike, e.g. 21-7; off for never")
@@ -229,6 +230,7 @@ def build(args: argparse.Namespace):
         vad=args.vad,
         speaking_hours=args.speaking_hours,
         quiet_when_muted=args.quiet_when_muted,
+        voice_heard=args.voice_heard,
         presence_window_s=args.presence_minutes * 60 if args.presence_minutes is not None else None,
         save_audio=Path(args.save_audio).expanduser() if args.save_audio else None,
         proactive_sound=Path(args.proactive_sound).expanduser() if args.proactive_sound else None,

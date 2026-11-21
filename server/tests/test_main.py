@@ -22,6 +22,11 @@ def test_speaking_hours_are_read_when_the_command_line_is():
     assert parse_args(["egg.local", "--echo", "--speaking-hours", "20-8"]).speaking_hours == (20, 8)
 
 
+
+def test_voice_heard_is_on_unless_turned_off():
+    assert parse_args(["egg.local", "--echo"]).voice_heard is True
+    assert parse_args(["egg.local", "--echo", "--no-voice-heard"]).voice_heard is False
+
 @pytest.mark.parametrize("bad", ["8", "8-25", "eight-twenty", "8-20-22", "-1-5"])
 def test_speaking_hours_that_are_not_hours_are_refused(bad, capsys):
     with pytest.raises(SystemExit):

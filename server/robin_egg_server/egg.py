@@ -45,6 +45,7 @@ from .enrol_offer import ENROL_OFFER, EnrolOffer
 from .logs import tagged
 from .quiet import QuietMode
 from .mic_mute import MicMute
+from .voice_heard import SETTLE_S, VoiceHeard
 from .outcomes import DROPPED, outcome_of
 from .morning_mention import MorningMention
 from .repeat import DEFAULT_WINDOW_S, NOTHING_TO_REPEAT, LastSaid
@@ -97,6 +98,7 @@ class Options:
     enrol_window_s: float = 10.0  # people need a moment to repeat an enrolment sentence
     speaking_hours: tuple[int, int] = (8, 20)  # proactive speech only between these hours, start inclusive
     quiet_when_muted: bool = True  # the egg's microphone mute also stops Robin speaking first
+    voice_heard: bool = True  # tell Robin when the egg's Voice Heard sensor hears voices nearby
     presence_window_s: float | None = None  # Robin's own messages need someone in the room this recently; None = no check
     save_audio: Path | None = None
     proactive_sound: Path | None = None  # played before Robin speaks first; PROACTIVE_CHIME if None
@@ -196,6 +198,8 @@ class Robin:
         self._abandoned: dict[int, str] = {}  # how recent turns ended that gave up before Robin's answer came, by their user row
         self._unfinished_replies: deque[int] = deque(maxlen=32)  # replies already reported as not spoken to the end
         self.mic_mute = MicMute()
+        self.voice_heard = VoiceHeard(self._voice_ignore_reason, self._voices_heard)
+        self._turn_ended_at = -math.inf  # when the last turn ended, on played_clock()
         self.turn: Turn | None = None
         self.egg_since = time.time()  # when the egg connected or, while it is away, when it was lost
         self.device: dict[str, str] = {}  # the egg's name and versions, from its last connection
@@ -332,6 +336,7 @@ class Robin:
                     t.task.cancel()
                 else:
                     self.last_turn = (time.time(), "cancelled")
+                    self._turn_ended_at = self.played_clock()
                     self.turn_log.turn(t)
             elif t.listening:
                 t.vad.reason = "the egg ended the audio stream"
@@ -523,6 +528,7 @@ class Robin:
             await self._apologise(t, err)
         finally:
             self.last_turn = (time.time(), ended)
+            self._turn_ended_at = self.played_clock()
             await self._end_thinking(t)
             await t.reply.close()
             self._state.set()
@@ -1059,6 +1065,28 @@ class Robin:
         """How many of Robin's own messages are queued behind whatever the egg is doing."""
         return self._proactive_queue.qsize()
 
+    def _voice_ignore_reason(self) -> str | None:
+        """Why voices heard near the egg should not count as someone around, or None when they do.
+
+        Mute is read directly, not through _mic_muted(): with --no-quiet-when-muted Robin may
+        still speak, but a muted egg was asked for quiet, and the DSP may still hear voices.
+        """
+        if self.mic_mute.muted:
+            return "the microphone is muted"
+        busy = self._busy_reason()
+        if busy is not None:
+            return busy
+        now = self.played_clock()
+        if now < self._playback_until + SETTLE_S:
+            return "the egg finished playing a moment ago"
+        if now < self._turn_ended_at + SETTLE_S:
+            return "a conversation ended a moment ago"
+        return None
+
+    def _voices_heard(self) -> None:
+        if self.room_context is not None:
+            self.room_context.voices_heard()
+
     def _busy_reason(self) -> str | None:
         """Why Robin should not speak first right now, or None when the egg is idle."""
         if self.client is None:
@@ -1479,6 +1507,8 @@ class Robin:
         from aioesphomeapi import APIClient, LogLevel
 
         stop = stop or asyncio.Event()
+        if not self.opts.voice_heard:
+            LOG.info("Voice-heard presence is off, so Robin will not be told when voices are heard near the egg")
         attempts = [("your key", psk)] if psk else [("Noise with the all-zeros key", ZERO_PSK), ("plaintext", None)]
         delay = RECONNECT_DELAY_S
         while not stop.is_set():
@@ -1529,6 +1559,8 @@ class Robin:
                 self.egg_since = time.time()
                 self._state.set()
                 self._egg_connected(True)
+                if self.opts.voice_heard:
+                    await self.voice_heard.watch(client)  # once connected, so a state already on can count
                 if self.waiting is not None:
                     await self.waiting.attach(client)
                 await self.volume.attach(client)
@@ -1557,6 +1589,7 @@ class Robin:
                     self.egg_since = time.time()
                 self.client = None
                 self.mic_mute.reset()
+                self.voice_heard.reset()
                 if self.waiting is not None:
                     self.waiting.detach()
                 self.volume.detach()
