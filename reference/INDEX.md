@@ -6,7 +6,7 @@ Saved 2026-11-15.
 
 | Folder | What | Version |
 | --- | --- | --- |
-| `formatbce-xvf3800/` | formatBCE ESPHome firmware for the XVF3800: README, packages, configs | Release 2026.11.0, commit 9e4352f |
+| `formatbce-xvf3800/` | formatBCE ESPHome firmware for the XVF3800: README, packages, configs | Commit 9e4352f. Not release 2026.11.0, which is commit 35d2e64 and is what the firmware builds |
 | `formatbce-lite-core/core/` | The voice satellite core formatBCE pulls in: voice pipeline, media player, wake words, timers | Respeaker-Lite-ESPHome-integration 2026.10.4 |
 | `esphome/` | ESPHome source: `voice_assistant/` (the egg side of the voice protocol), `micro_wake_word/`, `api.proto` (every API message), the API and audio config code | ESPHome 2026.10.2 |
 | `esphome/docs/` | ESPHome docs pages: api, voice_assistant, micro_wake_word, media player, media sources, i2s_audio | esphome-docs commit 6615ae7 |

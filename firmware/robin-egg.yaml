@@ -70,6 +70,33 @@ micro_wake_word:
       id: snooze
       internal: true
 
+# Whether the board hears voices nearby, for the server to tell Robin someone is
+# around. Only this on/off state leaves the egg: no audio and no direction.
+# The DSP always reports a direction, and in a quiet room it holds the last one
+# still. A voice moves it. The beam sensor publishes only when the direction
+# moves to another LED, so each publish counts as a voice. The pending off is
+# held for 10 s, and a new publish cancels it. The bench numbers are in
+# docs/bench-test.md. While a wake word turn has the beam locked the direction
+# barely moves, and the lock and unlock can each publish once, so the server
+# ignores the state during a turn and for a while after.
+respeaker_xvf3800:
+  led_beam_sensor:
+    on_value:
+      - binary_sensor.template.publish:
+          id: voice_heard
+          state: ON
+      - binary_sensor.template.publish:
+          id: voice_heard
+          state: OFF
+
+binary_sensor:
+  - platform: template
+    name: "Voice Heard"
+    id: voice_heard
+    disabled_by_default: true
+    filters:
+      - delayed_off: 10s
+
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password

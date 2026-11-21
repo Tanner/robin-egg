@@ -123,3 +123,16 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | When the egg is about to listen again without the wake word, the reply or message ends with the wake word's listening cue | One sound always means "speak now", and it keeps the cues at three |
 | The server adds it at the end of the reply's audio, with no gap after it, not the firmware | The firmware reopens the mic once the reply has played, so the sound ends as the mic opens. It needs no reflash |
 | It plays at the reply's volume | It belongs to the reply, so quiet hours and a quiet voice soften it too |
+
+## Voice-heard presence, decided 2026-11-20
+
+| Decision | Why |
+| --- | --- |
+| The egg tells Robin when voices were heard nearby, as the `egg_last_heard` fact. Its value is always `voices nearby`, and the time it was posted is the news | Robin chooses for itself whether to speak first or send a text, and needs to know whether anyone is around. Until now it only knew when someone last spoke to the egg |
+| Only an on/off "Voice Heard" sensor leaves the egg, never audio, words, who spoke or where they are | Audio still stays on the egg until the wake word. Robin needs to know someone is around, not where |
+| The firmware counts a change of the DSP's voice direction as a voice, and holds the sensor on for 10 s after the last change | On the bench the DSP always had a direction and answered "busy" on about half of all reads, voice or not. A quiet room held the direction exactly still, and talking moved it within a second (`docs/bench-test.md`) |
+| The sensor uses the LED ring's existing direction reads and adds none of its own | The first version read the DSP itself, its reads got "busy", and it never turned on |
+| The server keeps every longer timing: post on the first voice that counts, then at most every 10 minutes while voices go on | Each changed fact adds a block to Robin's chats. With a TV on, 10 minutes keeps that to a few blocks an hour |
+| Voices do not count while the microphone is muted, while the egg is busy, or for 12 s after it plays or a conversation ends | Mute asks for quiet. The egg's own speech, and the beam locking and unlocking around a turn, must not look like someone in the room. A turn already tells Robin who spoke |
+| Each fact carries its own `description`, which Robin reads after the time, instead of explaining the facts in Robin's prompt | Whoever posts a fact explains it, so a new fact needs no prompt edit in another repo. Every egg fact got one |
+| TV and radio count as voices | Nothing on the egg can tell them apart from people. The description says so, so Robin can weigh it |

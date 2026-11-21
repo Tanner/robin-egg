@@ -29,12 +29,14 @@ from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
 
 from .audio import MIC_RATE, resample
 from .mic_mute import MUTE_OBJECT_ID
+from .voice_heard import VOICE_HEARD_OBJECT_ID
 
 PROTO_TO_TYPE = {v: k for k, v in MESSAGE_TYPE_TO_PROTO.items()}
 RING_EFFECTS = ["Breathe", "Twinkle", "Comet CW", "Comet CCW"]
 RING_AT_BOOT = {"on": False, "brightness": 1.0, "effect": "None"}  # restore_mode RESTORE_DEFAULT_OFF
 CHUNK = 1024  # bytes of mic audio per message, 32 ms
 MUTE_KEY = 0x4D555445  # the fake's entity key for the mute switch; the server must not depend on it
+VOICE_HEARD_KEY = 0x564F4943  # the "Voice Heard" binary sensor's entity key
 RING_KEY = 0x1ED  # the LED ring light's entity key
 MEDIA_PLAYER_KEY = 0x5EA4E401  # entity keys are hashes on the real egg, so nothing may assume a value
 GROUP_PLAYER_KEY = 0x5EA4E402
@@ -130,6 +132,8 @@ class FakeEgg:
         wake_words: list[str | None] | None = None,
         mute_switch: bool = True,
         muted: bool = False,
+        voice_heard_sensor: bool = True,
+        voice_heard: bool = False,
         volume: float = 0.5,
         speaker_muted: bool = False,
         media_player_object_id: str = "media_player",
@@ -142,6 +146,7 @@ class FakeEgg:
         starts that run even if the server did not ask for a follow-up, and None means a follow-up.
 
         muted is the microphone mute switch; speaker_muted is the media player's own mute.
+        voice_heard_sensor lists the firmware's "Voice Heard" binary sensor, and voice_heard is its state.
         The media player starts at the firmware's first-boot volume, 0.5, and is listed under
         the firmware's object id unless media_player_object_id names another.
 
@@ -179,6 +184,8 @@ class FakeEgg:
         self.done = asyncio.Event()
         self.mute_switch = mute_switch  # False for firmware with no "Microphone Mute" switch
         self.muted = muted
+        self.voice_heard_sensor = voice_heard_sensor  # False for firmware with no "Voice Heard" sensor
+        self.voice_heard = voice_heard
         self._states_subscribed = False
         self._w: asyncio.StreamWriter | None = None
         self._mic_open = False
@@ -239,6 +246,8 @@ class FakeEgg:
         elif isinstance(msg, pb.ListEntitiesRequest):
             if self.mute_switch:
                 self.send(pb.ListEntitiesSwitchResponse(object_id=MUTE_OBJECT_ID, key=MUTE_KEY, name="Microphone Mute"))
+            if self.voice_heard_sensor:
+                self.send(pb.ListEntitiesBinarySensorResponse(object_id=VOICE_HEARD_OBJECT_ID, key=VOICE_HEARD_KEY, name="Voice Heard"))
             self.send(pb.ListEntitiesLightResponse(object_id="led_ring", key=RING_KEY, name="LED Ring", supported_color_modes=[pb.COLOR_MODE_RGB], effects=RING_EFFECTS))
             # The firmware lists a Sendspin group player as well as the speaker's own.
             self.send(pb.ListEntitiesMediaPlayerResponse(object_id="sendspin_group", key=GROUP_PLAYER_KEY, name="Sendspin Group"))
@@ -246,6 +255,9 @@ class FakeEgg:
             self.send(pb.ListEntitiesDoneResponse())
         elif isinstance(msg, pb.SubscribeStatesRequest):
             self._states_subscribed = True
+            # The firmware's state dump sends binary sensors before switches.
+            if self.voice_heard_sensor:
+                self.send(pb.BinarySensorStateResponse(key=VOICE_HEARD_KEY, state=self.voice_heard))
             if self.mute_switch:
                 self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=self.muted))
             self._send_ring_state()
@@ -317,6 +329,12 @@ class FakeEgg:
         self.muted = muted
         if self.mute_switch and self._states_subscribed and self._w is not None:
             self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=muted))
+
+    def set_voice_heard(self, on: bool) -> None:
+        """Voices start or stop near the egg: the sensor reports its new state, as the firmware does."""
+        self.voice_heard = on
+        if self.voice_heard_sensor and self._states_subscribed and self._w is not None:
+            self.send(pb.BinarySensorStateResponse(key=VOICE_HEARD_KEY, state=on))
 
     def _on_ring_command(self, msg) -> None:
         """Like an ESPHome light: only the fields a command sets change, and the new state is reported back.

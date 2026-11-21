@@ -8,7 +8,7 @@ that switch by its object id, and follows its state.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 LOG = logging.getLogger("robin.egg")
 
@@ -20,11 +20,19 @@ class MicMute:
 
     def __init__(self) -> None:
         self.muted = False
+        self.known = False  # whether the switch has reported its state on this connection
+        self.on_state: Callable[[], None] | None = None  # called after each state the switch reports
         self._key: int | None = None  # the switch's entity key on this connection
+
+    @property
+    def unknown(self) -> bool:
+        """The egg has the switch, but it has not said yet on this connection whether it is muted."""
+        return self._key is not None and not self.known
 
     def reset(self) -> None:
         """Forget the state: a key or a state from one connection says nothing about the next."""
         self.muted = False
+        self.known = False
         self._key = None
 
     async def watch(self, client: Any) -> None:
@@ -50,3 +58,6 @@ class MicMute:
         if muted != self.muted:
             LOG.info("The egg's microphone was muted" if muted else "The egg's microphone was unmuted")
         self.muted = muted
+        self.known = True
+        if self.on_state is not None:
+            self.on_state()

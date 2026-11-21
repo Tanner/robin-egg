@@ -17,7 +17,9 @@ from robin_egg_server.egg import Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.room_context import (
     CONNECTION_TTL_S,
+    DESCRIPTIONS,
     EGG_CONNECTION,
+    EGG_LAST_HEARD,
     EGG_LAST_MESSAGE,
     EGG_LAST_SPEAKER,
     LAST_MESSAGE_TTL_S,
@@ -169,6 +171,25 @@ def test_a_refused_connection_fact_is_tried_again_and_a_refused_event_is_not():
 
     fake = asyncio.run(with_room(scenario, reply=(409, {"error": "not running"}), retry_s=0.1))
     assert facts(fake, EGG_LAST_MESSAGE) == [(EGG_LAST_MESSAGE, "message 7 (Bins) spoken")]
+
+
+def test_every_fact_is_posted_with_its_description():
+    async def scenario(room, fake):
+        room.egg_connected(True)
+        room.spoken_to("tanner", False)
+        room.message_outcome("7 (Bins)", "spoken")
+        await eventually(lambda: len(fake.context_posts) == 3)
+
+    fake = asyncio.run(with_room(scenario))
+    assert {p["key"] for p in fake.context_posts} == {EGG_CONNECTION, EGG_LAST_SPEAKER, EGG_LAST_MESSAGE}
+    for body in fake.context_posts:
+        assert body["description"] == DESCRIPTIONS[body["key"]]
+
+
+def test_descriptions_stay_short():
+    assert set(DESCRIPTIONS) == {EGG_CONNECTION, EGG_LAST_SPEAKER, EGG_LAST_MESSAGE, EGG_LAST_HEARD}
+    for key, description in DESCRIPTIONS.items():
+        assert 0 < len(description) <= 120, key
 
 
 def test_noting_a_fact_never_raises():

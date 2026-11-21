@@ -89,3 +89,41 @@ If there is no audio, the formatBCE README says to check the codec appears at 0x
 | Wake word distance | | |
 | Wake word during playback | | |
 | Board diameter, hole spacing, heights | | |
+
+## Voice Heard sensor (2026-11-20)
+
+The egg reports "Voice Heard" over the API so the server can tell Robin when voices were heard nearby. These are the measurements behind how the firmware decides.
+
+**First version: never turned on.** It was on while `read_led_beam_direction()` returned a direction, read every 500 ms. A quiet room stayed off, and talking stayed off too.
+
+**What the DSP does**, from a temporary build with the reSpeaker component's logs at debug:
+
+- About half of all direction reads come back "busy" (status 0x40), in silence and while talking alike. "Busy" does not mean silence, as the formatBCE source suggests.
+- The DSP always has a direction. In silence it holds exactly still: 334 reads in a row of `1.570796` radians. After another reboot it held `4.719490`. It keeps the last direction it settled on.
+- Talking moves it within a second.
+
+Changes of the beam sensor's LED position, per 10 seconds:
+
+| Stretch | Changes |
+| --- | --- |
+| Quiet room, 64 s | 0 in each window |
+| Talking from one spot | 18, 32, 8 |
+| A few seconds after talking stops | 0 |
+| Talking and moving around | 33, 30, 12 |
+| Longest stretch with no change while talking | 10 s |
+
+**Second version, flashed:** Voice Heard turns on at each change of LED position and off 10 s after the last one. It makes no DSP reads of its own.
+
+| Check | Result |
+| --- | --- |
+| On while a TV is on in the room | Yes, in bursts. It turned off three times in a minute, each 10 s after the last change, and back on at the next |
+| Quiet room stays off | |
+| Talking turns it on | |
+| Fan, dishwasher or tap, nobody talking | |
+| Walking without talking | |
+| The egg playing a reply | |
+| Mic muted | |
+| During a wake word turn and 12 s after, including one with no speech | |
+| LED beam tracking and beam lock as before | |
+
+Flashing over Wi-Fi from the Claude desktop app's Terminal panel failed with "No route to host" while the egg answered pings. macOS had not given that panel local network access. The same command worked from Claude's own shell.
