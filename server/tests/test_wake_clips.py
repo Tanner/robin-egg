@@ -944,3 +944,32 @@ def test_a_lost_connection_sends_no_switch_off(tmp_path, caplog):
     assert egg.clip_switch_commands == [True, True, False]  # the only off is the one at the final stop
     assert caplog.text.count("because the server is stopping") == 1
     assert "Could not turn off" not in caplog.text
+
+
+def test_settle_returns_when_its_tasks_finished_before_their_callbacks_ran(tmp_path, monkeypatch):
+    gathers = 0
+    real_gather = asyncio.gather
+
+    def counted_gather(*aws, **kw):
+        # A guard, so a settle() that spins fails here instead of hanging the suite.
+        nonlocal gathers
+        gathers += 1
+        if gathers > 100:
+            raise AssertionError("settle() kept waiting on tasks that had already finished")
+        return real_gather(*aws, **kw)
+
+    monkeypatch.setattr(asyncio, "gather", counted_gather)
+
+    async def done_at_once() -> None:
+        return None
+
+    async def go():
+        clips = WakeClips(WakeClipStore(tmp_path / "wakes"), fetch=None)
+        clips._spawn(done_at_once(), None)
+        [task] = clips._tasks
+        await asyncio.sleep(0)  # the task runs to its end; its done-callback is queued behind this
+        assert task.done() and task in clips._tasks
+        await clips.settle()
+
+    asyncio.run(go())
+    assert gathers <= 2

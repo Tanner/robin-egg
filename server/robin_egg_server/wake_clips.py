@@ -422,8 +422,10 @@ class WakeClips:
 
     async def settle(self) -> None:
         """Waits for every fetch and save in flight, including any they start."""
-        while self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+        # A finished task stays in _tasks until its done-callback runs, a loop pass later. Waiting
+        # only on unfinished tasks means every pass yields to the loop, and none waits on nothing.
+        while pending := [t for t in self._tasks if not t.done()]:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     # ---- pairing ----
 
