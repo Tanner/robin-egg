@@ -16,14 +16,15 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from aioesphomeapi import APIClient
+from aioesphomeapi import APIClient, VoiceAssistantEventType
 from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server import wake_clips
 from robin_egg_server.audio import MIC_RATE
-from robin_egg_server.egg import Options
+from robin_egg_server.egg import Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.logs import TagFilter
+from robin_egg_server.web import AudioServer
 from robin_egg_server.wake_clip_switch import NO_SWITCH, set_wake_clips, wake_clips_off
 from robin_egg_server.wake_clips import (
     FROZEN_EVENT,
@@ -898,3 +899,48 @@ def test_a_failure_to_turn_capture_off_at_stop_is_one_warning_and_never_raises(c
         wake_clips_off(RefusingClient(), 7)
     [warning] = [r.getMessage() for r in caplog.records if r.name == "robin.wake_clips"]
     assert "the egg went away" in warning
+
+
+def test_cancelling_the_server_as_ctrl_c_does_turns_the_egg_capture_off(tmp_path, caplog):
+    """The real entry point passes no stop event: Ctrl-C reaches run_forever as a cancellation."""
+
+    async def go():
+        egg = FakeEgg([speech()], wake_word="Hey Robin", clips=True)
+        clips = collector(WakeClipStore(tmp_path / "wakes"), egg)
+        port = await egg.start()
+        web = AudioServer()
+        await web.start("127.0.0.1", 0, "127.0.0.1")
+        robin = Robin(FakeSTT(["hi"]), SlowBrain([["Hello. "]], pause=0), ToneTTS(), web, VoiceAssistantEventType, Options(follow_up="off"), wake_clips=clips)
+        task = asyncio.create_task(robin.run_forever("127.0.0.1", port))
+        try:
+            await asyncio.wait_for(egg.done.wait(), 20)
+            await eventually(lambda: len(clips.store.entries()) == 1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            cancelled = task.cancelled()
+            await eventually(lambda: not egg.clips_enabled)
+        finally:
+            await web.stop()
+            await egg.stop()
+        return egg, cancelled
+
+    with caplog.at_level(logging.INFO, logger="robin.wake_clips"):
+        egg, cancelled = asyncio.run(go())
+    assert cancelled
+    assert egg.clip_switch_commands == [True, False]
+    assert "Told the egg to stop keeping the audio before each wake, because the server is stopping" in caplog.text
+
+
+def test_a_lost_connection_sends_no_switch_off(tmp_path, caplog):
+    async def scenario(egg, store):
+        await eventually(lambda: len(store.entries()) == 1)
+        egg.drop()
+        await eventually(lambda: len(egg.clip_switch_commands) == 2)  # the server is back
+        await eventually(lambda: len(store.entries()) == 2)
+
+    with caplog.at_level(logging.INFO, logger="robin.wake_clips"):
+        egg, _, _ = run_with_clips([speech(), speech()], ["hi", "hi again"], [["Hello. "], ["Hello again. "]], tmp_path, scenario=scenario)
+    assert egg.clip_switch_commands == [True, True, False]  # the only off is the one at the final stop
+    assert caplog.text.count("because the server is stopping") == 1
+    assert "Could not turn off" not in caplog.text

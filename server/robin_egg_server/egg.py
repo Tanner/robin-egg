@@ -1581,6 +1581,7 @@ class Robin:
                 continue
             set_up = False
             clips_key: int | None = None  # the egg's Wake clips switch, when this connection turned it on
+            lost = False  # the connection failed, as opposed to the server leaving by its own choice
             try:
                 info = await client.device_info()
                 LOG.info("Egg: %s, ESPHome %s, %s %s", info.name, info.esphome_version, info.project_name, info.project_version)
@@ -1628,6 +1629,7 @@ class Robin:
                 if disconnected.is_set():
                     LOG.warning("Lost the egg; reconnecting")
             except Exception as err:  # noqa: BLE001 - an egg that drops just after connecting is tried again, like any other drop
+                lost = True
                 LOG.warning("Lost the egg (%s); reconnecting", str(err) or type(err).__name__)
             finally:
                 if self.client is not None:
@@ -1664,7 +1666,8 @@ class Robin:
                 self._ready_task = None
                 if self.ring is not None:
                     self.ring.detach()
-                if clips_key is not None and stop.is_set() and not disconnected.is_set():
+                # Leaving by choice: stopped, or cancelled as Ctrl-C does. A lost connection has nobody to tell.
+                if clips_key is not None and not lost and not disconnected.is_set():
                     wake_clips_off(client, clips_key)
                 with contextlib.suppress(Exception):
                     await client.disconnect()

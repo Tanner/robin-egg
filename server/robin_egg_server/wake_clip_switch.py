@@ -3,7 +3,10 @@
 The firmware in firmware/ keeps the audio before each wake only while this switch is on. The
 switch is off at boot and turns off when the server's connection closes, so the server sets it
 on every connection: on when it was started with --wake-clips, off otherwise. A server that
-turned it on also turns it off when it stops cleanly.
+turned it on also turns it off when it stops or is interrupted with Ctrl-C. A server killed
+without running its cleanup (SIGTERM, SIGKILL, a crash, the Mac sleeping) leaves it to the egg,
+which turns capture off as soon as it sees the connection close, and after about 150 seconds
+when the connection dies silently.
 """
 
 from __future__ import annotations
@@ -47,7 +50,7 @@ async def set_wake_clips(client: Any, keep: bool) -> int | None:
 
 
 def wake_clips_off(client: Any, key: int) -> None:
-    """Turns the switch off as the server stops, before it disconnects. Only queues the command, so it never holds up the stop, and never raises.
+    """Turns the switch off as the server stops or is interrupted, before it disconnects. Only queues the command, so it never holds up the stop, and never raises.
 
     The egg also turns it off when the server's connection closes; this makes a clean stop certain.
     """
