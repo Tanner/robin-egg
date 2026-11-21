@@ -160,3 +160,56 @@ def test_no_wake_clip_folder_and_clips_off_means_no_trimming(tmp_path):
 
     assert asyncio.run(go()) is None
     assert not (tmp_path / "wakes").exists()
+
+
+def test_save_audio_keeps_captures_in_the_default_folder_or_the_one_named(tmp_path, monkeypatch):
+    from robin_egg_server import voices
+    from robin_egg_server.__main__ import DEFAULT_CAPTURES, build
+
+    assert DEFAULT_CAPTURES == Path("~/.robin-egg/captures").expanduser()
+    monkeypatch.setattr(voices.WhisperSTT, "load", lambda self: None)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    common = ["egg.local", "--echo", "--tts", "say", "--no-speaker-recognition"]
+
+    def kept(*extra: str) -> Path | None:
+        robin, _ = build(parse_args([*common, *extra]))
+        return robin.opts.save_audio
+
+    assert kept() is None
+    assert kept("--save-audio") == DEFAULT_CAPTURES
+    assert kept("--save-audio", "~/clips") == tmp_path / "clips"
+    assert kept("--save-audio=~/clips") == tmp_path / "clips"
+    args = parse_args([*common, "--save-audio", "--save-audio-hours", "2"])
+    assert args.save_audio_hours == 2
+    robin, _ = build(args)
+    assert robin.opts.save_audio == DEFAULT_CAPTURES
+
+
+def test_save_audio_before_the_address_says_how_to_write_it(capsys):
+    with pytest.raises(SystemExit):
+        parse_args(["--save-audio", "egg.local", "--echo"])
+    err = capsys.readouterr().err
+    assert "--save-audio" in err and "egg.local" in err and "--save-audio=DIR" in err
+
+
+@pytest.mark.parametrize("hours, expected", [(24.0, "are kept for 24 hours"), (0.0, "are kept until you delete them")])
+def test_the_folder_and_how_long_captures_are_kept_are_logged_once(tmp_path, caplog, hours, expected):
+    from robin_egg_server.__main__ import capture_trimmer
+    from test_speaker_stream import eventually
+
+    async def go(folder):
+        stop = asyncio.Event()
+        task = capture_trimmer(folder, hours, stop)
+        if task is not None:
+            await eventually(lambda: any(expected in r.getMessage() for r in caplog.records))
+            stop.set()
+            await task
+
+    with caplog.at_level("INFO"):
+        asyncio.run(go(tmp_path))
+    lines = [r.getMessage() for r in caplog.records if "Mic captures" in r.getMessage()]
+    assert len(lines) == 1 and str(tmp_path) in lines[0] and expected in lines[0]
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        asyncio.run(go(None))
+    assert not [r for r in caplog.records if "Mic captures" in r.getMessage()]

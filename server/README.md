@@ -459,6 +459,8 @@ Then run, from `server/`:
 
 It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json` (`--voiceprints` and `--speaker-model` change that). For each threshold from 0.30 to 0.70 it counts clips judged right, given to the wrong person, and sent as Unknown Speaker, with clips under 2 s apart from longer ones. The last line suggests the lowest threshold that gave no clip to the wrong person. With no clips there is no suggestion, and if the clips lack an `unknown/` folder or cover only one person, the report says what the suggestion does not show. Only 16 kHz mono 16-bit WAV files are read; others are skipped with a warning. These clips are audio the server otherwise never keeps, so delete the folder when you are done.
 
+`--save-audio` on its own keeps captures in `~/.robin-egg/captures`; `--save-audio DIR` keeps them in DIR instead. Put the option after the egg's address, or write `--save-audio=DIR`: written just before the address, `--save-audio egg.local` would take the address as its folder, and the server stops with an error saying so. At startup the server logs the folder and how long captures are kept.
+
 The server deletes its own captures after 24 hours: files named `capture-*.wav` directly in the `--save-audio` folder, checked at startup and every hour, with a log line saying how many went. Clips moved into the per-person folders, or anywhere else, are left alone, so sort them within a day. To collect clips over a longer stretch, start with `--save-audio-hours 0`, which keeps every capture until you delete it, or give it a longer limit in hours.
 
 ### Testing enrolled voices against each other
@@ -621,7 +623,7 @@ Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin
 | `--openai-voice` | `ash` | The OpenAI voice name, with `--tts openai`. |
 | `--tts-time-limit` | 4 s | How long the hosted voice gets for one sentence before Piper speaks the rest of the reply. |
 | `--offline-alert MINUTES` | 10 | Have Robin text the household once the egg has been unreachable this long, and again when it is back. `0` turns it off. Not used with `--echo`. |
-| `--save-audio DIR` | off | Keep each mic capture as a WAV, for 24 hours. |
+| `--save-audio [DIR]` | off | Keep each mic capture, the request after the wake word, as a WAV for 24 hours, in DIR or in `~/.robin-egg/captures` when no folder is given. Put it after the egg's address, or write `--save-audio=DIR`. |
 | `--save-audio-hours HOURS` | 24 | How long `--save-audio` keeps a capture before the server deletes it. `0` keeps captures until you delete them. |
 | `--min-volume` | 0.3 | The quietest the egg can be set by voice, from 0 to 1. "Set the volume to one" sets this. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. Without it, the server waits at startup until the egg's name resolves. |

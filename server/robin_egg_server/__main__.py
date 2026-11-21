@@ -34,6 +34,7 @@ LOG = logging.getLogger("robin")
 DEFAULT_PIPER_VOICE = Path(__file__).resolve().parent.parent / "voices" / "en_US-ryan-medium.onnx"
 DEFAULT_VOICEPRINTS = Path("~/.robin-egg/voiceprints.json").expanduser()
 DEFAULT_QUIET_STATE = Path("~/.robin-egg/quiet.json").expanduser()
+DEFAULT_CAPTURES = Path("~/.robin-egg/captures").expanduser()
 RING_FILE = Path("~/.robin-egg/ring-before-waiting.json").expanduser()
 # The same line as in server/README.md, run from server/.
 SPEAKER_MODEL_DOWNLOAD = (
@@ -111,7 +112,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--quiet-volume", type=int, default=60, metavar="PERCENT", help="How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100 (default 60)")
     p.add_argument("--match-voice", action=argparse.BooleanOptionalAction, default=False, help="Also speak more quietly to someone who spoke quietly (default off until it is tried on the real egg)")
     p.add_argument("--offline-alert", type=float, default=10.0, metavar="MINUTES", help="Have Robin text the household once the egg has been unreachable this long, and again when it is back (default 10; 0 turns it off; not used with --echo)")
-    p.add_argument("--save-audio", metavar="DIR", help="Save each mic capture as a WAV here, for --save-audio-hours")
+    p.add_argument("--save-audio", nargs="?", const=str(DEFAULT_CAPTURES), metavar="DIR", help="Keep each mic capture, the request after the wake word, as a WAV in DIR, or in ~/.robin-egg/captures when no folder is given, for --save-audio-hours. Put it after the egg's address, or write --save-audio=DIR")
     p.add_argument("--save-audio-hours", type=float, default=24.0, metavar="HOURS", help="How long --save-audio keeps a capture before deleting it (default 24; 0 keeps them until you delete them)")
     p.add_argument("--turn-log", metavar="FILE", default=str(DEFAULT_TURN_LOG), help="Where to record each turn's outcome and timings, for `python -m robin_egg_server.stats` (default ~/.robin-egg/turns.jsonl). No audio or words are recorded. Not used with --demo or --echo")
     p.add_argument("--no-turn-log", action="store_true", help="Do not record turns")
@@ -149,6 +150,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error(f"--quiet-volume {args.quiet_volume} is outside {FLOOR_GAIN * 100:.0f} to 100; lower than that and speech is hard to follow")
     if not 0.0 <= args.min_volume < 1.0:
         p.error("--min-volume must be at least 0 and below 1")
+    if not args.host and not args.demo and args.save_audio not in (None, str(DEFAULT_CAPTURES)):
+        p.error(f"--save-audio took {args.save_audio} as its folder, so no egg address was given. Put --save-audio after the address, or write --save-audio=DIR")
     if not args.host and not args.demo:
         p.error("give the egg's address, or --demo AUDIO to test without hardware")
     if not args.echo:
@@ -334,14 +337,20 @@ def wake_clip_trimmer(folder: Path, keeping: bool, stop: asyncio.Event) -> async
     return asyncio.create_task(keep_trimmed(WakeClipStore(folder), stop))
 
 
+def capture_trimmer(folder: Path | None, hours: float, stop: asyncio.Event) -> asyncio.Task | None:
+    """Deletes mic captures older than the limit every hour while captures are kept; the first pass logs the folder and the limit."""
+    if folder is None:
+        return None
+    if hours <= 0:
+        LOG.warning("Mic captures in %s are kept until you delete them (--save-audio-hours 0)", folder)
+        return None
+    return asyncio.create_task(keep_captures_trimmed(folder, hours * 3600, stop))
+
+
 async def run(args: argparse.Namespace) -> None:
     robin, web = build(args)
-    trimmer = None
     trimming = asyncio.Event()
-    if robin.opts.save_audio is not None and args.save_audio_hours > 0:
-        trimmer = asyncio.create_task(keep_captures_trimmed(robin.opts.save_audio, args.save_audio_hours * 3600, trimming))
-    elif robin.opts.save_audio is not None:
-        LOG.warning("Mic captures in %s are kept until you delete them (--save-audio-hours 0)", robin.opts.save_audio)
+    trimmer = capture_trimmer(robin.opts.save_audio, args.save_audio_hours, trimming)
     clip_trimmer = wake_clip_trimmer(args.wake_clips_dir, keeping=robin.wake_clips is not None, stop=trimming)
     try:
         if hasattr(robin.brain, "check"):
