@@ -86,18 +86,23 @@ def test_wake_clips_are_off_unless_asked_for(tmp_path, monkeypatch):
 
     monkeypatch.setattr(voices.WhisperSTT, "load", lambda self: None)
     args = parse_args(["egg.local", "--echo"])
-    assert args.wake_clips is False
-    assert args.wake_clips_dir == DEFAULT_WAKES
+    assert args.wake_clips is None
     assert args.wake_clip_port == DEFAULT_CLIP_PORT
     common = ["egg.local", "--echo", "--tts", "say", "--no-speaker-recognition"]
     robin, _ = build(parse_args(common))
     assert robin.wake_clips is None and robin.opts.wake_clips is None
-    robin, _ = build(parse_args([*common, "--wake-clips"]))
+    robin, _ = build(parse_args([*common, "--save-wake-clips"]))
     assert isinstance(robin.wake_clips, WakeClips)
     assert robin.wake_clips.store.root == DEFAULT_WAKES and robin.opts.wake_clips == DEFAULT_WAKES
-    robin, _ = build(parse_args([*common, "--wake-clips", "--wake-clips-dir", str(tmp_path / "wakes"), "--wake-clip-port", "8081"]))
+    robin, _ = build(parse_args([*common, "--save-wake-clips", str(tmp_path / "wakes"), "--wake-clip-port", "8081"]))
     assert robin.wake_clips.store.root == tmp_path / "wakes" and robin.wake_clips.port == 8081
     assert robin.opts.wake_clips == tmp_path / "wakes"
+    robin, _ = build(parse_args([*common, f"--save-wake-clips={tmp_path / 'other'}"]))
+    assert robin.opts.wake_clips == tmp_path / "other"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert parse_args([*common, "--save-wake-clips", "~/w"]).wake_clips == tmp_path / "w"
+    args = parse_args([*common, "--save-wake-clips", "--wake-clip-port", "8082"])
+    assert args.wake_clips == DEFAULT_WAKES and args.wake_clip_port == 8082
 
 
 def test_no_wake_clips_is_no_longer_an_option(capsys):
@@ -106,8 +111,16 @@ def test_no_wake_clips_is_no_longer_an_option(capsys):
     assert "--no-wake-clips" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("gone", [["--wake-clips"], ["--wake-clips-dir", "wakes"]])
+def test_the_old_wake_clip_options_are_refused(gone, capsys):
+    with pytest.raises(SystemExit):
+        parse_args(["egg.local", "--echo", *gone])
+    assert gone[0] in capsys.readouterr().err
+
+
 def test_the_trim_is_started_without_wake_clips(tmp_path, monkeypatch):
     from robin_egg_server import voices
+    from robin_egg_server.wake_clips import DEFAULT_WAKES
 
     class Stop(Exception):
         pass
@@ -120,10 +133,15 @@ def test_the_trim_is_started_without_wake_clips(tmp_path, monkeypatch):
 
     monkeypatch.setattr(voices.WhisperSTT, "load", lambda self: None)
     monkeypatch.setattr(main_module, "wake_clip_trimmer", trimmer)
-    args = parse_args(["egg.local", "--echo", "--tts", "say", "--no-speaker-recognition", "--wake-clips-dir", str(tmp_path)])
+    args = parse_args(["egg.local", "--echo", "--tts", "say", "--no-speaker-recognition"])
     with pytest.raises(Stop):
         asyncio.run(main_module.run(args))
-    assert started == [(tmp_path, False)]
+    assert started == [(DEFAULT_WAKES, False)]
+    started.clear()
+    args = parse_args(["egg.local", "--echo", "--tts", "say", "--no-speaker-recognition", "--save-wake-clips", str(tmp_path)])
+    with pytest.raises(Stop):
+        asyncio.run(main_module.run(args))
+    assert started == [(tmp_path, True)]
 
 
 def test_old_wake_clips_are_still_trimmed_when_clips_are_off(tmp_path, caplog):
@@ -149,7 +167,7 @@ def test_old_wake_clips_are_still_trimmed_when_clips_are_off(tmp_path, caplog):
     with caplog.at_level("INFO"):
         asyncio.run(go())
     assert store.entries() == []
-    assert "--wake-clips" in caplog.text and "--no-wake-clips" not in caplog.text and str(folder) in caplog.text
+    assert "--save-wake-clips" in caplog.text and str(folder) in caplog.text
 
 
 def test_no_wake_clip_folder_and_clips_off_means_no_trimming(tmp_path):
@@ -185,11 +203,26 @@ def test_save_audio_keeps_captures_in_the_default_folder_or_the_one_named(tmp_pa
     assert robin.opts.save_audio == DEFAULT_CAPTURES
 
 
-def test_save_audio_before_the_address_says_how_to_write_it(capsys):
+@pytest.mark.parametrize("option", ["--save-audio-requests", "--save-audio", "--save-wake-clips"])
+def test_an_option_written_before_the_address_says_how_to_write_it(option, capsys):
     with pytest.raises(SystemExit):
-        parse_args(["--save-audio", "egg.local", "--echo"])
+        parse_args([option, "egg.local", "--echo"])
     err = capsys.readouterr().err
-    assert "--save-audio" in err and "egg.local" in err and "--save-audio=DIR" in err
+    name = "--save-wake-clips" if option == "--save-wake-clips" else "--save-audio-requests"
+    assert "egg.local" in err and f"{name}=DIR" in err and "after the address" in err
+
+
+def test_save_audio_requests_and_its_old_names_set_the_same_things(tmp_path):
+    from robin_egg_server.__main__ import DEFAULT_CAPTURES
+
+    common = ["egg.local", "--echo"]
+    assert parse_args([*common, "--save-audio-requests"]).save_audio == str(DEFAULT_CAPTURES)
+    assert parse_args([*common, "--save-audio-requests", str(tmp_path)]).save_audio == str(tmp_path)
+    assert parse_args([*common, f"--save-audio-requests={tmp_path}"]).save_audio == str(tmp_path)
+    assert parse_args([*common, "--save-audio-requests", "--save-audio-requests-hours", "3"]).save_audio_hours == 3
+    old = parse_args([*common, "--save-audio", "--save-audio-hours", "5"])
+    assert old.save_audio == str(DEFAULT_CAPTURES) and old.save_audio_hours == 5
+    assert parse_args([*common, "--save-audio=x", "--save-audio-hours=0"]).save_audio_hours == 0
 
 
 @pytest.mark.parametrize("hours, expected", [(24.0, "are kept for 24 hours"), (0.0, "are kept until you delete them")])

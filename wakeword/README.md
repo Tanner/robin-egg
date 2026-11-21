@@ -44,7 +44,7 @@ The cut clips are written back to `MyDrive/robin_wakeword/recordings_cut/` so yo
 
 ### From everyday use
 
-The egg freezes the 5 seconds of audio before each "Hey Robin" wake, and the server keeps them only when it is started with `--wake-clips`. Start the server that way first. After a round has been in use for a while, turn those clips into takes for the next round. Run the commands from `server/`; [server/README.md](../server/README.md#reviewing-wake-clips) has the details.
+The egg freezes the 5 seconds of audio before each "Hey Robin" wake, and the server keeps them only when it is started with `--save-wake-clips`. Start the server that way first. After a round has been in use for a while, turn those clips into takes for the next round. Run the commands from `server/`; [server/README.md](../server/README.md#reviewing-wake-clips) has the details.
 
 1. Review the clips. Label each one real or false, and say whether the cut it plays is a clean "Hey Robin".
 

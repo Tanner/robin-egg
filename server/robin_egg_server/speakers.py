@@ -408,11 +408,11 @@ SHORT_CLIP_S = 2.0
 
 
 def read_clip(path: Path) -> bytes | None:
-    """The clip's samples, or None with a warning when it is not 16 kHz mono 16-bit, the format --save-audio writes."""
+    """The clip's samples, or None with a warning when it is not 16 kHz mono 16-bit, the format --save-audio-requests writes."""
     try:
         with wave.open(str(path), "rb") as w:
             if (w.getnchannels(), w.getsampwidth(), w.getframerate()) != (1, 2, MIC_RATE):
-                LOG.warning("Skipping %s: it is not 16 kHz mono 16-bit audio, the format --save-audio writes", path)
+                LOG.warning("Skipping %s: it is not 16 kHz mono 16-bit audio, the format --save-audio-requests writes", path)
                 return None
             return w.readframes(w.getnframes())
     except (wave.Error, EOFError, OSError) as err:
@@ -486,7 +486,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m robin_egg_server.speakers", description="Measure how well enrolled voices are recognised, and rebuild their voiceprints")
     sub = p.add_subparsers(dest="command", required=True)
     ev = sub.add_parser("evaluate", help="Score WAV clips from the egg against the enrolled voiceprints")
-    ev.add_argument("dir", type=Path, nargs="?", help="A folder holding <person>/*.wav and unknown/*.wav, saved with --save-audio")
+    ev.add_argument("dir", type=Path, nargs="?", help="A folder holding <person>/*.wav and unknown/*.wav, saved with --save-audio-requests")
     ev.add_argument("--enrolment", action="store_true", help="Test the saved enrolment sentences against each other instead of a folder of clips")
     ev.add_argument("--enrolment-audio", type=Path, default=Path("~/.robin-egg/enrolment").expanduser(), help="Where the sentences from each enrolment are kept as audio, for --enrolment")
     ev.add_argument("--voiceprints", type=Path, default=Path("~/.robin-egg/voiceprints.json").expanduser(), help="Where the enrolled voiceprints are kept")

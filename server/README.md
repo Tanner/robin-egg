@@ -355,7 +355,7 @@ The sentences of each enrolment are kept as audio beside them, in `~/.robin-egg/
 - Only a finished enrolment is kept. One that is stopped, runs out of good sentences or sounds like someone else writes nothing.
 - Enrolling again replaces the person's audio. "Forget my voice" deletes it along with the voiceprint.
 - The folders and files are readable only by the account that runs the server.
-- The only other audio kept, and only when the server is started with `--wake-clips`, is the 5 seconds before each "Hey Robin" wake, saved in `~/.robin-egg/wakes/` for review and training; unlabelled clips are deleted after 14 days and labelled ones stay until you delete them (see [Reviewing wake clips](#reviewing-wake-clips)). The rest of everyday turns is not saved, and what a voiceprint learns from them is numbers only.
+- The only other audio kept, and only when the server is started with `--save-wake-clips`, is the 5 seconds before each "Hey Robin" wake, saved in `~/.robin-egg/wakes/` for review and training; unlabelled clips are deleted after 14 days and labelled ones stay until you delete them (see [Reviewing wake clips](#reviewing-wake-clips)). The rest of everyday turns is not saved, and what a voiceprint learns from them is numbers only.
 - At startup the server finishes a save that was cut off partway, for example by a crash, and removes what it left behind. The log says so.
 - `--enrolment-audio DIR` changes where they are kept.
 
@@ -442,7 +442,7 @@ The server finds the speaker by the firmware's entity name, "Media Player" (obje
 
 ## Measuring accuracy
 
-To pick the accept threshold from real numbers, record clips with `--save-audio` and move them into folders, one per person, plus `unknown` for guests, the TV and anyone not enrolled:
+To pick the accept threshold from real numbers, record clips with `--save-audio-requests` and move them into folders, one per person, plus `unknown` for guests, the TV and anyone not enrolled:
 
 ```
 clips/
@@ -459,9 +459,9 @@ Then run, from `server/`:
 
 It scores every clip against everyone enrolled in `~/.robin-egg/voiceprints.json` (`--voiceprints` and `--speaker-model` change that). For each threshold from 0.30 to 0.70 it counts clips judged right, given to the wrong person, and sent as Unknown Speaker, with clips under 2 s apart from longer ones. The last line suggests the lowest threshold that gave no clip to the wrong person. With no clips there is no suggestion, and if the clips lack an `unknown/` folder or cover only one person, the report says what the suggestion does not show. Only 16 kHz mono 16-bit WAV files are read; others are skipped with a warning. These clips are audio the server otherwise never keeps, so delete the folder when you are done.
 
-`--save-audio` on its own keeps captures in `~/.robin-egg/captures`; `--save-audio DIR` keeps them in DIR instead. Put the option after the egg's address, or write `--save-audio=DIR`: written just before the address, `--save-audio egg.local` would take the address as its folder, and the server stops with an error saying so. At startup the server logs the folder and how long captures are kept.
+`--save-audio-requests` on its own keeps captures in `~/.robin-egg/captures`; `--save-audio-requests DIR` keeps them in DIR instead. The older name, `--save-audio`, still works, as does `--save-audio-hours` for `--save-audio-requests-hours`. Put the option after the egg's address, or write `--save-audio-requests=DIR`: written just before the address, `--save-audio-requests egg.local` would take the address as its folder, and the server stops with an error saying so. At startup the server logs the folder and how long captures are kept.
 
-The server deletes its own captures after 24 hours: files named `capture-*.wav` directly in the `--save-audio` folder, checked at startup and every hour, with a log line saying how many went. Clips moved into the per-person folders, or anywhere else, are left alone, so sort them within a day. To collect clips over a longer stretch, start with `--save-audio-hours 0`, which keeps every capture until you delete it, or give it a longer limit in hours.
+The server deletes its own captures after 24 hours: files named `capture-*.wav` directly in the `--save-audio-requests` folder, checked at startup and every hour, with a log line saying how many went. Clips moved into the per-person folders, or anywhere else, are left alone, so sort them within a day. To collect clips over a longer stretch, start with `--save-audio-requests-hours 0`, which keeps every capture until you delete it, or give it a longer limit in hours.
 
 ### Testing enrolled voices against each other
 
@@ -500,7 +500,7 @@ Two detectors can decide when someone has started and stopped talking. `--vad mo
 
 Both end the turn the same three ways: a 0.8 s pause after speech, nobody speaking within the window (6 s after the wake word, `--follow-up-window` on a follow-up, 10 s while enrolling), or `--max-utterance`.
 
-To choose between them from real clips, record captures with `--save-audio`, then run, from `server/`:
+To choose between them from real clips, record captures with `--save-audio-requests`, then run, from `server/`:
 
 ```sh
 .venv/bin/python -m robin_egg_server.vad compare captures
@@ -562,7 +562,7 @@ Nothing is recorded with `--demo` or `--echo`, so test runs do not skew the numb
 
 ## Reviewing wake clips
 
-Nothing is kept unless the server is started with `--wake-clips`. The flag governs the egg too: the egg keeps the audio before a wake only while a server started with `--wake-clips` is connected, and holds and serves nothing otherwise. Its "Wake clips" switch is off at boot, and the server sets it on every connection. It turns off when that server stops or its connection closes, whatever other clients are connected. If the server dies without closing its connection, for example when its computer sleeps or drops off the network, the egg notices and turns capture off after about 150 seconds. Firmware without the switch keeps no clips, and the server warns once per connection. With the flag, the server fetches the 5 seconds of audio the egg froze before each "Hey Robin" wake and saves it to `~/.robin-egg/wakes/` as a WAV with a JSON file beside it: when it woke, which model round and cutoff were loaded, how the turn ended and who was recognised. No audio goes into the turn log. Three commands, run from `server/`, turn these clips into numbers and training takes:
+Nothing is kept unless the server is started with `--save-wake-clips`, which keeps clips in `~/.robin-egg/wakes/`, or `--save-wake-clips DIR` to keep them in DIR. As with `--save-audio-requests`, put it after the egg's address or write `--save-wake-clips=DIR`, or it takes the address as its folder. The option governs the egg too: the egg keeps the audio before a wake only while a server started with `--save-wake-clips` is connected, and holds and serves nothing otherwise. Its "Wake clips" switch is off at boot, and the server sets it on every connection. It turns off when that server stops or its connection closes, whatever other clients are connected. If the server dies without closing its connection, for example when its computer sleeps or drops off the network, the egg notices and turns capture off after about 150 seconds. Firmware without the switch keeps no clips, and the server warns once per connection. With the option, the server fetches the 5 seconds of audio the egg froze before each "Hey Robin" wake and saves it to that folder as a WAV with a JSON file beside it: when it woke, which model round and cutoff were loaded, how the turn ended and who was recognised. No audio goes into the turn log. Three commands, run from `server/`, turn these clips into numbers and training takes:
 
 ```sh
 .venv/bin/python -m robin_egg_server.wakes review
@@ -574,7 +574,7 @@ Nothing is kept unless the server is started with `--wake-clips`. The flag gover
 - `report` prints, for each model round and cutoff and then for each recognised speaker, the clips reviewed, real and false wakes, how many of each stopped a reply, the false share, false wakes per day, the misses found, the clips still unreviewed and the days. The days are the calendar days from the first to the last reviewed clip of that row, counting both, and false wakes per day are spread over those, so clips waiting for review do not make the rate read low; with nothing reviewed the days are 0 and there are no rates. Misses are a lower bound, since a missed "Hey Robin" leaves a clip only when a second try woke the egg within 5 seconds, the rates cover reviewed clips only, and a wake whose clip could not be fetched is not counted at all (the server log names each one).
 - `export` writes each confirmed real cut and each confirmed miss to `wakeword/recordings/egg_takes/positive/`, and each false-wake cut to `egg_takes/negative/`, as 16 kHz mono 16-bit WAVs holding exactly the samples you heard. A clip's JSON lists the files written from it, and running export again writes only what is new. `--to DIR` writes somewhere else.
 
-Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin-egg/wakes`. Unlabelled clips are deleted after 14 days, also when the server later runs without `--wake-clips`; labelled ones stay until you delete them, and deleting one in `review` also deletes its exported takes. Copies already uploaded to Google Drive are not touched: delete those in Drive by hand.
+Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin-egg/wakes`. Unlabelled clips are deleted after 14 days. When the server runs without `--save-wake-clips`, it still deletes old unlabelled clips in `~/.robin-egg/wakes` if that folder exists, but not in a folder named earlier with `--save-wake-clips DIR`; labelled ones stay until you delete them, and deleting one in `review` also deletes its exported takes. Copies already uploaded to Google Drive are not touched: delete those in Drive by hand.
 
 ## Useful options
 
@@ -623,8 +623,8 @@ Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin
 | `--openai-voice` | `ash` | The OpenAI voice name, with `--tts openai`. |
 | `--tts-time-limit` | 4 s | How long the hosted voice gets for one sentence before Piper speaks the rest of the reply. |
 | `--offline-alert MINUTES` | 10 | Have Robin text the household once the egg has been unreachable this long, and again when it is back. `0` turns it off. Not used with `--echo`. |
-| `--save-audio [DIR]` | off | Keep each mic capture, the request after the wake word, as a WAV for 24 hours, in DIR or in `~/.robin-egg/captures` when no folder is given. Put it after the egg's address, or write `--save-audio=DIR`. |
-| `--save-audio-hours HOURS` | 24 | How long `--save-audio` keeps a capture before the server deletes it. `0` keeps captures until you delete them. |
+| `--save-audio-requests [DIR]` | off | Keep each mic capture, the request after the wake word, as a WAV for 24 hours, in DIR or in `~/.robin-egg/captures` when no folder is given. Put it after the egg's address, or write `--save-audio-requests=DIR`. `--save-audio` still works. |
+| `--save-audio-requests-hours HOURS` | 24 | How long `--save-audio-requests` keeps a capture before the server deletes it. `0` keeps captures until you delete them. `--save-audio-hours` still works. |
 | `--min-volume` | 0.3 | The quietest the egg can be set by voice, from 0 to 1. "Set the volume to one" sets this. |
 | `--advertise-ip` | auto | The Mac's LAN IP, if the egg cannot reach the reply URL. Without it, the server waits at startup until the egg's name resolves. |
 | `--speaker-recognition`, `--no-speaker-recognition` | on | Tell household members apart by voice, and allow enrolling with "learn my voice" and checking with "who am I?". Not used with `--echo`. |
@@ -637,8 +637,7 @@ Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin
 | `--turn-log FILE` | `~/.robin-egg/turns.jsonl` | Where each turn's outcome and timings are recorded for `stats`. Not used with `--demo` or `--echo`. |
 | `--no-turn-log` | off | Record nothing about turns. |
 | `--turn-log-names` | off | Also record who spoke each turn, not only whether they were recognised. |
-| `--wake-clips` | off | Keep the 5-second clip of each "Hey Robin" wake for review and training. The flag governs the egg too: the egg keeps the audio before a wake only while a server started with `--wake-clips` is connected. Without it nothing is held on the egg, fetched or kept. |
-| `--wake-clips-dir DIR` | `~/.robin-egg/wakes` | Where the 5-second clip of each "Hey Robin" wake is kept with `--wake-clips`. Unlabelled clips are deleted after 14 days, and the folder is still trimmed when the server runs without `--wake-clips`. |
+| `--save-wake-clips [DIR]` | off | Keep the 5-second clip of each "Hey Robin" wake for review and training, in DIR or in `~/.robin-egg/wakes` when no folder is given. Put it after the egg's address, or write `--save-wake-clips=DIR`. The option governs the egg too: the egg keeps the audio before a wake only while a server started with `--save-wake-clips` is connected. Without it nothing is held on the egg, fetched or kept. Unlabelled clips are deleted after 14 days; without the option, `~/.robin-egg/wakes` is still trimmed if it exists. |
 | `--wake-clip-port PORT` | 8080 | The egg's HTTP port for its frozen wake clip. |
 
 ## Talking in the speaker chat

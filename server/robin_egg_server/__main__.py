@@ -112,13 +112,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--quiet-volume", type=int, default=60, metavar="PERCENT", help="How loud Robin is in quiet hours and to a quiet voice, as a percentage of normal, 40 to 100 (default 60)")
     p.add_argument("--match-voice", action=argparse.BooleanOptionalAction, default=False, help="Also speak more quietly to someone who spoke quietly (default off until it is tried on the real egg)")
     p.add_argument("--offline-alert", type=float, default=10.0, metavar="MINUTES", help="Have Robin text the household once the egg has been unreachable this long, and again when it is back (default 10; 0 turns it off; not used with --echo)")
-    p.add_argument("--save-audio", nargs="?", const=str(DEFAULT_CAPTURES), metavar="DIR", help="Keep each mic capture, the request after the wake word, as a WAV in DIR, or in ~/.robin-egg/captures when no folder is given, for --save-audio-hours. Put it after the egg's address, or write --save-audio=DIR")
-    p.add_argument("--save-audio-hours", type=float, default=24.0, metavar="HOURS", help="How long --save-audio keeps a capture before deleting it (default 24; 0 keeps them until you delete them)")
+    p.add_argument("--save-audio-requests", "--save-audio", dest="save_audio", nargs="?", const=str(DEFAULT_CAPTURES), metavar="DIR", help="Keep each mic capture, the request after the wake word, as a WAV in DIR, or in ~/.robin-egg/captures when no folder is given, for --save-audio-requests-hours. Put it after the egg's address, or write --save-audio-requests=DIR. --save-audio still works")
+    p.add_argument("--save-audio-requests-hours", "--save-audio-hours", dest="save_audio_hours", type=float, default=24.0, metavar="HOURS", help="How long --save-audio-requests keeps a capture before deleting it (default 24; 0 keeps them until you delete them). --save-audio-hours still works")
     p.add_argument("--turn-log", metavar="FILE", default=str(DEFAULT_TURN_LOG), help="Where to record each turn's outcome and timings, for `python -m robin_egg_server.stats` (default ~/.robin-egg/turns.jsonl). No audio or words are recorded. Not used with --demo or --echo")
     p.add_argument("--no-turn-log", action="store_true", help="Do not record turns")
     p.add_argument("--turn-log-names", action="store_true", help="Also record who spoke each turn, not only whether they were recognised")
-    p.add_argument("--wake-clips", action="store_true", help="Keep a clip of the 5 seconds before each Hey Robin wake, for review and training. Off unless given, and the egg keeps no audio without it")
-    p.add_argument("--wake-clips-dir", metavar="DIR", type=lambda s: Path(s).expanduser(), default=DEFAULT_WAKES, help="Where the 5-second clip of each Hey Robin wake is kept with --wake-clips (default ~/.robin-egg/wakes). Unlabelled clips are deleted after 14 days")
+    p.add_argument("--save-wake-clips", dest="wake_clips", nargs="?", const=str(DEFAULT_WAKES), type=lambda s: Path(s).expanduser(), metavar="DIR", help="Keep a clip of the 5 seconds before each Hey Robin wake, for review and training, in DIR, or in ~/.robin-egg/wakes when no folder is given. Off unless given, and the egg keeps no audio without it. Unlabelled clips are deleted after 14 days. Put it after the egg's address, or write --save-wake-clips=DIR")
     p.add_argument("--wake-clip-port", type=int, default=DEFAULT_CLIP_PORT, metavar="PORT", help=f"The egg's HTTP port for its frozen wake clip (default {DEFAULT_CLIP_PORT})")
     p.add_argument("--message-waiting", action=argparse.BooleanOptionalAction, default=True, help="Hold the messages Robin sends on its own outside --speaking-hours, breathe the egg's ring while any wait, and read them out to 'what did I miss?' (default on; off drops them)")
     p.add_argument("--morning-mention", action=argparse.BooleanOptionalAction, default=True, help="Once speaking hours have begun, end the first reply from Robin by saying how many held messages are waiting and how to hear them, once per batch (default on; needs --message-waiting)")
@@ -129,7 +128,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.default_speaker_name is not None:
         p.error('--default-speaker-name is gone: a voice the server cannot identify is now sent as "Unknown Speaker". Remove the flag.')
     if args.save_audio_hours < 0:
-        p.error("--save-audio-hours is a number of hours, or 0 to keep captures until you delete them")
+        p.error("--save-audio-requests-hours (or --save-audio-hours) is a number of hours, or 0 to keep captures until you delete them")
     if args.offline_alert < 0:
         p.error("--offline-alert is a number of minutes, or 0 to turn it off")
     try:
@@ -150,9 +149,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error(f"--quiet-volume {args.quiet_volume} is outside {FLOOR_GAIN * 100:.0f} to 100; lower than that and speech is hard to follow")
     if not 0.0 <= args.min_volume < 1.0:
         p.error("--min-volume must be at least 0 and below 1")
-    if not args.host and not args.demo and args.save_audio not in (None, str(DEFAULT_CAPTURES)):
-        p.error(f"--save-audio took {args.save_audio} as its folder, so no egg address was given. Put --save-audio after the address, or write --save-audio=DIR")
     if not args.host and not args.demo:
+        for name, value, default in (("--save-audio-requests", args.save_audio, str(DEFAULT_CAPTURES)), ("--save-wake-clips", args.wake_clips, DEFAULT_WAKES)):
+            if value not in (None, default):
+                p.error(f"{name} took {value} as its folder, so no egg address was given. Put {name} after the address, or write {name}=DIR")
         p.error("give the egg's address, or --demo AUDIO to test without hardware")
     if not args.echo:
         missing = [flag for flag, value in (("--server", args.server), ("--agent-name", args.agent_name)) if not value]
@@ -264,7 +264,7 @@ def build(args: argparse.Namespace):
         min_volume=args.min_volume,
         digest=args.digest,
         digest_max=args.digest_max,
-        wake_clips=args.wake_clips_dir if args.wake_clips else None,
+        wake_clips=args.wake_clips,
         wake_clip_port=args.wake_clip_port,
     )
     if opts.thinking_cue and not opts.stream:
@@ -333,7 +333,7 @@ def wake_clip_trimmer(folder: Path, keeping: bool, stop: asyncio.Event) -> async
     if not keeping:
         if not folder.is_dir():
             return None
-        LOG.info("Wake clips are off (start with --wake-clips to keep them), but the unlabelled clips already in %s are still deleted after %d days", folder, KEEP_UNLABELLED_S // 86400)
+        LOG.info("Wake clips are off (start with --save-wake-clips to keep them), but the unlabelled clips already in %s are still deleted after %d days", folder, KEEP_UNLABELLED_S // 86400)
     return asyncio.create_task(keep_trimmed(WakeClipStore(folder), stop))
 
 
@@ -342,7 +342,7 @@ def capture_trimmer(folder: Path | None, hours: float, stop: asyncio.Event) -> a
     if folder is None:
         return None
     if hours <= 0:
-        LOG.warning("Mic captures in %s are kept until you delete them (--save-audio-hours 0)", folder)
+        LOG.warning("Mic captures in %s are kept until you delete them (--save-audio-requests-hours 0)", folder)
         return None
     return asyncio.create_task(keep_captures_trimmed(folder, hours * 3600, stop))
 
@@ -351,7 +351,7 @@ async def run(args: argparse.Namespace) -> None:
     robin, web = build(args)
     trimming = asyncio.Event()
     trimmer = capture_trimmer(robin.opts.save_audio, args.save_audio_hours, trimming)
-    clip_trimmer = wake_clip_trimmer(args.wake_clips_dir, keeping=robin.wake_clips is not None, stop=trimming)
+    clip_trimmer = wake_clip_trimmer(robin.opts.wake_clips or DEFAULT_WAKES, keeping=robin.wake_clips is not None, stop=trimming)
     try:
         if hasattr(robin.brain, "check"):
             await robin.brain.check()

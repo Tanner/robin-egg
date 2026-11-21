@@ -2,7 +2,7 @@
 
 The firmware in firmware/ keeps the audio before each wake only while this switch is on. The
 switch is off at boot and turns off when the server's connection closes, so the server sets it
-on every connection: on when it was started with --wake-clips, off otherwise. A server that
+on every connection: on when it was started with --save-wake-clips, off otherwise. A server that
 turned it on also turns it off when it stops or is interrupted with Ctrl-C. A server killed
 without running its cleanup (SIGTERM, SIGKILL, a crash, the Mac sleeping) leaves it to the egg,
 which turns capture off as soon as it sees the connection close, and after about 150 seconds

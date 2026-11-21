@@ -77,7 +77,7 @@ micro_wake_word:
 
 # Wake clips: the last 5 seconds of what the wake word model heard before each wake, frozen
 # on the wake and served at http://<egg>:8080/wake-clip for the server to fetch. Capture is
-# off until a server started with --wake-clips turns the "Wake clips" switch on, and goes off
+# off until a server started with --save-wake-clips turns the "Wake clips" switch on, and goes off
 # again when that server's connection ends. Removing this block, external_components and the
 # script, mute switch, switch, voice_assistant and api hooks below gives back the firmware
 # without clips.
@@ -156,7 +156,7 @@ binary_sensor:
     filters:
       - delayed_off: 10s
 
-# The server turns this on when it was started with --wake-clips, and off otherwise, each time
+# The server turns this on when it was started with --save-wake-clips, and off otherwise, each time
 # it connects. It is never restored, so the egg keeps no audio after a reboot until asked.
 switch:
   - platform: template
