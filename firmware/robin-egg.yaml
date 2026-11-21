@@ -72,24 +72,30 @@ micro_wake_word:
 
 # Whether the board hears voices nearby, for the server to tell Robin someone is
 # around. Only this on/off state leaves the egg: no audio and no direction.
-# read_led_beam_direction() returns -1 when the DSP has no voice direction. The
-# formatBCE source says the DSP gives none in silence; the bench check in
-# docs/bench-test.md records whether that holds. While a wake word turn has the
-# beam locked it reads the fixed beam, so the state means nothing then, and the
-# server ignores it during and just after a turn. It is published from an
-# interval because a template lambda would read the DSP on every loop pass.
+# The DSP always reports a direction, and in a quiet room it holds the last one
+# still. A voice moves it. The beam sensor publishes only when the direction
+# moves to another LED, so each publish counts as a voice. The pending off is
+# held for 10 s, and a new publish cancels it. The bench numbers are in
+# docs/bench-test.md. While a wake word turn has the beam locked the direction
+# barely moves, and the lock and unlock can each publish once, so the server
+# ignores the state during a turn and for a while after.
+respeaker_xvf3800:
+  led_beam_sensor:
+    on_value:
+      - binary_sensor.template.publish:
+          id: voice_heard
+          state: ON
+      - binary_sensor.template.publish:
+          id: voice_heard
+          state: OFF
+
 binary_sensor:
   - platform: template
     name: "Voice Heard"
     id: voice_heard
     disabled_by_default: true
     filters:
-      - delayed_off: 3s
-
-interval:
-  - interval: 500ms
-    then:
-      - lambda: id(voice_heard).publish_state(id(respeaker).read_led_beam_direction() >= 0);
+      - delayed_off: 10s
 
 wifi:
   ssid: !secret wifi_ssid

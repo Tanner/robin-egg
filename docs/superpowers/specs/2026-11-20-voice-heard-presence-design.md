@@ -31,7 +31,7 @@ Robin decides for itself whether to speak first. It needs to know whether anyone
 
 ## Approaches
 
-1. **Firmware "Voice heard" binary sensor (picked).** An override in `robin-egg.yaml` asks the DSP for a voice direction with `id(respeaker).read_led_beam_direction()`, which returns -1 when there is none. A template binary sensor is on while it returns a direction, with a short `delayed_off`. The server subscribes over the API connection it already holds and keeps all the timing. Low traffic, and only a boolean leaves the egg.
+1. **Firmware "Voice heard" binary sensor (picked).** An override in `robin-egg.yaml` turns a template binary sensor on each time the DSP's voice direction moves to another LED position, and off 10 s after the last move. The server subscribes over the API connection it already holds and keeps all the timing. Low traffic, and only a boolean leaves the egg.
 2. **Expose the raw beam direction sensor** (`internal: false`). One-line firmware change, but about 10 readings a second over the API, and it sends where people are, which Robin does not need.
 3. **mmWave.** Catches silent presence too, but is not wired and its pins need revising. Later, behind the same `Presence` interface.
 
@@ -47,7 +47,7 @@ How Robin learns what the fact means:
 
 ### Bench check first
 
-The whole design rests on the DSP giving no voice direction in silence. That is a comment in the formatBCE source (`respeaker_xvf3800.cpp:468-470`), not a measurement. Before the server work, flash the sensor and check:
+The first version rested on the DSP giving no voice direction in silence, a comment in the formatBCE source (`respeaker_xvf3800.cpp:468-470`). The bench showed otherwise (2026-11-20, `docs/bench-test.md`): the DSP answers "busy" on about half of all reads whether anyone talks or not, and always has a direction. In silence the direction holds exactly still; when someone talks it moves within a second. The sensor now counts a change. Before the server work, flash the sensor and check:
 
 - a quiet room stays off;
 - fan, dishwasher and street noise stay off;
@@ -60,9 +60,9 @@ If a quiet room does not stay off, stop and rethink before building the rest.
 
 ### Firmware
 
-- Template `binary_sensor` "Voice heard", polled every 500 ms (builder's call within reason), on while `id(respeaker).read_led_beam_direction() >= 0`, with `delayed_off: 3s` to smooth gaps between words. The server holds every longer timing.
+- Template `binary_sensor` "Voice heard" with `delayed_off: 10s`. The package's beam sensor (`led_beam_sensor`, polled every 100 ms, publishes only when the LED position changes) gains an `on_value` that publishes the sensor on and then off; the filter holds the off for 10 s and a new change cancels it. 10 s because, on the bench, talking went at most 10 s without a change. The server holds every longer timing.
 - This stays on `respeaker_ref` 2026.11.0 (commit 35d2e64). `get_azimuth_degrees()` from the formatBCE notes is not in that release, and `beam_direction.has_state()` cannot be used: the beam sensor publishes only when the direction changes (`respeaker_xvf3800.cpp:721-726`), so a voice from one direction would publish once and never again.
-- Cost: one more I2C read per poll, next to the beam sensor's 100 ms one. Check on the bench that LED tracking and beam lock still behave.
+- Cost: none on the bus. It reuses the beam sensor's reads, so it cannot collide with them, which is what kept the first version always off. While a turn has the beam locked the direction barely moves; the lock and unlock can each publish one change.
 - Not internal, so it reaches the server over the native API. Disabled-by-default in Home Assistant is fine.
 - `reference/INDEX.md` labelled the formatBCE reference copy (commit 9e4352f) as release 2026.11.0, which is commit 35d2e64. Fixed with this design. Read the build cache under `firmware/.esphome/external_components/` for what the egg actually runs.
 
@@ -71,7 +71,8 @@ If a quiet room does not stay off, stop and rethink before building the rest.
 - Subscribe to the "Voice heard" state on connect, the same way the existing entity subscriptions work (list entities, match by `object_id`, `subscribe_states`).
 - A voice counts only when the sensor is on and none of these hold (my calls):
   - the egg is in a turn (listening, thinking, replying), since a turn already updates `egg_last_speaker`;
-  - the egg is playing audio, or played it in the last 3 s (from `_playback_until` in `egg.py`), so its own voice and the tail of the 3 s `delayed_off` don't count;
+  - the egg is playing audio, or played it in the last 12 s (from `_playback_until` in `egg.py`), so its own voice and the tail of the 10 s `delayed_off` don't count;
+  - a turn ended in the last 12 s, for the same tail and the beam unlock;
   - the mic is muted (`mic_mute.muted`). Mute is someone's choice to have quiet (`decisions.md:94`), and the DSP may still localise while muted.
 - When a voice counts and nothing was posted in the last 10 minutes, post `egg_last_heard` with value `voices nearby`. While the sensor stays on and counted, check once a minute and post again once 10 minutes have passed. A state that is already on when the server connects counts like any other. (My calls. 10 minutes, not 5, keeps a TV from adding a block to nearly every turn.)
 - A repeat post has the same value, so it goes through `note()` with `again=True` (`room_context.py:110`).
@@ -109,14 +110,15 @@ Robin sees each fact as `- key: value (as of time)` (`src/scheduler/planner.ts`,
 
 - TV, radio and podcasts count as voices.
 - Silent presence is invisible.
-- Echo cancellation is unverified, hence ignoring the sensor while the egg plays and for 3 s after.
+- Echo cancellation is unverified, hence ignoring the sensor while the egg plays and for 12 s after.
+- Someone talking from one spot without moving could, rarely, go 10 s without a direction change and turn the sensor off between sentences. The 10-minute repost makes that harmless.
 - The fact's time can trail the last voice by up to 10 minutes; the description says so.
 - While muted the server ignores the sensor, so a muted egg reports nobody. Harmless, since a muted egg already drops proactive messages.
 - With a TV on, a new context block reaches Robin's chats at most every 10 minutes.
 
 ## Regression safety
 
-- The fake egg gains a "Voice heard" entity so the server tests can drive it: the first counted voice posts once; continued voices post again at most every 10 minutes; voices during a turn, during playback, within 3 s after playback, or while muted post nothing; a state already on at connect posts; a missing entity logs once and changes nothing else.
+- The fake egg gains a "Voice heard" entity so the server tests can drive it: the first counted voice posts once; continued voices post again at most every 10 minutes; voices during a turn, during playback, within 12 s after playback or a turn, or while muted post nothing; a state already on at connect posts; a missing entity logs once and changes nothing else.
 - The existing room-fact, presence and announcement tests stay green, and `--presence-minutes` behaviour is unchanged.
 - robin-assistant: tests that a fact with no description renders, stores and returns exactly as before; that a description is sanitized, capped and rendered; and that a later deposit without one clears it. The existing context-route and ambient-render tests stay green.
 - The egg server's room-context tests check that each fact is posted with its description.

@@ -14,10 +14,10 @@
 
 - No audio, words, speaker or direction leaves the egg for this feature. Only the boolean "Voice Heard".
 - Firmware stays on `respeaker_ref: 2026.11.0` (commit 35d2e64). The formatBCE packages are not edited; changes are overrides in `firmware/robin-egg.yaml`.
-- Do not use `get_azimuth_degrees()` (not in the release) or `beam_direction.has_state()` (publishes only on change).
+- Do not use `get_azimuth_degrees()` (not in the release), `beam_direction.has_state()` (publishes only on change), or `read_led_beam_direction() >= 0` as the voice test (the bench showed the DSP always has a direction and answers "busy" on about half of all reads, voice or not). The sensor counts a change of the beam sensor's LED position as a voice.
 - Fact key `egg_last_heard`, value `voices nearby`, TTL 2 hours (7200 s).
 - Re-post at most every 10 minutes (600 s); check once a minute (60 s) while the sensor stays on.
-- Ignore the sensor during a turn, for 4 s after a turn ends, during playback, for 4 s after playback, and while the mic is muted. (4 s, not the spec's 3 s: the firmware's off state can lag 3 s hold + 0.5 s poll + API latency, and the beam is locked during a turn.)
+- Ignore the sensor during a turn, for 12 s after a turn ends, during playback, for 12 s after playback, and while the mic is muted. (12 s: the firmware holds the sensor on for 10 s after the last direction change, plus the 100 ms beam poll and API latency. The beam lock and unlock can each publish a change.)
 - `description` on robin-assistant: optional, sanitized like `value`, at most 200 characters (413 over), replaced with each deposit, never compared for `context_changed`.
 - Egg fact descriptions stay near 100 characters; the test caps them at 120.
 - Logs are plain sentences for a human, no emojis. No comments that narrate the change.
@@ -27,7 +27,7 @@
 ## Review Focus
 
 1. **A context file written before this change** (entries with no `description`) must load, render and return exactly as before. Pinned in Task 3.
-2. **A sensor that flaps** on and off every few seconds (the 3 s `delayed_off` between sentences) must still post only once per 10 minutes. Pinned in Task 6.
+2. **A sensor that flaps** on and off (someone talking from one spot can go about 10 s without a direction change, the length of the hold) must still post only once per 10 minutes. Pinned in Task 6.
 3. **Reconnecting while voices are on**: the first state after connect counts, and a state from the old connection must not leak into the new one. Pinned in Task 6.
 4. **Mute pressed while the sensor is on, then released**: nothing is posted while muted, and the next minute check after unmute posts if 10 minutes have passed. Pinned in Task 6.
 5. **Firmware without the entity** (not reflashed yet): one log line, and every other behaviour, including the fake egg's existing tests, unchanged. Pinned in Task 6.
@@ -40,11 +40,13 @@
 - Modify: `firmware/robin-egg.yaml` (add a `binary_sensor:` block after `micro_wake_word:`)
 
 **Interfaces:**
-- Produces: a binary sensor entity named "Voice Heard", object id `voice_heard`, on while the DSP reports a voice direction, off 3 s after it stops.
+- Produces: a binary sensor entity named "Voice Heard", object id `voice_heard`, on when the DSP's voice direction moves to another LED position, off 10 s after the last move.
 
 - [ ] **Step 1: Add the override**
 
-A `binary_sensor` of `platform: template` with no `lambda` (a template lambda runs on every main-loop pass, which would be an I2C read every few milliseconds): `name: "Voice Heard"`, `id: voice_heard`, `filters: [delayed_off: 3s]`, `disabled_by_default: true` so Home Assistant hides it. An `interval:` of `500ms` publishes it: `lambda: id(voice_heard).publish_state(id(respeaker).read_led_beam_direction() >= 0);`. Filters apply to published states, so the 3 s hold still works. Precede it with a short comment saying why `read_led_beam_direction()` is used and that only this boolean leaves the egg.
+A `binary_sensor` of `platform: template` with no `lambda`: `name: "Voice Heard"`, `id: voice_heard`, `filters: [delayed_off: 10s]`, `disabled_by_default: true` so Home Assistant hides it. The package's `respeaker_xvf3800: led_beam_sensor:` gains an `on_value:` that publishes `voice_heard` ON and then OFF. The beam sensor publishes only when the LED position changes, so each publish is a change; the filter holds the OFF for 10 s, and a new ON cancels it. No reads of the DSP are added. Precede it with a short comment saying why a change counts and that only this boolean leaves the egg.
+
+(Revised after the first bench check. The first version published `read_led_beam_direction() >= 0` every 500 ms and never turned on. See Task 2.)
 
 - [ ] **Step 2: Validate the config**
 
@@ -70,9 +72,9 @@ Tanner flashes the egg; the agent cannot. Stop and ask for this before Task 6.
 **Files:**
 - Modify: `docs/bench-test.md` (a dated "Voice Heard sensor" section with the results)
 
-- [ ] **Step 1: Ask Tanner to flash** with `cd firmware && .venv/bin/esphome run robin-egg.yaml` from the main checkout, and to watch the "Voice Heard" state with `--logs` or the ESPHome logs.
+- [ ] **Step 1: Flash** from this branch's worktree with `esphome run robin-egg.yaml --device <egg IP>`, and watch the "Voice Heard" state over the API. (Flashing over Wi-Fi works from the agent's shell. The desktop app's Terminal panel was refused local network access.)
 
-- [ ] **Step 2: Record each case** from the spec's bench list: quiet room, fan or dishwasher, talking, TV, the egg playing a reply, mic muted. Plus: during a wake word turn and for a few seconds after it ends (the beam is locked then), including a turn where nobody speaks after the wake word; and LED beam tracking and beam lock behave as before.
+- [ ] **Step 2: Record each case** from the spec's bench list: quiet room, fan or dishwasher, talking, TV, the egg playing a reply, mic muted. Plus: during a wake word turn and for 12 s after it ends (the beam is locked then), including a turn where nobody speaks after the wake word; and LED beam tracking and beam lock behave as before.
 
 - [ ] **Step 3: Decide.** If a quiet room does not stay off, stop the plan and go back to the design. Otherwise commit:
 
@@ -217,7 +219,7 @@ Only after Task 2 says the sensor works.
 **Interfaces:**
 - Consumes: `EGG_LAST_HEARD`, `LAST_HEARD_TTL_S` (Task 5); `MicMute.muted`; `Robin._busy_reason()`; `Robin._playback_until`; `Robin.played_clock()`; the point a turn ends, which Task 6 records as `Robin._turn_ended_at` on `played_clock()`.
 - Produces:
-  - `VOICE_HEARD_OBJECT_ID = "voice_heard"`, `REPOST_S = 600.0`, `CHECK_S = 60.0`, `SETTLE_S = 4.0` (after playback and after a turn).
+  - `VOICE_HEARD_OBJECT_ID = "voice_heard"`, `REPOST_S = 600.0`, `CHECK_S = 60.0`, `SETTLE_S = 12.0` (after playback and after a turn).
   - `class VoiceHeard(ignore_reason: Callable[[], str | None], report: Callable[[], None], clock: Callable[[], float] = time.monotonic, repost_s: float = REPOST_S, check_s: float = CHECK_S)` with `on: bool`, `async watch(client) -> None` (never raises), `reset() -> None`, `consider() -> bool` (True when it reported).
   - `RoomContext.voices_heard() -> None`: `note(EGG_LAST_HEARD, "voices nearby", LAST_HEARD_TTL_S, again=True)`.
   - `Options.voice_heard: bool = True`; `Robin._voice_ignore_reason() -> str | None`.
@@ -227,7 +229,7 @@ Only after Task 2 says the sensor works.
 
 Unit tests on `VoiceHeard` with a list-backed fake clock and `report` appending to a list:
 - `test_first_counted_voice_reports`: `on` then `consider()` → one report.
-- `test_flapping_reports_once_in_ten_minutes`: on/off every 4 s for 9 minutes of fake clock → one report; at 10 minutes and on → a second.
+- `test_flapping_reports_once_in_ten_minutes`: on/off every 12 s for 9 minutes of fake clock → one report; at 10 minutes and on → a second.
 - `test_ignored_voice_does_not_report_or_start_the_clock`: `ignore_reason` returns `"the microphone is muted"`; `consider()` → no report; then it returns None → the next `consider()` reports.
 - `test_off_does_not_report`: `on` False, `consider()` → nothing.
 - `test_reset_forgets_the_state`: `on` True, `reset()` → `on` False and the entity key cleared; the last report time is kept so a reconnect does not re-post within 10 minutes.
@@ -235,8 +237,8 @@ Unit tests on `VoiceHeard` with a list-backed fake clock and `report` appending 
 Through the fake egg (pattern from `test_mic_mute.py`'s `with_egg`, with a `FakeRobinAssistant` and `RoomContext`):
 - `test_voices_post_egg_last_heard`: `egg.set_voice_heard(True)` → one `egg_last_heard` post with value `voices nearby` and its description.
 - `test_voices_while_muted_post_nothing`.
-- `test_voices_during_and_just_after_a_reply_post_nothing`: during a reply, and within 4 s after its `_playback_until`.
-- `test_voices_just_after_a_turn_with_no_reply_post_nothing`: a wake word run where nobody speaks, sensor on as it ends; nothing posts within 4 s of the turn ending, and the next minute check after that does post.
+- `test_voices_during_and_just_after_a_reply_post_nothing`: during a reply, and within 12 s after its `_playback_until`.
+- `test_voices_just_after_a_turn_with_no_reply_post_nothing`: a wake word run where nobody speaks, sensor on as it ends; nothing posts within 12 s of the turn ending, and the next minute check after that does post.
 - `test_voices_already_on_at_connect_post`: `FakeEgg` starts with the sensor on.
 - `test_egg_without_the_sensor_logs_once`: `FakeEgg(voice_heard_sensor=False)`; `caplog` has exactly one line containing `no voice_heard sensor`; no `egg_last_heard` posts.
 - `test_no_voice_heard_flag_ignores_the_sensor`: `Options(voice_heard=False)` → no posts.
@@ -271,7 +273,7 @@ git commit -m "Tell Robin when voices are heard near the egg"
 ### Task 7: Docs
 
 **Files:**
-- Modify: `docs/decisions.md` (a "Voice-heard presence, decided 2026-11-20" table: boolean only, `read_led_beam_direction()`, server holds timing, 10-minute re-post, mute and playback ignored, descriptions on facts instead of prompt lines)
+- Modify: `docs/decisions.md` (a "Voice-heard presence, decided 2026-11-20" table: boolean only, a change of beam direction counts as a voice (the bench showed the DSP always has a direction and holds it still in silence), server holds timing, 10-minute re-post, mute and playback ignored, descriptions on facts instead of prompt lines)
 - Modify: `docs/open-questions.md` (presence gating item now names `egg_last_heard`; add whether the TV makes it meaningless in the living room, and whether `--presence-minutes` should use it)
 - Modify: `server/README.md` (the room facts section: the new fact, its description, the 10-minute rule, `--voice-heard/--no-voice-heard`, and that every fact now carries a description)
 
