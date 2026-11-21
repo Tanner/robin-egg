@@ -107,21 +107,31 @@ def test_spans_follow_the_notebook_rule():
     assert spans(clip(silence(0.5), tone(3.5), silence(0.5))) == []
 
 
-def test_real_stores_the_last_one_and_a_half_seconds_once_confirmed(tmp_path):
-    five = clip(silence(1.0), tone(0.8), silence(0.2), tone(0.5), silence(1.5), tone(1.0))
-    assert len(five) == 5 * RATE
+FIVE_SECONDS = clip(silence(1.0), tone(0.8), silence(0.2), tone(0.5), silence(1.5), tone(1.0))
+
+
+@pytest.mark.parametrize(
+    "samples",
+    [
+        FIVE_SECONDS,
+        np.random.default_rng(1).normal(0, 3000, 24000).astype(np.int16),  # exactly the cut's length
+        np.random.default_rng(2).normal(0, 3000, 58112).astype(np.int16),  # the length of the first bench clip
+    ],
+    ids=["5 s", "24000 samples", "58112 samples"],
+)
+def test_real_stores_the_last_one_and_a_half_seconds_once_confirmed(tmp_path, samples):
     store = WakeClipStore(tmp_path)
-    save(store, five)
+    save(store, samples)
     session = Session("r", "y")
     assert session.run(store) == 1
     [labelled] = store.entries()
     assert REAL_CUT_S == 1.5
     assert labelled.label == REAL
-    assert labelled.cut == (len(five) - 24000, len(five))
+    assert labelled.cut == (len(samples) - 24000, len(samples))
     assert labelled.misses == []
     assert len(session.played) == 2
-    assert np.array_equal(session.played[0], five)
-    assert np.array_equal(session.played[1], five[-24000:])
+    assert np.array_equal(session.played[0], samples)
+    assert np.array_equal(session.played[1], samples[-24000:])
     assert session.asked[-1] == "Is this cut a clean Hey Robin? [y/n]  [space] play again"
 
 
@@ -217,7 +227,7 @@ def test_false_stores_the_last_three_seconds(tmp_path):
     assert len(session.played) == 1
 
 
-def test_a_clip_with_no_span_can_still_be_labelled(tmp_path):
+def test_an_empty_clip_asks_no_cut_question_and_false_cuts_need_no_span(tmp_path):
     empty_store = WakeClipStore(tmp_path / "empty")
     save(empty_store, silence(0.0))
     session = Session("r")

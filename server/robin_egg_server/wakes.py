@@ -34,7 +34,8 @@ RATE = 16000
 # A false wake's cut: the end of the clip, where the sound that set the egg off is.
 FALSE_CUT_S = 3.0
 # A real wake's cut: the end of the clip, since the egg freezes it the moment it hears the wake
-# word, and the training notebook keeps the last 1.5 seconds of every real take.
+# word, and training looks at only the last 1.5 seconds of a take (clip_duration_ms 1500 with
+# truncate_start).
 REAL_CUT_S = 1.5
 # The training notebook reads positive/ and negative/ in here as takes, as they are.
 DEFAULT_TAKES = Path(__file__).resolve().parents[2] / "wakeword" / "recordings" / "egg_takes"
