@@ -93,7 +93,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--min-logprob", type=float, default=-1.0, help="Speech-to-text is unsure when Whisper's average log-probability is below this (default -1.0)")
     p.add_argument("--max-no-speech", type=float, default=0.8, help="Speech-to-text is unsure when Whisper's no-speech probability is above this (default 0.8)")
     p.add_argument("--max-compression", type=float, default=2.4, help="Speech-to-text is unsure when Whisper's compression ratio is above this (default 2.4)")
-    p.add_argument("--vad", choices=VAD_KINDS, default="energy", help="What finds the end of speech: energy (loudness against the room's noise floor) or model (the Silero speech model, which ignores noise that is not a voice)")
+    p.add_argument("--vad", choices=VAD_KINDS, default="model", help="What finds the end of speech: model (the Silero speech model, which ignores noise that is not a voice; the default) or energy (loudness against the room's noise floor)")
     p.add_argument("--speaker-recognition", action=argparse.BooleanOptionalAction, default=True, help="Tell household members apart by voice and let them enrol by saying 'learn my voice' (default on; --no-speaker-recognition turns it off; not used with --echo)")
     p.add_argument("--offer-enrolment", action=argparse.BooleanOptionalAction, default=True, help="After a few questions from the same unrecognised voice, add a spoken hint that it can say 'learn my voice', while someone in the household has no voiceprint (default on; at most once a day)")
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
