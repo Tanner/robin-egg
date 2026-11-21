@@ -199,7 +199,9 @@ class Robin:
         self._unfinished_replies: deque[int] = deque(maxlen=32)  # replies already reported as not spoken to the end
         self.mic_mute = MicMute()
         self.voice_heard = VoiceHeard(self._voice_ignore_reason, self._voices_heard)
+        self.mic_mute.on_state = self.voice_heard.consider  # voices held back until mute was known count once it is
         self._turn_ended_at = -math.inf  # when the last turn ended, on played_clock()
+        self._announced_at = -math.inf  # when the last announcement ended, on played_clock()
         self.turn: Turn | None = None
         self.egg_since = time.time()  # when the egg connected or, while it is away, when it was lost
         self.device: dict[str, str] = {}  # the egg's name and versions, from its last connection
@@ -1020,7 +1022,7 @@ class Robin:
                 reason = self._busy_reason() or "the egg is busy"
                 LOG.info('Not announcing "%s": after %.0f s, %s', text, ANNOUNCE_WAIT_S, reason)
                 return (503 if self.client is None else 409), f"{reason}; not spoken"
-            async with self._speaker_lock:
+            async with self._announcing():
                 if self._nudges(low):
                     return await self._announce_nudge(text, f"a{self._announce_count}")
                 if low:
@@ -1073,6 +1075,8 @@ class Robin:
         """
         if self.mic_mute.muted:
             return "the microphone is muted"
+        if self.mic_mute.unknown:
+            return "the microphone mute is not known yet"
         busy = self._busy_reason()
         if busy is not None:
             return busy
@@ -1081,7 +1085,18 @@ class Robin:
             return "the egg finished playing a moment ago"
         if now < self._turn_ended_at + SETTLE_S:
             return "a conversation ended a moment ago"
+        if now < self._announced_at + SETTLE_S:
+            return "the egg spoke a moment ago"
         return None
+
+    @contextlib.asynccontextmanager
+    async def _announcing(self):
+        """Holds the speaker for one announcement, and notes when it ended for the voices nearby."""
+        async with self._speaker_lock:
+            try:
+                yield
+            finally:
+                self._announced_at = self.played_clock()
 
     def _voices_heard(self) -> None:
         if self.room_context is not None:
@@ -1249,7 +1264,7 @@ class Robin:
             self._message_outcome(msg, "dropped, it had nothing to say")
             return
         listen = self.opts.answer_messages == "always" or (self.opts.answer_messages == "questions" and text.rstrip().endswith("?"))
-        async with self._speaker_lock:
+        async with self._announcing():
             reply = await self._announcement(text, chime=True, urgent=msg.urgent, listen=listen)
             client = self.client
             if client is None:
@@ -1336,7 +1351,7 @@ class Robin:
     async def _say_digest(self, digest: Digest) -> None:
         with tagged(digest.tag):
             listen = digest.wants_answer(self.opts.answer_messages)
-            async with self._speaker_lock:
+            async with self._announcing():
                 reply = await self._digest_audio(digest, listen)
                 client = self.client
                 if client is None:
@@ -1453,7 +1468,7 @@ class Robin:
 
     async def _play_cue_alone(self) -> bool:
         """Plays the proactive cue with no words. False when the egg was gone or reported a failure."""
-        async with self._speaker_lock:
+        async with self._announcing():
             reply = await self._cue_alone()
             client = self.client
             if client is None:
@@ -1632,7 +1647,7 @@ class Robin:
         something Robin said. A chime that does not play is only logged: the egg stays connected.
         """
         try:
-            async with self._speaker_lock:
+            async with self._announcing():
                 reply = ReplyAudio()
                 reply.gain = self.room.for_announcement()
                 await reply.push(self.ready_sound, REPLY_RATE)

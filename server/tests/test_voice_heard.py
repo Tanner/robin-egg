@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 
 from aioesphomeapi import VoiceAssistantEventType
 
@@ -16,8 +17,9 @@ from robin_egg_server.egg import Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.room_context import DESCRIPTIONS, EGG_LAST_HEARD, ContextClient, RoomContext
 from robin_egg_server.voice_heard import CHECK_S, REPOST_S, SETTLE_S, VoiceHeard
+from robin_egg_server.speaker_stream import SpeakerMessage
 from robin_egg_server.web import AudioServer
-from test_mic_mute import opening_run_over
+from test_mic_mute import opening_run_over, post
 from test_robin_brain import FakeRobinAssistant
 from test_server import FakeSTT, SlowBrain, ToneTTS
 from test_speaker_stream import eventually
@@ -97,11 +99,12 @@ def last_heard(robin: Robin) -> bool:
     return EGG_LAST_HEARD in robin.room_context.facts
 
 
-async def with_voices(egg: FakeEgg, scenario, opts: Options | None = None, check_s: float = 0.05):
+async def with_voices(egg: FakeEgg, scenario, opts: Options | None = None, check_s: float = 0.05, own_clock: bool = True):
     """The real server against the fake egg, with room facts going to a fake robin-assistant.
 
     Once the opening run is over, the server's played clock is the test's, so the settle
     windows pass when the test says. The watcher checks every check_s instead of once a minute.
+    With own_clock False the server keeps the fake egg's played clock, for announcements.
     """
     fake = FakeRobinAssistant([])
     fake_url = await fake.start()
@@ -117,7 +120,8 @@ async def with_voices(egg: FakeEgg, scenario, opts: Options | None = None, check
         await opening_run_over(egg, robin, 1)
         clock = Clock()
         clock.now = robin.played_clock()
-        robin.played_clock = clock
+        if own_clock:
+            robin.played_clock = clock
         await scenario(robin, clock, fake)
     finally:
         stop.set()
@@ -247,3 +251,58 @@ def test_no_voice_heard_flag_ignores_the_sensor():
 
     fake = asyncio.run(with_voices(egg, scenario, Options(speaking_hours=(0, 24), voice_heard=False)))
     assert heard_posts(fake) == []
+
+
+def forget_the_opening_run(robin: Robin) -> None:
+    """The opening run ended a moment ago too; these tests are about what plays after it."""
+    robin._playback_until = 0.0
+    robin._turn_ended_at = -math.inf
+
+
+def test_voices_just_after_an_announcement_post_nothing():
+    egg = FakeEgg([])
+
+    async def scenario(robin, clock, fake):
+        forget_the_opening_run(robin)
+        status, _ = await asyncio.to_thread(post, robin.web, "Dinner is ready.")
+        assert status == 200
+        egg.set_voice_heard(True)  # the egg's own voice, still held in the sensor
+        await eventually(lambda: robin.voice_heard.on)
+        assert robin._voice_ignore_reason() == "the egg spoke a moment ago"
+        assert not last_heard(robin)
+
+    asyncio.run(with_voices(egg, scenario, check_s=CHECK_S, own_clock=False))
+
+
+def test_voices_just_after_robin_speaks_first_post_nothing():
+    egg = FakeEgg([])
+
+    async def scenario(robin, clock, fake):
+        forget_the_opening_run(robin)
+        await robin.proactive(SpeakerMessage(5, "The bins go out tonight.", "Bins"))
+        await eventually(lambda: egg.announcements and not robin._speaker_lock.locked())
+        egg.set_voice_heard(True)
+        await eventually(lambda: robin.voice_heard.on)
+        assert robin._voice_ignore_reason() == "the egg spoke a moment ago"
+        assert not last_heard(robin)
+
+    asyncio.run(with_voices(egg, scenario, check_s=CHECK_S, own_clock=False))
+
+
+def test_voices_before_the_mute_state_is_known_wait_for_it():
+    egg = FakeEgg([], muted=True)
+
+    async def scenario(robin, clock, fake):
+        clock.now += SETTLE_S + 1
+        robin.mic_mute.muted, robin.mic_mute.known = False, False  # as reset() leaves it: a new connection where the sensor's state came first
+        egg.set_voice_heard(True)
+        await eventually(lambda: robin.voice_heard.on)
+        assert robin._voice_ignore_reason() == "the microphone mute is not known yet"
+        assert not last_heard(robin)
+        egg.set_muted(True)
+        await eventually(lambda: robin.mic_mute.known)
+        assert robin._voice_ignore_reason() == "the microphone is muted"
+        egg.set_muted(False)
+        await eventually(lambda: heard_posts(fake))  # looked at again as soon as mute is known off
+
+    asyncio.run(with_voices(egg, scenario, check_s=CHECK_S))

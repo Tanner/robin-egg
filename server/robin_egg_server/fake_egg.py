@@ -255,10 +255,11 @@ class FakeEgg:
             self.send(pb.ListEntitiesDoneResponse())
         elif isinstance(msg, pb.SubscribeStatesRequest):
             self._states_subscribed = True
-            if self.mute_switch:
-                self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=self.muted))
+            # The firmware's state dump sends binary sensors before switches.
             if self.voice_heard_sensor:
                 self.send(pb.BinarySensorStateResponse(key=VOICE_HEARD_KEY, state=self.voice_heard))
+            if self.mute_switch:
+                self.send(pb.SwitchStateResponse(key=MUTE_KEY, state=self.muted))
             self._send_ring_state()
             self.send(pb.MediaPlayerStateResponse(key=GROUP_PLAYER_KEY, state=pb.MEDIA_PLAYER_STATE_IDLE, volume=1.0))
             self._send_volume()
