@@ -1,5 +1,8 @@
 """Keeps the last few seconds of what the wake word model hears and serves a frozen copy over HTTP.
 
+Capture is off at boot. wake_clip.enable turns it on; wake_clip.disable turns it off and wipes
+both buffers.
+
 The audio comes from a passive microphone source: the component only hears the microphone while
 micro_wake_word or voice_assistant has it running, and never starts, stops or reconfigures it.
 """
@@ -102,4 +105,24 @@ automation.register_apply_action(
         }
     ),
     automation.ApplyCall("clear()"),
+)
+
+automation.register_apply_action(
+    "wake_clip.enable",
+    automation.maybe_simple_id(
+        {
+            cv.GenerateID(): cv.use_id(WakeClip),
+        }
+    ),
+    automation.ApplyCall("enable()"),
+)
+
+automation.register_apply_action(
+    "wake_clip.disable",
+    automation.maybe_simple_id(
+        {
+            cv.GenerateID(): cv.use_id(WakeClip),
+        }
+    ),
+    automation.ApplyCall("disable()"),
 )

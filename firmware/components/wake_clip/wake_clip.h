@@ -7,6 +7,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -22,6 +23,9 @@ namespace esphome::wake_clip {
 ///   - the main loop freezes, holding frozen_lock_ and then ring_lock_ while it copies;
 ///   - the HTTP server task sends the frozen buffer, holding frozen_lock_ for the whole response.
 /// The audio task never takes frozen_lock_, so a slow response can never hold up the microphone.
+///
+/// Capture is off until enable() and after disable(). While it is off the ring buffer is not
+/// written, a wake freezes nothing and GET /wake-clip answers 404.
 class WakeClip : public Component {
  public:
   void setup() override;
@@ -35,8 +39,18 @@ class WakeClip : public Component {
   void set_model_round(const std::string &model_round) { this->model_round_ = model_round; }
   void set_cutoff(const std::string &cutoff) { this->cutoff_ = cutoff; }
 
-  /// Copies the ring buffer into the frozen buffer, oldest audio first, and counts the wake.
+  /// Turns capture on, starting from an empty ring buffer. Runs on the main loop.
+  void enable();
+
+  /// Turns capture off, then zeroes the ring buffer and wipes the frozen clip, so no audio heard
+  /// before stays in memory. The wake count is kept, so counts never repeat within one boot.
   /// Runs on the main loop.
+  void disable();
+
+  bool is_enabled() const { return this->enabled_.load(); }
+
+  /// Copies the ring buffer into the frozen buffer, oldest audio first, and counts the wake.
+  /// Does nothing while capture is off. Runs on the main loop.
   void freeze(const std::string &wake_word);
 
   /// Empties the ring buffer, so the next clip holds only audio heard from now on. The frozen
@@ -51,6 +65,8 @@ class WakeClip : public Component {
   bool start_server_();
   static esp_err_t handle_wake_clip_(httpd_req_t *req);
   void write_wav_header_(size_t data_bytes);
+  /// Zeroes the frozen clip and forgets its wake. The caller holds frozen_lock_.
+  void wipe_frozen_();
 
   microphone::MicrophoneSource *microphone_source_{nullptr};
   size_t capacity_bytes_{0};
@@ -78,6 +94,14 @@ class WakeClip : public Component {
 
   // Only touched on the main loop.
   uint32_t wake_count_{0};
+
+  // Read by all three tasks, written only on the main loop. Atomic, so a reader never needs a
+  // lock just to see it; the writes that matter are also ordered by the locks: on_audio_ reads
+  // it under ring_lock_, and the HTTP handler reads it under frozen_lock_.
+  std::atomic<bool> enabled_{false};
+  // Set by disable() before it waits for frozen_lock_. Whoever next holds frozen_lock_ (disable
+  // itself, a response that was being sent, or a freeze) wipes the frozen clip and clears it.
+  std::atomic<bool> wipe_pending_{false};
 
   httpd_handle_t server_{nullptr};
 };

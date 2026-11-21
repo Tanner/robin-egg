@@ -23,6 +23,9 @@ static constexpr size_t WAV_HEADER_BYTES = 44;
 // count, so the server sees the mismatch and drops it instead of filing it under the new wake.
 static constexpr TickType_t FREEZE_WAIT = pdMS_TO_TICKS(100);
 static constexpr TickType_t RESPONSE_WAIT = pdMS_TO_TICKS(1000);
+// Turning capture off runs on the main loop too, so it waits only briefly for a response that
+// is still being sent. If it gives up, the response wipes the clip as soon as it has been sent.
+static constexpr TickType_t DISABLE_WAIT = pdMS_TO_TICKS(200);
 
 // The microphone sends audio every few tens of milliseconds while it runs. A longer gap means
 // it was stopped and started again, so the audio before the gap is not joined to what follows.
@@ -97,7 +100,7 @@ void WakeClip::dump_config() {
 void WakeClip::on_audio_(const std::vector<uint8_t> &data) {
   const uint8_t *src = data.data();
   size_t len = data.size();
-  if (len == 0) {
+  if (len == 0 || !this->enabled_.load()) {
     return;
   }
   if (len > this->capacity_bytes_) {
@@ -107,6 +110,12 @@ void WakeClip::on_audio_(const std::vector<uint8_t> &data) {
 
   const uint32_t now = millis();
   xSemaphoreTake(this->ring_lock_, portMAX_DELAY);
+  // Checked again under the lock: disable() empties the ring under it after turning capture off,
+  // so a copy either finishes before that or sees capture off and writes nothing.
+  if (!this->enabled_.load()) {
+    xSemaphoreGive(this->ring_lock_);
+    return;
+  }
   if (now - this->last_audio_ms_ > RESTART_GAP_MS) {
     this->ring_write_ = 0;
     this->ring_filled_ = 0;
@@ -120,7 +129,59 @@ void WakeClip::on_audio_(const std::vector<uint8_t> &data) {
   xSemaphoreGive(this->ring_lock_);
 }
 
+void WakeClip::enable() {
+  if (this->ring_lock_ == nullptr) {
+    // Setup failed before the buffers and locks were made, so there is nothing to capture into.
+    this->enabled_.store(true);
+    return;
+  }
+  xSemaphoreTake(this->ring_lock_, portMAX_DELAY);
+  this->ring_write_ = 0;
+  this->ring_filled_ = 0;
+  this->enabled_.store(true);
+  xSemaphoreGive(this->ring_lock_);
+  ESP_LOGI(TAG, "Wake clip capture is on, so the egg keeps the last %.1f s of audio before each wake",
+           this->capacity_bytes_ / (float) (SAMPLE_RATE * (BITS_PER_SAMPLE / 8) * CHANNELS));
+}
+
+void WakeClip::disable() {
+  this->enabled_.store(false);
+  if (this->ring_lock_ == nullptr || this->frozen_lock_ == nullptr) {
+    // The switch turns capture off at boot, before this component is set up, and a failed setup
+    // leaves no locks. Either way no buffer holds audio yet.
+    return;
+  }
+
+  xSemaphoreTake(this->ring_lock_, portMAX_DELAY);
+  std::memset(this->ring_, 0, this->capacity_bytes_);
+  this->ring_write_ = 0;
+  this->ring_filled_ = 0;
+  xSemaphoreGive(this->ring_lock_);
+
+  // Set before waiting, so a response that ends while this waits wipes the clip itself.
+  this->wipe_pending_.store(true);
+  if (xSemaphoreTake(this->frozen_lock_, DISABLE_WAIT) != pdTRUE) {
+    ESP_LOGW(TAG, "Wake clip capture is off and its buffer is empty. The frozen clip is still being sent, so it "
+                  "will be wiped as soon as that response ends");
+    return;
+  }
+  this->wipe_frozen_();
+  xSemaphoreGive(this->frozen_lock_);
+  ESP_LOGI(TAG, "Wake clip capture is off: emptied the buffer and wiped the frozen clip");
+}
+
+void WakeClip::wipe_frozen_() {
+  std::memset(this->frozen_, 0, WAV_HEADER_BYTES + this->capacity_bytes_);
+  this->frozen_data_bytes_ = 0;
+  this->frozen_count_ = 0;
+  this->frozen_wake_word_.clear();
+  this->wipe_pending_.store(false);
+}
+
 void WakeClip::freeze(const std::string &wake_word) {
+  if (!this->enabled_.load()) {
+    return;
+  }
   this->wake_count_++;
   if (this->is_failed()) {
     return;
@@ -130,6 +191,10 @@ void WakeClip::freeze(const std::string &wake_word) {
     ESP_LOGW(TAG, "Not freezing the clip for wake %" PRIu32 " (%s): the clip of an earlier wake is still being sent",
              this->wake_count_, wake_word.c_str());
     return;
+  }
+  if (this->wipe_pending_.load()) {
+    // Capture was turned off while an earlier clip was being sent, and has been turned on again.
+    this->wipe_frozen_();
   }
 
   xSemaphoreTake(this->ring_lock_, portMAX_DELAY);
@@ -219,15 +284,27 @@ bool WakeClip::start_server_() {
 esp_err_t WakeClip::handle_wake_clip_(httpd_req_t *req) {
   auto *self = static_cast<WakeClip *>(req->user_ctx);
 
+  if (!self->enabled_.load()) {
+    return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Wake clip capture is off");
+  }
+
   if (xSemaphoreTake(self->frozen_lock_, RESPONSE_WAIT) != pdTRUE) {
     ESP_LOGW(TAG, "Answering a wake clip request with 503: a freeze held the clip for too long");
     httpd_resp_set_status(req, "503 Service Unavailable");
     return httpd_resp_send(req, nullptr, 0);
   }
 
+  if (self->wipe_pending_.load()) {
+    self->wipe_frozen_();
+  }
+  // Checked again under the lock: capture may have been turned off while this waited for it.
+  if (!self->enabled_.load()) {
+    xSemaphoreGive(self->frozen_lock_);
+    return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Wake clip capture is off");
+  }
   if (self->frozen_count_ == 0) {
     xSemaphoreGive(self->frozen_lock_);
-    return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No wake clip has been frozen since boot");
+    return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No wake clip has been frozen since capture was turned on");
   }
 
   // httpd keeps pointers to these until the response is sent, which is before the lock is given back.
@@ -241,7 +318,15 @@ esp_err_t WakeClip::handle_wake_clip_(httpd_req_t *req) {
   const size_t total = WAV_HEADER_BYTES + self->frozen_data_bytes_;
   const esp_err_t err = httpd_resp_send(req, reinterpret_cast<const char *>(self->frozen_), total);
   const uint32_t sent_count = self->frozen_count_;
+  const bool wiped = self->wipe_pending_.load();
+  if (wiped) {
+    self->wipe_frozen_();
+  }
   xSemaphoreGive(self->frozen_lock_);
+  if (wiped) {
+    ESP_LOGI(TAG, "Wiped the clip for wake %" PRIu32 " once it was sent, because wake clip capture was turned off",
+             sent_count);
+  }
 
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "Could not send the clip for wake %" PRIu32 " (%s)", sent_count, esp_err_to_name(err));
