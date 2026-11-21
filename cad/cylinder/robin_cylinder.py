@@ -66,7 +66,9 @@ TOP_GAP, LID_T = 1.5, 2.5
 Z_LID = Z_PCB + 2.3 + TOP_GAP       # lid underside
 H = Z_LID + LID_T
 TOP_BEVEL = 3.0
-MIC_HOLE_D, MIC_BOSS_D, MIC_BOSS_GAP = 1.2, 6.0, 0.6
+# Each mic post has to close off its mic's hole from the air inside the top, or speech above 1 kHz is lost.
+# The post stops just short of the board, with no gasket. A hole under 2 mm can print half blocked.
+MIC_HOLE_D, MIC_BOSS_D, MIC_BOSS_GAP = 2.0, 6.0, 0.1
 GLOW_R0, GLOW_R1, GLOW_T = 37.0, 43.0, 1.2
 USB_POCKET_W, USB_POCKET_Z0, USB_POCKET_Z1 = 13.5, XIAO_USB_Z - 4.5, XIAO_USB_Z + 5.0   # room for the plug's overmould
 FLEX_W, FLEX_Z0, FLEX_Z1, FLEX_SLOT = 9.0, Z_SEAM + LAP_H + 0.5, Z_LID - 0.5, 1.0
