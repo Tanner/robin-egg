@@ -95,11 +95,13 @@ A new module, `robin_egg_server/wake_clips.py`.
 [r] real  [f] false  [m] real, with a missed try before it  [d] delete  [space] play again  [s] skip  [q] quit
 ```
 
-- The tool finds the loud spans in the clip with the same rule the training notebook and `record_from_egg.py` use: 35 dB under the peak is quiet, gaps under 0.35 s join, takes last 0.3 to 3 s. The last span is the one that woke the egg.
-- After **r**, it plays only that last span and asks whether the cut is a clean "Hey Robin". A yes stores the cut. A no keeps the label for the rates and leaves the clip out of the export.
-- After **m**, it does the same for the last span, then plays each earlier span and asks whether it was a "Hey Robin" the egg missed. Each yes is stored as a miss with its cut.
+- A real wake's cut is the clip's last 1.5 seconds (`REAL_CUT_S`), or the whole clip when it is shorter. The egg freezes the clip the moment it hears the wake word, so the "Hey Robin" that woke it ends at the end of the clip, and the training notebook uses the last 1.5 seconds of a take.
+- After **r**, it plays only that cut and asks whether the cut is a clean "Hey Robin". A yes stores the cut. A no keeps the label for the rates and leaves the clip out of the export.
+- After **m**, it does the same for the cut, then looks for earlier tries. It finds the loud spans in the clip with the same rule the training notebook and `record_from_egg.py` use: 35 dB under the peak is quiet, gaps under 0.35 s join, takes last 0.3 to 3 s. It plays each span that ends before the cut begins and asks whether it was a "Hey Robin" the egg missed. Each yes is stored as a miss with its cut. When no span ends before the cut, it says "No earlier try could be picked out of this clip." This does not work on the egg's audio yet; see the note of 2026-11-21 below.
 - After **f**, it stores the last 3 seconds as the cut. Stray sounds in a don't-wake take do no harm.
 - **d** deletes the clip and its JSON, for audio nobody wants kept.
+
+**Note, 2026-11-21, first bench clips.** The first two clips from the real egg (`20261121-083055-t1.wav`, 3.63 s, and `20261121-083127-t2.wav`, 5.0 s) gave no span at all under the rule above. The egg's processed mic audio never falls 35 dB under its peak: the background sits 15 to 30 dB under it, so the whole clip is one span longer than 3 s and is dropped. With the last span as the cut, review would never have offered a cut for a real wake, and export would have written no "Hey Robin" takes. The person who made the clips confirms "Hey Robin" is clear at the end of each, and in both the last stretch of speech ends 0.1 to 0.2 s before the clip does (4.2 to 4.8 s in the 5.0 s clip), as expected when the egg freezes the clip at the moment of detection. So the real cut became the last 1.5 seconds, with no span search: 2.13 to 3.63 s and 3.50 to 5.00 s for these two clips. The span rule for missed tries is left as it is until more clips show what would work on egg audio; two clips are not enough to choose a new one.
 
 **report** prints one row per model round and cutoff: wakes reviewed, real, false, how many of each stopped a reply, the false share, false wakes per day over the days that round was in use, misses found, and how many clips are still unreviewed. It prints the same split per recognised speaker. It says in plain words that misses are a lower bound and that the rates cover reviewed clips only.
 
@@ -120,7 +122,7 @@ The notebook gains one step: it copies the files in `egg_takes/positive` and `eg
 
 ## Preventing regressions
 
-- The existing server tests pass unchanged. New tests cover the fetch against the fake egg, a wake that starts no turn, two wakes before one fetch, the stale-counter case, a failed and a slow fetch during a turn, the trim, the suggestion rule, the span cutting, the report numbers and the export files.
+- The existing server tests pass unchanged. New tests cover the fetch against the fake egg, a wake that starts no turn, two wakes before one fetch, the stale-counter case, a failed and a slow fetch during a turn, the trim, the suggestion rule, the span cutting, the real cut on audio with no quiet in it, the report numbers and the export files.
 - On the bench, before and after flashing the component: the egg wakes on the same takes, the time from wake to the listening chime does not grow, and the boot log shows no memory or tensor arena error. Run `tools/bench-voice-test` both times.
 - On the bench, confirm a fetched clip is channel 1 audio at the wake word model's gain with no clipping, and that "Hey Robin" sits at its end.
 - Confirm by hand that a wake with the mute switch on changes nothing the endpoint serves.

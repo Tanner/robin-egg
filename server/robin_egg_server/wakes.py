@@ -1,8 +1,8 @@
 """Listen to the saved wake clips, label them, count them and export them: python -m robin_egg_server.wakes --help
 
 review plays each unlabelled clip, oldest first, and takes one key for it: real, false, real
-with a missed try before it, delete, play again, skip, back or quit. A real clip's cut is the last
-loud span, the try that woke the egg, once the reviewer hears it on its own and approves it.
+with a missed try before it, delete, play again, skip, back or quit. A real clip's cut is its last
+1.5 seconds, where the try that woke the egg is, once the reviewer hears it on its own and approves it.
 Back takes the label off the clip labelled before, and review --all goes through the labelled
 clips too, so a wrong label can be put right.
 
@@ -33,6 +33,9 @@ from .wake_clips import DEFAULT_WAKES, FALSE, REAL, STOPPED_A_REPLY, Entry, Wake
 RATE = 16000
 # A false wake's cut: the end of the clip, where the sound that set the egg off is.
 FALSE_CUT_S = 3.0
+# A real wake's cut: the end of the clip, since the egg freezes it the moment it hears the wake
+# word, and the training notebook keeps the last 1.5 seconds of every real take.
+REAL_CUT_S = 1.5
 # The training notebook reads positive/ and negative/ in here as takes, as they are.
 DEFAULT_TAKES = Path(__file__).resolve().parents[2] / "wakeword" / "recordings" / "egg_takes"
 
@@ -198,16 +201,18 @@ def _label(
                 store.write(entry)
                 out(f"Labelled {entry.path.name} false, with its last {FALSE_CUT_S:g} seconds as the cut.")
                 return LABELLED
-            found = spans(samples)
             entry.label, entry.cut, entry.misses = REAL, None, []
-            if found:
-                start, end = found[-1]
-                cut = samples[start:end]
+            cut_start = max(0, len(samples) - int(REAL_CUT_S * RATE))
+            if len(samples):
+                cut = samples[cut_start:]
                 play(cut)
                 if _yes(ask, CUT_QUESTION, lambda: play(cut)):
-                    entry.cut = (start, end)
+                    entry.cut = (cut_start, len(samples))
             if key == "m":
-                for start, end in found[:-1]:
+                earlier = [(start, end) for start, end in spans(samples) if end <= cut_start]
+                if not earlier:
+                    out("No earlier try could be picked out of this clip.")
+                for start, end in earlier:
                     attempt = samples[start:end]
                     play(attempt)
                     if _yes(ask, MISS_QUESTION, lambda: play(attempt)):

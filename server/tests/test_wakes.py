@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 
 from robin_egg_server.wake_clips import FALSE, PROBABLY_REAL, REAL, STOPPED_A_REPLY, TURN, Entry, WakeClipStore
-from robin_egg_server.wakes import FALSE_CUT_S, RATE, export, main, play, review, spans, summarise
+from robin_egg_server.wakes import FALSE_CUT_S, RATE, REAL_CUT_S, export, main, play, review, spans, summarise
 
 START = datetime(2026, 11, 19, 8, 14, 0).astimezone()
 
@@ -107,20 +107,78 @@ def test_spans_follow_the_notebook_rule():
     assert spans(clip(silence(0.5), tone(3.5), silence(0.5))) == []
 
 
-def test_real_stores_the_last_span_once_confirmed(tmp_path):
+def test_real_stores_the_last_one_and_a_half_seconds_once_confirmed(tmp_path):
+    five = clip(silence(1.0), tone(0.8), silence(0.2), tone(0.5), silence(1.5), tone(1.0))
+    assert len(five) == 5 * RATE
     store = WakeClipStore(tmp_path)
-    save(store, TWO_SPANS)
+    save(store, five)
     session = Session("r", "y")
     assert session.run(store) == 1
     [labelled] = store.entries()
-    last = spans(TWO_SPANS)[-1]
+    assert REAL_CUT_S == 1.5
     assert labelled.label == REAL
-    assert labelled.cut == last
+    assert labelled.cut == (len(five) - 24000, len(five))
     assert labelled.misses == []
     assert len(session.played) == 2
-    assert np.array_equal(session.played[0], TWO_SPANS)
-    assert np.array_equal(session.played[1], TWO_SPANS[last[0] : last[1]])
+    assert np.array_equal(session.played[0], five)
+    assert np.array_equal(session.played[1], five[-24000:])
     assert session.asked[-1] == "Is this cut a clean Hey Robin? [y/n]  [space] play again"
+
+
+def test_real_on_a_clip_shorter_than_the_cut_takes_the_whole_clip(tmp_path):
+    short = tone(1.0)
+    store = WakeClipStore(tmp_path)
+    save(store, short)
+    session = Session("r", "y")
+    assert session.run(store) == 1
+    [labelled] = store.entries()
+    assert labelled.cut == (0, len(short))
+    assert np.array_equal(session.played[1], short)
+
+
+# Steady noise, never 35 dB under its peak, like the egg's processed mic audio.
+STEADY_NOISE = (np.random.default_rng(7).normal(0, 3000, 5 * RATE)).astype(np.int16)
+
+
+def test_real_on_audio_with_no_quiet_still_offers_its_cut(tmp_path):
+    assert spans(STEADY_NOISE) == []
+    store = WakeClipStore(tmp_path)
+    save(store, STEADY_NOISE)
+    session = Session("r", "y")
+    assert session.run(store) == 1
+    [labelled] = store.entries()
+    assert labelled.cut == (len(STEADY_NOISE) - 24000, len(STEADY_NOISE))
+    assert np.array_equal(session.played[1], STEADY_NOISE[-24000:])
+
+
+def test_missed_with_no_earlier_span_says_so_and_stores_no_miss(tmp_path):
+    store = WakeClipStore(tmp_path)
+    save(store, STEADY_NOISE)
+    session = Session("m", "y")
+    assert session.run(store) == 1
+    [labelled] = store.entries()
+    assert labelled.cut == (len(STEADY_NOISE) - 24000, len(STEADY_NOISE))
+    assert labelled.misses == []
+    assert "No earlier try could be picked out of this clip." in session.lines
+    assert len(session.played) == 2  # the clip and its cut, no earlier try
+
+
+def test_a_span_that_overlaps_the_real_cut_is_not_offered_as_a_miss(tmp_path):
+    # the cut starts at 2.2 s, inside the second span (1.7 to 2.7 s)
+    overlapping = clip(silence(0.5), tone(0.6), silence(0.6), tone(1.0), silence(1.0))
+    found = spans(overlapping)
+    assert len(found) == 2
+    cut_start = len(overlapping) - int(REAL_CUT_S * RATE)
+    assert found[0][1] <= cut_start < found[1][1]
+    store = WakeClipStore(tmp_path)
+    save(store, overlapping)
+    session = Session("m", "y", "y")
+    assert session.run(store) == 1
+    [labelled] = store.entries()
+    assert labelled.cut == (cut_start, len(overlapping))
+    assert labelled.misses == [found[0]]
+    assert len(session.played) == 3
+    assert np.array_equal(session.played[2], overlapping[found[0][0] : found[0][1]])
 
 
 def test_real_with_a_rejected_cut_keeps_the_label_only(tmp_path):
@@ -141,7 +199,7 @@ def test_missed_tries_are_stored(tmp_path):
     assert session.run(store) == 1
     [labelled] = store.entries()
     assert labelled.label == REAL
-    assert labelled.cut == found[-1]
+    assert labelled.cut == (len(THREE_SPANS) - int(REAL_CUT_S * RATE), len(THREE_SPANS))
     assert labelled.misses == [found[0]]
     assert session.asked[-2:] == ["Was this a Hey Robin the egg missed? [y/n]  [space] play again"] * 2
     assert np.array_equal(session.played[2], THREE_SPANS[found[0][0] : found[0][1]])
@@ -160,11 +218,11 @@ def test_false_stores_the_last_three_seconds(tmp_path):
 
 
 def test_a_clip_with_no_span_can_still_be_labelled(tmp_path):
-    quiet_store = WakeClipStore(tmp_path / "quiet")
-    save(quiet_store, silence(5.0))
+    empty_store = WakeClipStore(tmp_path / "empty")
+    save(empty_store, silence(0.0))
     session = Session("r")
-    assert session.run(quiet_store) == 1
-    [labelled] = quiet_store.entries()
+    assert session.run(empty_store) == 1
+    [labelled] = empty_store.entries()
     assert labelled.label == REAL
     assert labelled.cut is None
     assert len(session.asked) == 1  # only the key line, never the cut question
@@ -240,9 +298,10 @@ def test_space_plays_the_cut_again_before_the_answer(tmp_path):
     session = Session("m", " ", "y", "y", " ", " ", "n")
     assert session.run(store) == 1
     [labelled] = store.entries()
-    assert labelled.cut == found[-1]
+    cut_start = len(THREE_SPANS) - int(REAL_CUT_S * RATE)
+    assert labelled.cut == (cut_start, len(THREE_SPANS))
     assert labelled.misses == [found[0]]
-    cut, first, second = (THREE_SPANS[start:end] for start, end in (found[2], found[0], found[1]))
+    cut, first, second = (THREE_SPANS[start:end] for start, end in ((cut_start, len(THREE_SPANS)), found[0], found[1]))
     expected = [THREE_SPANS, cut, cut, first, second, second, second]
     assert len(session.played) == len(expected)
     assert all(np.array_equal(heard, want) for heard, want in zip(session.played, expected))
@@ -562,6 +621,17 @@ def test_export_writes_one_file_per_take(tmp_path):
     assert by_name[with_miss.path.name].exported == [str(dest / "positive" / f"{stem}.wav"), str(dest / "positive" / f"{stem}-miss1.wav")]
     assert by_name[no_cut.path.name].exported == []
     assert by_name[false.path.name].exported == [str(dest / "negative" / f"{false.path.stem}.wav")]
+
+
+def test_export_writes_the_real_cut_review_stored_sample_for_sample(tmp_path):
+    store = WakeClipStore(tmp_path / "wakes")
+    saved = save(store, STEADY_NOISE)
+    assert Session("r", "y").run(store) == 1
+    dest = tmp_path / "takes"
+    assert export(store, dest, out=lambda line: None) == (1, 0)
+    params, heard = read_take(dest / "positive" / f"{saved.path.stem}.wav")
+    assert params == (RATE, 1, 2)
+    assert np.array_equal(heard, STEADY_NOISE[-int(REAL_CUT_S * RATE) :])
 
 
 def test_export_twice_writes_nothing_new(tmp_path):
