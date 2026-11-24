@@ -357,7 +357,7 @@ def test_a_refused_post_is_an_error_with_the_status():
 
 def test_unreachable_robin_assistant_is_an_error():
     async def scenario():
-        brain = RobinBrain("http://127.0.0.1:9", "robin")  # nothing listens on the discard port
+        brain = RobinBrain("http://127.0.0.1:9", "robin", restart_retry_s=0)  # nothing listens on the discard port
         try:
             async for _ in brain.reply("hello", user="Unknown Speaker"):
                 pass
@@ -368,6 +368,89 @@ def test_unreachable_robin_assistant_is_an_error():
 
     err = asyncio.run(scenario())
     assert isinstance(err, RobinUnavailable) and "Could not reach" in str(err)
+
+
+class RestartingRobinAssistant(FakeRobinAssistant):
+    """Answers the first `refusals` posts with 503, as a reloading agent does, then plays its scripts."""
+
+    def __init__(self, scripts: list[list[tuple]], refusals: int) -> None:
+        super().__init__(scripts)
+        self.refusals = refusals
+
+    async def _handle(self, reader, writer):
+        if self.refusals > 0:
+            self.refusals -= 1
+            head = (await reader.readuntil(b"\r\n\r\n")).decode()
+            length = int(re.search(r"content-length:\s*(\d+)", head, re.I).group(1))
+            body = await reader.readexactly(length)
+            fields = dict(re.findall(r'name="([^"]+)"\r\n\r\n(.*?)\r\n--', body.decode(), re.S))
+            self.requests.append({"line": head.split("\r\n")[0], "headers": {}, "fields": fields})
+            message = b'{"error":"restarting"}'
+            writer.write(f"HTTP/1.1 503 X\r\nContent-Length: {len(message)}\r\nRetry-After: 0\r\nConnection: close\r\n\r\n".encode() + message)
+            await writer.drain()
+            writer.close()
+            return
+        await super()._handle(reader, writer)
+
+
+def test_a_question_robin_assistant_could_not_take_is_posted_again_with_the_same_send_id():
+    async def scenario():
+        fake = RestartingRobinAssistant([answer("Back now.")], refusals=2)
+        brain = RobinBrain(await fake.start(), "robin")
+        try:
+            got = [piece async for piece in brain.reply("are you there", user="Unknown Speaker")]
+            return got, fake.requests
+        finally:
+            await brain.close()
+            await fake.stop()
+
+    got, requests = asyncio.run(scenario())
+    assert got == ["Back now.\n"]
+    assert len(requests) == 3
+    assert len({r["fields"]["send_id"] for r in requests}) == 1
+
+
+def test_a_question_robin_assistant_keeps_refusing_gives_up_after_the_retry_window():
+    async def scenario():
+        fake = RestartingRobinAssistant([], refusals=1000)
+        brain = RobinBrain(await fake.start(), "robin", restart_retry_s=0.5)
+        try:
+            async for _ in brain.reply("are you there", user="Unknown Speaker"):
+                pass
+        except Exception as err:  # noqa: BLE001
+            return err, fake.requests
+        finally:
+            await brain.close()
+            await fake.stop()
+
+    err, requests = asyncio.run(scenario())
+    assert isinstance(err, RobinUnavailable) and "503" in str(err)
+    assert len(requests) >= 2
+
+
+def test_a_question_is_posted_again_once_robin_assistant_is_reachable():
+    async def scenario():
+        fake = FakeRobinAssistant([answer("Restarted.")])
+        url = await fake.start()
+        port = int(url.rsplit(":", 1)[1])
+        await fake.stop()  # down, as while the process restarts
+        brain = RobinBrain(url, "robin")
+
+        async def come_back():
+            await asyncio.sleep(0.5)
+            fake._server = await asyncio.start_server(fake._handle, "127.0.0.1", port)
+
+        back = asyncio.create_task(come_back())
+        try:
+            got = [piece async for piece in brain.reply("hello", user="Unknown Speaker")]
+            return got
+        finally:
+            await back
+            await brain.close()
+            fake._server.close()
+            await fake._server.wait_closed()
+
+    assert asyncio.run(scenario()) == ["Restarted.\n"]
 
 
 def test_strip_markdown_leaves_plain_spoken_words():

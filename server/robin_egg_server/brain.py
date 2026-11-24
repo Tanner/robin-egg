@@ -32,6 +32,15 @@ class RobinTooSlow(RobinUnavailable):
 
 
 
+# How long a question is posted again while robin-assistant cannot take it, as
+# while it restarts. It answers 503 while an agent reloads and refuses
+# connections while the process restarts; both take seconds. Each try carries
+# the same send_id, so a try that got through is not written twice.
+RESTART_RETRY_S = 30.0
+FIRST_RETRY_DELAY_S = 1.0
+MAX_RETRY_DELAY_S = 4.0
+
+
 class Brain(Protocol):
     def reply(self, heard: str, user: str, reply_to: int | None = None, follow_up: bool = False) -> AsyncIterator[str]: ...
 
@@ -101,6 +110,7 @@ class RobinBrain:
         agent: str,
         timeout_s: float = 90.0,
         people_timeout_s: float = 5.0,
+        restart_retry_s: float = RESTART_RETRY_S,
     ) -> None:
         import httpx2
 
@@ -108,6 +118,7 @@ class RobinBrain:
         self.chat_url = f"{url.rstrip('/')}/api/chat/{agent}"
         self.endpoint = f"{self.chat_url}/messages"
         self.url, self.timeout_s, self.people_timeout_s = url.rstrip("/"), timeout_s, people_timeout_s
+        self.restart_retry_s = restart_retry_s  # how long a question robin-assistant could not take is posted again
         # No read timeout from the client: the overall deadline below covers a silent server.
         self.client = httpx2.AsyncClient(timeout=httpx2.Timeout(10.0, read=None))
         self.accepted_id: int | None = None  # the row robin-assistant stored the last message as
@@ -130,51 +141,73 @@ class RobinBrain:
         if follow_up:
             fields["follow_up"] = "1"
         deadline = time.monotonic() + self.timeout_s
+        retry_until = time.monotonic() + self.restart_retry_s
+        delay = FIRST_RETRY_DELAY_S
         replies = 0
         outcome = None
         LOG.info('Asking Robin at %s as %s%s: "%s"', self.endpoint, user, " in a follow-up with no wake word" if follow_up else "", heard)
-        try:
-            async with self.client.stream(
-                "POST",
-                self.endpoint,
-                files={k: (None, v) for k, v in fields.items()},  # the route reads multipart form data
-                headers={"Accept": "text/event-stream"},
-            ) as resp:
-                if resp.is_redirect:
-                    raise RobinUnavailable(f"robin-assistant at {self.endpoint} redirects to {redirect_target(resp)}. Start with --server {redirect_target(resp)}")
-                if resp.status_code != 200:
-                    body = (await resp.aread()).decode("utf-8", "replace")[:200]
-                    raise RobinUnavailable(f"robin-assistant answered {resp.status_code}: {body}")
-                events = sse_events(resp.aiter_lines())
-                while True:
-                    left = deadline - time.monotonic()
-                    if left <= 0:
-                        raise RobinTooSlow(f"Robin did not finish answering within {self.timeout_s:.0f} s")
-                    try:
-                        name, data = await asyncio.wait_for(anext(events), left)
-                    except StopAsyncIteration:
-                        raise RobinUnavailable("robin-assistant closed the reply stream before the turn ended") from None
-                    except asyncio.TimeoutError:
-                        raise RobinTooSlow(f"Robin did not finish answering within {self.timeout_s:.0f} s") from None
-                    if name == "accepted":
-                        LOG.debug("robin-assistant accepted the message as row %s", data.get("id"))
-                        if _row_id(data.get("id")) is not None:
-                            self.accepted_id = data["id"]
-                    elif name == "reply":
-                        if _row_id(data.get("id")) is not None:
-                            self.reply_ids.append(data["id"])
-                        text = strip_markdown(str(data.get("text", "")))
-                        if text:
-                            replies += 1
-                            # A newline keeps two messages from running together into one sentence.
-                            yield text + "\n"
-                    elif name == "end":
-                        outcome = data.get("outcome")
-                        if isinstance(data.get("listen"), bool):
-                            self.listen = data["listen"]
-                        break
-        except httpx2.HTTPError as err:
-            raise RobinUnavailable(f"Could not reach robin-assistant at {self.endpoint}: {err}") from err
+        while True:
+            # Set when robin-assistant took nothing, so the same message can be posted again.
+            again: tuple[str, float | None] | None = None
+            try:
+                async with self.client.stream(
+                    "POST",
+                    self.endpoint,
+                    files={k: (None, v) for k, v in fields.items()},  # the route reads multipart form data
+                    headers={"Accept": "text/event-stream"},
+                ) as resp:
+                    if resp.is_redirect:
+                        raise RobinUnavailable(f"robin-assistant at {self.endpoint} redirects to {redirect_target(resp)}. Start with --server {redirect_target(resp)}")
+                    if resp.status_code == 503:
+                        body = (await resp.aread()).decode("utf-8", "replace")[:200]
+                        again = (f"robin-assistant answered 503: {body}", retry_after(resp))
+                    elif resp.status_code != 200:
+                        body = (await resp.aread()).decode("utf-8", "replace")[:200]
+                        raise RobinUnavailable(f"robin-assistant answered {resp.status_code}: {body}")
+                    else:
+                        events = sse_events(resp.aiter_lines())
+                        while True:
+                            left = deadline - time.monotonic()
+                            if left <= 0:
+                                raise RobinTooSlow(f"Robin did not finish answering within {self.timeout_s:.0f} s")
+                            try:
+                                name, data = await asyncio.wait_for(anext(events), left)
+                            except StopAsyncIteration:
+                                raise RobinUnavailable("robin-assistant closed the reply stream before the turn ended") from None
+                            except asyncio.TimeoutError:
+                                raise RobinTooSlow(f"Robin did not finish answering within {self.timeout_s:.0f} s") from None
+                            if name == "accepted":
+                                LOG.debug("robin-assistant accepted the message as row %s", data.get("id"))
+                                if _row_id(data.get("id")) is not None:
+                                    self.accepted_id = data["id"]
+                            elif name == "reply":
+                                if _row_id(data.get("id")) is not None:
+                                    self.reply_ids.append(data["id"])
+                                text = strip_markdown(str(data.get("text", "")))
+                                if text:
+                                    replies += 1
+                                    # A newline keeps two messages from running together into one sentence.
+                                    yield text + "\n"
+                            elif name == "end":
+                                outcome = data.get("outcome")
+                                if isinstance(data.get("listen"), bool):
+                                    self.listen = data["listen"]
+                                break
+            except httpx2.ConnectError as err:
+                # Nothing reached robin-assistant, which is what a restart looks like.
+                again = (f"Could not reach robin-assistant at {self.endpoint}: {err}", None)
+            except httpx2.HTTPError as err:
+                raise RobinUnavailable(f"Could not reach robin-assistant at {self.endpoint}: {err}") from err
+            if again is None:
+                break
+            failure, asked = again
+            wait = delay if asked is None else asked
+            delay = min(delay * 2, MAX_RETRY_DELAY_S)
+            if time.monotonic() + wait > min(retry_until, deadline):
+                raise RobinUnavailable(failure)
+            # The same send_id, so robin-assistant writes the message once even if an earlier try got through.
+            LOG.info("Asking Robin again in %.1f s, after: %s", wait, failure)
+            await asyncio.sleep(wait)
         LOG.info("Robin's turn ended with outcome %s after %d replies", outcome, replies)
         if replies and outcome in ("response", "quiet", "error"):
             return  # a failed turn's apology was spoken, so no second apology on top of it

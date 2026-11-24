@@ -92,6 +92,7 @@ Rules:
 - Disable the idle timeout for these responses with `httpServer.timeout(req, 0)`, as the events route does (`src/admin/server.ts:318-320`). The event-stream form also sends a `: ping` comment every 15 s.
 - If the client disconnects, nothing is cancelled. The turn finishes and its rows stay in the chat.
 - A retry with the same `send_id` must not write the message again. Today `acceptOnce` only remembers a `202` JSON answer (`chat-routes.ts:426-428`). A retried `wait=1` attaches to the original message's wait.
+- The egg posts a question again, with the same `send_id`, when robin-assistant answers `503` or refuses the connection, for up to 30 s (`RESTART_RETRY_S` in `brain.py`). That covers a restart or reload landing between turns. robin-assistant also holds off a restart for a minute after each speaker chat turn ends (`SPEAKER_CONVERSATION_MS`).
 - A command message with `wait=1` gets `400`.
 - A thread target with `wait=1` gets `400`, until threads go through `receive`.
 
