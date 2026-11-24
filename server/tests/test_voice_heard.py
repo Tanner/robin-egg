@@ -1,4 +1,5 @@
-"""Voices heard near the egg become the egg_last_heard fact, at most every 10 minutes.
+"""Voices heard near the egg become the egg_last_heard fact, at most every 10 minutes,
+and 15 minutes of listening without them make it quiet.
 
 The firmware's "Voice Heard" sensor is on while the DSP's voice direction keeps moving.
 The server ignores it during and just after the egg's own speech and turns, and while muted.
@@ -15,8 +16,8 @@ from aioesphomeapi import VoiceAssistantEventType
 
 from robin_egg_server.egg import Options, Robin
 from robin_egg_server.fake_egg import FakeEgg
-from robin_egg_server.room_context import DESCRIPTIONS, EGG_LAST_HEARD, ContextClient, RoomContext
-from robin_egg_server.voice_heard import CHECK_S, REPOST_S, SETTLE_S, VoiceHeard
+from robin_egg_server.room_context import DESCRIPTIONS, EGG_LAST_HEARD, LAST_HEARD_TTL_S, QUIET_TTL_S, ContextClient, RoomContext
+from robin_egg_server.voice_heard import CHECK_S, QUIET_S, REPOST_S, SETTLE_S, VoiceHeard
 from robin_egg_server.speaker_stream import SpeakerMessage
 from robin_egg_server.web import AudioServer
 from test_mic_mute import opening_run_over, post
@@ -38,7 +39,7 @@ class Clock:
 
 def watcher(reason=lambda: None):
     clock, reports = Clock(), []
-    heard = VoiceHeard(reason, lambda: reports.append(clock.now), clock=clock)
+    heard = VoiceHeard(reason, lambda: reports.append(clock.now), lambda: reports.append(("quiet", clock.now)), clock=clock)
     return heard, clock, reports
 
 
@@ -78,6 +79,65 @@ def test_off_does_not_report():
     heard, clock, reports = watcher()
     assert not heard.consider()
     assert reports == []
+
+
+def test_fifteen_minutes_without_voices_reports_quiet_once():
+    heard, clock, reports = watcher()
+    heard.on = True
+    heard.consider()
+    heard.on = False
+    clock.now += QUIET_S - 1
+    assert not heard.consider()
+    clock.now += 1
+    assert heard.consider()
+    clock.now += 3600
+    assert not heard.consider()
+    assert reports == [1000.0, ("quiet", 1000.0 + QUIET_S)]
+
+
+def test_voices_after_quiet_report_at_once():
+    heard, clock, reports = watcher()
+    clock.now += QUIET_S
+    assert heard.consider()
+    heard.on = True
+    assert heard.consider()
+    assert reports == [("quiet", 1000.0 + QUIET_S), 1000.0 + QUIET_S]
+
+
+def test_quiet_waits_for_voices_to_stop():
+    heard, clock, reports = watcher()
+    heard.on = True
+    for _ in range(20):
+        clock.now += CHECK_S
+        heard.consider()
+    assert not any(isinstance(r, tuple) for r in reports)
+
+
+def test_time_spent_ignoring_is_not_quiet():
+    why = ["the microphone is muted"]
+    heard, clock, reports = watcher(lambda: why[0])
+    clock.now += QUIET_S * 2
+    assert not heard.consider()  # muted the whole time: nothing was listening
+    why[0] = None
+    clock.now += QUIET_S - 1
+    assert not heard.consider()
+    clock.now += 1
+    assert heard.consider()
+    assert reports == [("quiet", 1000.0 + 3 * QUIET_S)]
+
+
+def test_a_reconnect_starts_the_quiet_over_but_remembers_quiet_was_told():
+    heard, clock, reports = watcher()
+    clock.now += QUIET_S - 60
+    heard.reset()
+    clock.now += 60
+    assert not heard.consider()
+    clock.now += QUIET_S
+    assert heard.consider()
+    heard.reset()
+    clock.now += 2 * QUIET_S
+    assert not heard.consider()
+    assert len(reports) == 1
 
 
 def test_reset_forgets_the_state_but_not_the_last_report():
@@ -151,6 +211,24 @@ def test_voices_post_egg_last_heard():
     assert len(posts) == 1
     assert posts[0]["value"] == "voices nearby"
     assert posts[0]["description"] == DESCRIPTIONS[EGG_LAST_HEARD]
+
+
+def test_voices_then_quiet_post_both_with_their_ttls():
+    egg = FakeEgg([])
+
+    async def scenario(robin, clock, fake):
+        robin.voice_heard.clock = clock
+        robin.voice_heard._listening_since = clock.now
+        clock.now += SETTLE_S + 1
+        egg.set_voice_heard(True)
+        await eventually(lambda: heard_posts(fake))
+        egg.set_voice_heard(False)
+        await eventually(lambda: not robin.voice_heard.on)
+        clock.now += QUIET_S
+        await eventually(lambda: len(heard_posts(fake)) == 2)
+
+    posts = heard_posts(asyncio.run(with_voices(egg, scenario)))
+    assert [(p["value"], p["ttl"]) for p in posts] == [("voices nearby", LAST_HEARD_TTL_S), ("quiet", QUIET_TTL_S)]
 
 
 def test_voices_while_muted_post_nothing():

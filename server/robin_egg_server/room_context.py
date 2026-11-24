@@ -28,7 +28,7 @@ MAX_DESCRIPTION_CHARS = 200  # and longer descriptions
 EGG_CONNECTION = "egg_connection"  # connected | disconnected
 EGG_LAST_SPEAKER = "egg_last_speaker"  # who last spoke to the egg; the fact's own time says when
 EGG_LAST_MESSAGE = "egg_last_message"  # what became of the last message Robin sent on its own
-EGG_LAST_HEARD = "egg_last_heard"  # voices were heard near the egg; the fact's own time says when
+EGG_LAST_HEARD = "egg_last_heard"  # voices nearby | quiet; the fact's own time says when
 
 # What each fact means, sent with every post so Robin reads it beside the fact. Every
 # live fact's description goes into each new context block, so keep them short.
@@ -36,13 +36,14 @@ DESCRIPTIONS = {
     EGG_CONNECTION: "Whether the speaker egg in the room is connected to Robin.",
     EGG_LAST_SPEAKER: "Who last spoke to the egg; the time says when.",
     EGG_LAST_MESSAGE: "What became of the last message Robin sent to the egg on its own.",
-    EGG_LAST_HEARD: "Voices were heard near the egg, not necessarily talking to it, within 10 minutes of this time. TV counts.",
+    EGG_LAST_HEARD: "voices nearby: heard near the egg within 10 min of this time; TV counts. quiet: none heard for 15 min before, or since.",
 }
 
 CONNECTION_TTL_S = 6 * 3600
 LAST_SPEAKER_TTL_S = 2 * 3600
 LAST_MESSAGE_TTL_S = 3600
-LAST_HEARD_TTL_S = 2 * 3600
+LAST_HEARD_TTL_S = 15 * 60  # posted again every 10 minutes while voices go on, so it lapses soon after they stop
+QUIET_TTL_S = 12 * 3600  # posted once when the quiet starts; long enough for a night
 
 
 class ContextClient:
@@ -116,6 +117,10 @@ class RoomContext:
     def voices_heard(self) -> None:
         """Voices were heard near the egg. Each report is new: the time it is posted at is the news."""
         self.note(EGG_LAST_HEARD, "voices nearby", LAST_HEARD_TTL_S, again=True)
+
+    def quiet(self) -> None:
+        """No voices near the egg for a while. Posted once; the time it is posted at says since when."""
+        self.note(EGG_LAST_HEARD, "quiet", QUIET_TTL_S, again=True)
 
     def digest_outcome(self, fact: str) -> None:
         """What became of several messages spoken as one announcement, as one fact."""

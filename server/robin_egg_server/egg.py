@@ -204,7 +204,7 @@ class Robin:
         self._abandoned: dict[int, str] = {}  # how recent turns ended that gave up before Robin's answer came, by their user row
         self._unfinished_replies: deque[int] = deque(maxlen=32)  # replies already reported as not spoken to the end
         self.mic_mute = MicMute()
-        self.voice_heard = VoiceHeard(self._voice_ignore_reason, self._voices_heard)
+        self.voice_heard = VoiceHeard(self._voice_ignore_reason, self._voices_heard, self._room_quiet)
         self.mic_mute.on_state = self.voice_heard.consider  # voices held back until mute was known count once it is
         self._turn_ended_at = -math.inf  # when the last turn ended, on played_clock()
         self._announced_at = -math.inf  # when the last announcement ended, on played_clock()
@@ -1123,6 +1123,10 @@ class Robin:
     def _voices_heard(self) -> None:
         if self.room_context is not None:
             self.room_context.voices_heard()
+
+    def _room_quiet(self) -> None:
+        if self.room_context is not None:
+            self.room_context.quiet()
 
     def _busy_reason(self) -> str | None:
         """Why Robin should not speak first right now, or None when the egg is idle."""

@@ -5,6 +5,10 @@ moving, which it does when people talk (or a TV does) and not in a quiet room. O
 on/off state leaves the egg. The server lists the egg's entities once per connection, finds
 the sensor by its object id, follows its state, and decides when the voices are news for
 Robin: at most once every REPOST_S, and never while ignore_reason gives a reason.
+
+Quiet is news too. Once the egg has listened for QUIET_S with the sensor off and nothing
+to ignore, Robin is told the room is quiet, once, until voices are heard again. Time spent
+muted, busy or disconnected is not listening, so it never counts towards quiet.
 """
 
 from __future__ import annotations
@@ -19,7 +23,8 @@ LOG = logging.getLogger("robin.egg")
 
 VOICE_HEARD_OBJECT_ID = "voice_heard"  # ESPHome's object id for the name "Voice Heard"
 REPOST_S = 600.0  # tell Robin again at most this often while voices go on
-CHECK_S = 60.0  # how often to look again while the sensor stays on
+CHECK_S = 60.0  # how often to look again, for voices that go on and for quiet
+QUIET_S = 900.0  # listening this long with no voices makes the room quiet
 # The firmware holds the sensor on for 10 s after the direction last moved, so the egg's
 # own speech, and the beam lock and unlock of a turn, can show for that long afterwards.
 SETTLE_S = 12.0
@@ -32,15 +37,19 @@ class VoiceHeard:
         self,
         ignore_reason: Callable[[], str | None],
         report: Callable[[], None],
+        report_quiet: Callable[[], None] = lambda: None,
         clock: Callable[[], float] = time.monotonic,
         repost_s: float = REPOST_S,
         check_s: float = CHECK_S,
+        quiet_s: float = QUIET_S,
     ) -> None:
-        self.ignore_reason, self.report, self.clock = ignore_reason, report, clock
-        self.repost_s, self.check_s = repost_s, check_s
+        self.ignore_reason, self.report, self.report_quiet, self.clock = ignore_reason, report, report_quiet, clock
+        self.repost_s, self.check_s, self.quiet_s = repost_s, check_s, quiet_s
         self.on = False
         self._key: int | None = None  # the sensor's entity key on this connection
         self._last_report: float | None = None  # kept across connections, so a reconnect is not news
+        self._told_quiet = False  # kept across connections too: Robin still holds the last thing it was told
+        self._listening_since = clock()  # since when the sensor has been off with nothing to ignore
         self._ticker: asyncio.Task | None = None
         self._said_missing = False
 
@@ -48,6 +57,7 @@ class VoiceHeard:
         """Forget the state: a key or a state from one connection says nothing about the next."""
         self.on = False
         self._key = None
+        self._listening_since = self.clock()
         if self._ticker is not None:
             self._ticker.cancel()
             self._ticker = None
@@ -72,20 +82,31 @@ class VoiceHeard:
             LOG.warning("Could not read the egg's %s sensor, so Robin will not be told when voices are heard nearby (%s)", VOICE_HEARD_OBJECT_ID, err)
 
     def consider(self) -> bool:
-        """Reports the voices if the sensor is on and they are news. True when it reported."""
-        if not self.on:
-            return False
+        """Reports the voices if the sensor is on and they are news, or quiet once it has lasted. True when it reported."""
+        now = self.clock()
         reason = self.ignore_reason()
+        if self.on or reason is not None:
+            self._listening_since = now
+        if not self.on:
+            return reason is None and self._consider_quiet(now)
         if reason is not None:
             LOG.debug("Heard voices near the egg but not telling Robin: %s", reason)
             return False
-        now = self.clock()
-        if self._last_report is not None and now - self._last_report < self.repost_s:
+        if not self._told_quiet and self._last_report is not None and now - self._last_report < self.repost_s:
             LOG.debug("Heard voices near the egg but not telling Robin: told %.0f s ago", now - self._last_report)
             return False
         self._last_report = now
+        self._told_quiet = False
         LOG.info("Heard voices near the egg; telling Robin someone is around")
         self.report()
+        return True
+
+    def _consider_quiet(self, now: float) -> bool:
+        if self._told_quiet or now - self._listening_since < self.quiet_s:
+            return False
+        self._told_quiet = True
+        LOG.info("Heard no voices near the egg for %.0f minutes; telling Robin the room is quiet", (now - self._listening_since) / 60)
+        self.report_quiet()
         return True
 
     def _on_state(self, state: Any) -> None:

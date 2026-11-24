@@ -136,6 +136,7 @@ Settled choices and the reason for each. Do not reopen these without a new reaso
 | Voices do not count while the microphone is muted, while the egg is busy, or for 12 s after it plays or a conversation ends | Mute asks for quiet. The egg's own speech, and the beam locking and unlocking around a turn, must not look like someone in the room. A turn already tells Robin who spoke |
 | Each fact carries its own `description`, which Robin reads after the time, instead of explaining the facts in Robin's prompt | Whoever posts a fact explains it, so a new fact needs no prompt edit in another repo. Every egg fact got one |
 | TV and radio count as voices | Nothing on the egg can tell them apart from people. The description says so, so Robin can weigh it |
+| After 15 minutes of listening with no voices, `egg_last_heard` becomes `quiet`, posted once with a 12-hour TTL. `voices nearby` now lives 15 minutes, not 2 hours (decided 2026-11-24) | An old `voices nearby` time only hinted at quiet, and after 2 hours Robin could not tell a quiet room from an egg that was not reporting. Time spent muted, busy or disconnected does not count towards quiet, so a muted egg never shows whether anyone talked |
 
 ## Wake clips, decided 2026-11-20
 
