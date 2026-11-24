@@ -206,7 +206,7 @@ def test_quiet_words_mid_enrolment_are_an_enrolment_answer(tmp_path):
     _, commands, kwargs = enrolment(tmp_path)
     texts = ["learn my voice", "quiet for an hour", "stop"]
     egg, robin = asyncio.run(converse([speech(2.0) for _ in texts], FakeSTT(texts), SlowBrain([]), ToneTTS(), **kwargs))
-    assert egg.runs[1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "I only know Tanner. Who am I talking to?"
+    assert egg.runs[1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == 'I heard "quiet for an hour", which isn\'t a name I know. I know Tanner. Who am I talking to?'
     assert robin.quiet.until is None
 
 

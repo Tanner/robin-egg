@@ -615,7 +615,7 @@ def test_a_mumble_while_asking_for_the_name_counts_as_a_miss(tmp_path):
     _, commands, kwargs = enrolment(tmp_path)
     texts = ["learn my voice", "", "Tanner", "stop"]
     egg, _ = asyncio.run(converse([speech(2.0) for _ in texts], FakeSTT(texts), SlowBrain([]), ToneTTS(), **kwargs))
-    assert egg.runs[1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "I only know Tanner. Who am I talking to?"
+    assert egg.runs[1].data(pb.VOICE_ASSISTANT_TTS_START)["text"] == "I didn't catch a name. I know Tanner. Who am I talking to?"
     assert egg.runs[2].data(pb.VOICE_ASSISTANT_TTS_START)["text"].endswith(ENROL_SENTENCES[0])
 
 

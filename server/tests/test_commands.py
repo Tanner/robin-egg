@@ -25,7 +25,7 @@ from robin_egg_server.speakers import Match, People, Person, Thresholds, Voicepr
 TANNER = Person("tanner", "Tanner")
 RYAN = Person("ryan", "Ryan")
 
-RETRY_NAME = "I only know Tanner and Ryan. Who am I talking to?"
+RETRY_NAME = 'I heard "bob", which isn\'t a name I know. I know Tanner and Ryan. Who am I talking to?'
 INTRO = "I'll read you ten short sentences. Repeat each one after me, in your normal voice. "
 
 
@@ -158,7 +158,7 @@ def test_unknown_name_twice_ends(tmp_path):
     step = say(commands, "Bob")
     assert (step.say, step.listen) == (RETRY_NAME, True)
     step = say(commands, "Alice")
-    assert (step.say, step.listen) == ("Okay, let's try another time.", False)
+    assert (step.say, step.listen) == ('I heard "alice", which still isn\'t a name I know, so I\'ve stopped. Say "learn my voice" to try again.', False)
     assert not commands.active
 
 
@@ -168,6 +168,72 @@ def test_a_second_try_at_the_name_can_succeed(tmp_path):
     say(commands, "Bob")
     step = say(commands, "it's ryan")
     assert step.say == INTRO + ENROL_SENTENCES[0]
+
+
+def test_a_first_name_is_enough_for_someone_listed_by_full_name(tmp_path):
+    commands, _ = make(tmp_path, people=(Person("tanner", "Tanner Wesley"), Person("ryan", "Ryan Wesley")))
+    say(commands, "learn my voice")
+    step = say(commands, "Tanner.")
+    assert step.say == INTRO + ENROL_SENTENCES[0]
+
+
+def test_the_full_name_still_works(tmp_path):
+    commands, _ = make(tmp_path, people=(Person("tanner", "Tanner Wesley"), Person("ryan", "Ryan Wesley")))
+    say(commands, "learn my voice")
+    step = say(commands, "my name is Tanner Wesley")
+    assert step.say == INTRO + ENROL_SENTENCES[0]
+
+
+def test_a_name_said_twice_counts_once(tmp_path):
+    commands, _ = make(tmp_path, people=(Person("tanner", "Tanner Wesley"), Person("ryan", "Ryan Wesley")))
+    say(commands, "learn my voice")
+    step = say(commands, "Tanner. Tanner.")
+    assert step.say == INTRO + ENROL_SENTENCES[0]
+
+
+def test_a_first_name_two_people_share_is_not_enough(tmp_path):
+    people = (Person("sam-a", "Sam Smith"), Person("sam-b", "Sam Jones"))
+    commands, _ = make(tmp_path, people=people)
+    say(commands, "learn my voice")
+    step = say(commands, "Sam")
+    assert (step.say, step.listen) == ("I know more than one sam. I know Sam Smith and Sam Jones. Who am I talking to?", True)
+    step = say(commands, "Sam Jones")
+    assert step.say == INTRO + ENROL_SENTENCES[0]
+
+
+def test_a_misheard_name_close_to_one_person_is_accepted(tmp_path):
+    commands, _ = make(tmp_path, people=(Person("tanner", "Tanner Wesley"), Person("ryan", "Ryan Wesley")))
+    say(commands, "learn my voice")
+    step = say(commands, "and her Wesley.")
+    assert step.say == INTRO + ENROL_SENTENCES[0]
+    step = say(commands, ENROL_SENTENCES[0], heard_as("tanner"))
+    assert step.say == ENROL_SENTENCES[1]
+
+
+def test_a_misheard_first_name_is_accepted(tmp_path):
+    commands, _ = make(tmp_path, people=(Person("tanner", "Tanner Wesley"), Person("ryan", "Ryan Wesley")))
+    say(commands, "learn my voice")
+    step = say(commands, "Taner")
+    assert step.say == INTRO + ENROL_SENTENCES[0]
+
+
+def test_a_name_only_loosely_like_someone_is_not_accepted(tmp_path):
+    commands, _ = make(tmp_path, people=(Person("tanner", "Tanner Wesley"), Person("ryan", "Ryan Wesley")))
+    say(commands, "learn my voice")
+    for heard in ("Brian", "what time is it"):
+        step = say(commands, heard)
+        assert step.listen, heard
+        assert step.say != INTRO + ENROL_SENTENCES[0], heard
+        commands.reset()
+        say(commands, "learn my voice")
+
+
+def test_a_misheard_name_equally_close_to_two_people_is_not_accepted(tmp_path):
+    commands, _ = make(tmp_path, people=(Person("jon", "Jon Smith"), Person("jan", "Jan Smith")))
+    say(commands, "learn my voice")
+    step = say(commands, "Jen Smith")
+    assert step.listen
+    assert step.say != INTRO + ENROL_SENTENCES[0]
 
 
 def test_cancel_saves_nothing(tmp_path):

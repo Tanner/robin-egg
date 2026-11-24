@@ -32,6 +32,7 @@ ENROL_SENTENCES: tuple[str, ...] = (
 )
 MIN_GOOD_SENTENCES = 8
 MIN_WORD_OVERLAP = 0.6
+MIN_NAME_LIKENESS = 0.7
 
 LEARN_PHRASE = "learn my voice"
 FORGET_PHRASE = "forget my voice"
@@ -92,8 +93,66 @@ def _spoken_name(heard: str) -> str:
     text = " ".join(_normalise(heard))
     for lead in _NAME_LEAD_INS:
         if text.startswith(lead + " "):
-            return text[len(lead) + 1 :]
-    return text
+            text = text[len(lead) + 1 :]
+            break
+    # People repeat their name when they think it was missed ("Tanner. Tanner."), so a word said twice in a row counts once.
+    words = text.split()
+    return " ".join(w for i, w in enumerate(words) if i == 0 or w != words[i - 1])
+
+
+def _edit_distance(a: str, b: str) -> int:
+    row = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        prev, row[0] = row[0], i
+        for j, cb in enumerate(b, 1):
+            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (ca != cb))
+    return row[-1]
+
+
+def _likeness(spoken: str, name: str) -> float:
+    # Spaces are ignored because speech-to-text splits and joins names freely ("and her wesley" for "tanner wesley").
+    a, b = spoken.replace(" ", ""), name.replace(" ", "")
+    return 1.0 - _edit_distance(a, b) / max(len(a), len(b), 1)
+
+
+def _person_named(spoken: str, people: list[Person]) -> Person | None:
+    """The person whose full name, or first name when nobody else shares it, was said or misheard closely.
+
+    A mishearing counts only when it is close to exactly one person, so two similar names never pick one by chance.
+    """
+    if not spoken:
+        return None
+    full = [(p, " ".join(_normalise(p.name))) for p in people]
+    first_counts: dict[str, int] = {}
+    for _, name in full:
+        first = name.split()[0] if name else ""
+        first_counts[first] = first_counts.get(first, 0) + 1
+    forms = [(p, name) for p, name in full if name]
+    forms += [(p, name.split()[0]) for p, name in full if name and " " in name and first_counts[name.split()[0]] == 1]
+
+    exact = [p for p, form in forms if form == spoken]
+    if exact:
+        return exact[0]
+
+    best: dict[str, tuple[float, Person]] = {}
+    for p, form in forms:
+        alike = _likeness(spoken, form)
+        if alike >= MIN_NAME_LIKENESS and alike > best.get(p.key, (0.0, p))[0]:
+            best[p.key] = (alike, p)
+    if len(best) != 1:
+        return None
+    alike, person = next(iter(best.values()))
+    LOG.info("Enrolment: taking the name %r to mean %s (%.0f%% alike)", spoken, person.name, alike * 100)
+    return person
+
+
+def _what_was_heard(spoken: str, people: list[Person], again: bool) -> str:
+    """Says back the name Robin heard, so a mishearing or a shared first name is obvious to the person."""
+    if not spoken:
+        return "I still didn't catch a name" if again else "I didn't catch a name"
+    if sum(_normalise(p.name)[:1] == [spoken] for p in people) > 1:
+        return f"I know more than one {spoken}"
+    return f"I heard \"{spoken}\", which {'still ' if again else ''}isn't a name I know"
 
 
 def _join_names(names: list[str]) -> str:
@@ -169,13 +228,13 @@ class VoiceCommands:
     async def _answer_name(self, flow: _Flow, heard: str, match: Match) -> Step:
         people = await self.people.current() or []
         spoken = _spoken_name(heard)
-        person = next((p for p in people if " ".join(_normalise(p.name)) == spoken), None)
+        person = _person_named(spoken, people)
         if person is None:
             flow.misses += 1
             LOG.info("Enrolment: heard the name %r, which is not in the people list (miss %d)", heard, flow.misses)
             if flow.misses >= 2:
-                return self._end("Okay, let's try another time.")
-            return Step(f"I only know {_join_names([p.name for p in people])}. Who am I talking to?", True)
+                return self._end(f"{_what_was_heard(spoken, people, again=True)}, so I've stopped. Say \"{LEARN_PHRASE}\" to try again.")
+            return Step(f"{_what_was_heard(spoken, people, again=False)}. I know {_join_names([p.name for p in people])}. Who am I talking to?", True)
 
         for turn in (flow.trigger_match, match):
             refusal = self._sounds_like_someone_else(turn, person, people)
