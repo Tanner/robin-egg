@@ -156,6 +156,17 @@ binary_sensor:
     filters:
       - delayed_off: 10s
 
+# Speech-to-text gets the DSP's ASR output, as the wake word does, not the comms output. The comms
+# path's echo suppression mutes the person along with the wake chime: the stream opens 300 ms into
+# the 1 s chime, so a request spoken straight after "Hey Robin" lost its first words. The ASR output
+# removes the chime and keeps the voice. Measured on 2026-11-23 by counting straight after the wake
+# word: comms heard "three, four", ASR heard "one, two, three, four", with a video playing nearby.
+# The select restores its last value, so this sets the default after a fresh flash or a reset,
+# not on an egg that already has a route chosen.
+select:
+  - id: !extend dsp_route
+    initial_option: "ASR to STT and wake word"
+
 # The server turns this on when it was started with --save-wake-clips, and off otherwise, each time
 # it connects. It is never restored, so the egg keeps no audio after a reboot until asked.
 switch:
