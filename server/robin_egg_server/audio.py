@@ -139,6 +139,7 @@ class ReplyAudio:
         self.final: bytes | None = None  # the complete file, header filled in
         self.seconds = self.LEAD_S
         self.gain = 1.0  # scales everything pushed from now on; see room.py
+        self.marks: list[tuple[int, float]] = []  # (bytes streamed, seconds of audio they hold), after each push
         self._cond = asyncio.Condition()
 
     @property
@@ -151,12 +152,26 @@ class ReplyAudio:
             self.live.extend(buf[len(self.live) :])
         del buf
 
+    def seconds_in(self, n_bytes: int) -> float:
+        """How many seconds of audio the first n_bytes of the stream surely hold.
+
+        The encoder holds back the end of what was pushed until it fills a frame, so this
+        counts a push only once all the bytes streamed by the end of it are in n_bytes.
+        """
+        held = 0.0
+        for size, seconds in self.marks:
+            if size > n_bytes:
+                break
+            held = seconds
+        return held
+
     async def push(self, samples: np.ndarray, rate: int, gap_s: float = 0.12) -> None:
         out = np.clip(resample(samples, rate, REPLY_RATE), -1.0, 1.0) * np.float32(self.gain)
         out = np.concatenate([out, np.zeros(int(gap_s * REPLY_RATE), dtype=np.float32)])
         self._sf.write(out)
         self.seconds += len(out) / REPLY_RATE
         self._collect()
+        self.marks.append((len(self.live), self.seconds - len(out) / REPLY_RATE))
         async with self._cond:
             self._cond.notify_all()
 
@@ -165,6 +180,7 @@ class ReplyAudio:
             return
         self._sf.close()  # flushes the last frame, then rewrites the header in place
         self._collect()
+        self.marks.append((len(self.live), self.seconds))
         self.final = self._bio.getvalue()
         async with self._cond:
             self._cond.notify_all()

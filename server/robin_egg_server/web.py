@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 import uuid
 from collections import OrderedDict
 from typing import Any, Awaitable, Callable
@@ -23,8 +24,12 @@ from urllib.parse import parse_qs
 
 from .audio import ReplyAudio
 from .logs import current_tag, tagged
+from .stream_watch import StreamWatch, read_counters
 
 LOG = logging.getLogger("robin.web")
+
+SAMPLE_S = 0.1  # how often a reply's download is looked at
+DELIVERY_WAIT_S = 120.0  # how long, after the last byte is written, to watch the egg take the rest
 
 MAX_ANNOUNCE_BYTES = 16384
 
@@ -87,9 +92,7 @@ class AudioServer:
                 w.write(b"HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n")
                 if method == "HEAD":
                     return
-                async for chunk in audio.chunks():
-                    w.write(chunk)
-                    await w.drain()
+                await self._stream(w, audio, tag)
             elif method == "POST" and path == "/announce":
                 try:
                     n = int(headers.get("content-length", "0"))
@@ -126,6 +129,47 @@ class AudioServer:
         finally:
             with contextlib.suppress(Exception):
                 w.close()
+
+    @staticmethod
+    async def _stream(w: asyncio.StreamWriter, audio: ReplyAudio, tag: str) -> None:
+        """Sends a reply to the egg, and logs how its download kept up with the playing time.
+
+        The socket is closed only once the egg has acknowledged every byte, so the watch
+        covers the whole download. Closing it earlier would not end the body any sooner.
+        """
+        watch = StreamWatch(audio.seconds_in)
+        sock = w.get_extra_info("socket")
+        start = time.monotonic()
+        written = 0
+        finished = False
+
+        def look() -> int | None:
+            sent = written - w.transport.get_write_buffer_size()
+            counters = read_counters(sock)
+            watch.sample(time.monotonic() - start, written, sent, counters, audio.closed and written >= len(audio.live))
+            return None if counters is None else counters.unacked_bytes + (written - sent)
+
+        async def sample() -> None:
+            while True:
+                look()
+                await asyncio.sleep(SAMPLE_S)
+
+        sampler = asyncio.create_task(sample())
+        try:
+            async for chunk in audio.chunks():
+                w.write(chunk)
+                written += len(chunk)
+                await w.drain()
+            sampler.cancel()
+            deadline = time.monotonic() + DELIVERY_WAIT_S
+            while look() and not w.transport.is_closing() and time.monotonic() < deadline:
+                await asyncio.sleep(SAMPLE_S)
+            finished = True
+        finally:
+            sampler.cancel()
+            watch.seconds = audio.seconds
+            with tagged(tag):
+                LOG.info(watch.describe(finished))
 
     @staticmethod
     async def _reply(w: asyncio.StreamWriter, status: int, body: str, content_type: str = "text/plain") -> None:

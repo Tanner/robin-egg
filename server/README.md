@@ -288,6 +288,20 @@ curl http://localhost:8765/status
 
 The port is open to the whole LAN, because the egg fetches replies from it, and nothing checks who is calling: `/announce` already lets anyone on the network make the egg speak. So `/status` is read-only and holds states, times and names only, never what anyone said or what Robin answered.
 
+### When a reply breaks up
+
+The egg plays each reply while it downloads it. If the audio does not reach it in time, it runs dry and the reply stutters, and the egg reports it finished late: `The egg reported the reply finished 14.91 s after its estimated end`. The egg's own log cannot say why. So after each download the server logs how it kept up with the playing time, the time since the egg asked for the reply:
+
+```text
+14:20:05 INFO  robin.web [t4] The egg took 27.1 s to download 397 kB, 14.1 s of audio; audio reached the egg up to 6.2 s behind the playing time, for 9.3 s in all, so the egg ran dry waiting on the network (round trip up to 850 ms, 120 kB sent again)
+```
+
+- `waiting on the network`: the server had written the audio, but the egg had not received it. Look at the Wi-Fi between the Mac and the egg.
+- `waiting on the server`: the server itself wrote the audio late, as when the voice is slow or the server's event loop was held up. A held-up loop is named too.
+- `the network kept up` on a reply the egg still reported finishing late: the egg had the audio in time and did not play it smoothly. Look at the egg.
+
+How much the egg has received is read from macOS's TCP counters for the socket (`TCP_CONNECTION_INFO`): the bytes still waiting for the egg's acknowledgement. On another system only the server's side is reported. The server closes the socket only once the egg has acknowledged every byte, so the line covers the whole download. A download cut short, as by the wake word, logs `The egg stopped downloading after`. The code is in `stream_watch.py`.
+
 ### When the egg goes missing
 
 If the egg has been unreachable for 10 minutes, the server asks Robin to tell the household by text, through robin-assistant's webhook trigger (`POST /api/trigger/:agent`). Robin writes the message. If a text went out, the server asks once more when the egg is back.
@@ -753,6 +767,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/mic_mute.py` | The egg's microphone mute switch, followed so that muting also stops Robin speaking first |
 | `robin_egg_server/leds.py` | The LED ring over the ESPHome connection: borrowing a colour and giving it back, and each person's colour |
 | `robin_egg_server/web.py` | The HTTP server for reply audio, `/announce`, `/quiet` and `/status` |
+| `robin_egg_server/stream_watch.py` | Watches each reply's download, to tell a slow network from a slow egg when a reply breaks up |
 | `robin_egg_server/health.py` | What `/status` reports, the text when the egg goes missing, and clearing old mic captures |
 | `robin_egg_server/enrol_offer.py` | When to offer enrolment to a voice that keeps going unrecognised |
 | `robin_egg_server/enrolment_audio.py` | The sentences of each enrolment kept as audio, one folder per person |
@@ -800,6 +815,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `tests/test_presence.py` | `--presence-minutes`: Robin's own messages spoken or dropped by when someone last spoke |
 | `tests/test_turn_log.py` | The turn log and `stats`, through the fake egg and on their own |
 | `tests/test_wake_clips.py` | The folder of wake clips and its trim, fetching from the fake egg's clip server, and keeping a clip of each wake during live turns |
+| `tests/test_stream_watch.py` | Which side left the egg short of audio: the server, the network, or neither |
 | `tests/test_wakes.py` | Reviewing wake clips: the real and false cuts, the loud spans, the keys, going back and `--all`, the report and the export |
 | `tests/test_digest.py` | Several waiting messages as one announcement: the cue, order and pause, the cap, urgent messages, answering, the longest wait, the wake word partway, the turn log and the room fact |
 | `tests/test_waiting.py` | Message waiting: held messages, the ring light on the fake egg, and "what did I miss?" |
