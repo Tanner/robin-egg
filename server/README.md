@@ -168,6 +168,7 @@ Say the wake word, then ask for quiet. Robin stops speaking first until the time
 | --- | --- |
 | "quiet for an hour", "be quiet for 30 minutes", "quiet for an hour and a half", "do not disturb for two hours" | Quiet for that long, from 1 minute to 24 hours. "For a while" is an hour. |
 | "quiet until 7", "quiet until 4:15", "quiet until 9 AM", "quiet until noon" | Quiet until that time. With no AM or PM it is the next time the clock shows it. |
+| "quiet until 8 tonight", "quiet until 6 this evening", "quiet until 7 in the morning", "quiet until 9 tomorrow" | The part of the day says AM or PM. "Tonight", "this afternoon" and "this evening" mean today, and a time today that has already passed is not understood. "Tomorrow" with no AM or PM is the first time the clock shows it tomorrow, so "9 tomorrow" is 9 AM. |
 | "quiet until tomorrow", "quiet for the rest of the day", "do not disturb" | Quiet until speaking hours start on the next day (8 AM if they start at midnight). "Until morning" is the next time that hour comes. |
 | "you can talk again", "you can speak again", "stop being quiet", "turn off do not disturb" | Ends the pause. |
 
