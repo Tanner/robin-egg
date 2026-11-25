@@ -242,6 +242,7 @@ When Robin has not started answering 10 s after the end of speech, the egg stops
 - Only the first answer has to beat the deadline. Once Robin has begun, the rest may take until `--server-timeout`.
 - `--hand-off-after` changes the 10 s, and `0` turns the hand-off off, so the egg waits for `--server-timeout` as before.
 - The turn log records these turns as `handed off`, not `failed`.
+- Robin can also hand off on its own, for work it knows is long: it says something brief such as "Let me look into that" and robin-assistant ends the egg's wait with `later: true`. The egg speaks Robin's words in place of the line above, does not listen again, and treats the late answer the same way. See `docs/robin-chat-api.md`, "Robin answering later".
 - The person was told the answer is coming, so for 10 minutes after the hand-off it is spoken even outside `--speaking-hours`. Quiet asked for by voice and a muted microphone still stop it. After that it is held for "what did I miss?" like any other message Robin sends on its own.
 
 ## The closing sound
@@ -713,6 +714,7 @@ The egg talks in robin-assistant's speaker chat, not in the plain web chat the p
 | How the turn ended | The late answer |
 | --- | --- |
 | It timed out | Spoken as a message Robin sent on its own: after the egg is idle, after the chime |
+| Robin said it would answer later, with AnswerLater | Spoken the same way |
 | The wake word cut it off, or the egg cancelled the run | Not spoken. Reported `dropped`, so it arrives as a text. On the egg, the wake word while Robin is thinking cancels the run |
 | The egg disconnected | Spoken, within the usual 10-minute limit |
 | No turn matches, as after a restart | Spoken |

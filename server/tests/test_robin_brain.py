@@ -202,12 +202,16 @@ async def ask(scripts, heard="what's on tomorrow", status=200, headers="", **kw)
         await fake.stop()
 
 
-def answer(*texts: str, outcome: str = "response", listen: object = None) -> list[tuple]:
-    """listen, when given, is sent on the end event as robin-assistant's SetListening choice."""
+def answer(*texts: str, outcome: str = "response", listen: object = None, later: object = None) -> list[tuple]:
+    """listen, when given, is sent on the end event as robin-assistant's SetListening choice; later as its AnswerLater hand-off."""
     steps = [event("accepted", {"id": 123}), event("typing", {})]
     for i, t in enumerate(texts):
         steps += [PING, event("reply", {"id": 124 + i, "text": t})]
-    end = {"outcome": outcome} if listen is None else {"outcome": outcome, "listen": listen}
+    end = {"outcome": outcome}
+    if listen is not None:
+        end["listen"] = listen
+    if later is not None:
+        end["later"] = later
     return steps + [event("end", end)]
 
 

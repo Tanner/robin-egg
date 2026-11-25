@@ -84,7 +84,7 @@ ANNOUNCE_EARLY_S = 0.5  # a guess until the finish timing in the log is read on 
 RECONNECT_DELAY_S = 2.0  # the first wait before trying the egg again; doubles up to 30 s
 ANNOUNCE_WAIT_S = 60.0  # how long /announce waits for the egg to be idle before giving up
 INTERRUPTED = ("wake_word", "abort")  # how a turn ends when the person stops it, so its late answer is texted, not spoken
-HANDED_OFF_HOW = ("timeout",)  # how a turn ends when the egg said the answer would come later
+HANDED_OFF_HOW = ("timeout", "later")  # how a turn ends when the egg, or Robin itself, said the answer would come later
 # The person was told the answer is coming, so for this long after that it is spoken even past speaking hours.
 HANDOFF_GRACE_S = 10 * 60.0
 ABANDONED_KEPT = 8  # how many turns that ended before Robin's answer came are remembered, for late answers
@@ -521,9 +521,11 @@ class Robin:
             spoken = await self._speak(self._tracking_replies(t, answer), t.reply, turn=t, t0=t0, voiced=t.voiced)
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
-            cont = self._listens_after_robin(reply_text)
+            later = self._handed_off_by_robin()
+            cont = False if later else self._listens_after_robin(reply_text)
             # One hint a reply. The enrolment offer goes first, and the mention keeps for the next reply.
-            hint = ENROL_OFFER if await self._enrol_offer_due(match) else self._morning_mention_due()
+            # A hand-off is not a reply to hang one on: the answer is still to come.
+            hint = None if later else ENROL_OFFER if await self._enrol_offer_due(match) else self._morning_mention_due()
             if hint is not None:
                 await self._speak(_once(hint), t.reply, turn=t)
                 LOG.info('Robin added: "%s"', hint)
@@ -534,12 +536,13 @@ class Robin:
             if self.speakers is not None:
                 self.speakers.learn(match)
             self.last_match = match
-            ended = "answered"
+            ended = "handed_off" if later else "answered"
             LOG.info("Reply %.1f s long, finished %.2f s after end of speech", t.reply.seconds, time.monotonic() - t0)
-            t.log.done(ANSWERED, t0)
+            t.log.done(HANDED_OFF if later else ANSWERED, t0)
         except asyncio.CancelledError:
             raise
         except QuietTurn:
+            self._handed_off_by_robin()
             LOG.info("Robin chose to say nothing; closing without a reply")
             await self._stop_thinking(t)
             t.log.outcome = QUIET
@@ -611,6 +614,18 @@ class Robin:
             return self._reopens_after(reply_text)
         LOG.info("Robin asked the egg %s after this reply", "to listen again" if listen else "not to listen again")
         return listen
+
+    def _handed_off_by_robin(self) -> bool:
+        """Robin said it will answer later, with AnswerLater: remembers the turn so its late answer is spoken."""
+        if getattr(self.brain, "later", False) is not True:
+            return False
+        row = getattr(self.brain, "accepted_id", None)
+        if isinstance(row, int) and not isinstance(row, bool):
+            self._remember_abandoned(row, "later")
+        else:
+            LOG.info("Robin said it will answer later, but robin-assistant gave no message row, so the late answer cannot be matched to this turn; it will still be spoken")
+        LOG.info("Robin is answering later, so the egg does not listen again after this reply")
+        return True
 
     def _reopens_after(self, text: str) -> bool:
         return self.opts.follow_up == "always" or (self.opts.follow_up == "questions" and text.rstrip().endswith("?"))

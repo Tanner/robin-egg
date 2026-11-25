@@ -13,7 +13,7 @@ import time
 from aioesphomeapi import VoiceAssistantEventType
 from aioesphomeapi import api_pb2 as pb
 
-from robin_egg_server.brain import RobinTooSlow
+from robin_egg_server.brain import QuietTurn, RobinTooSlow
 from robin_egg_server.egg import HANDOFF, Options, Robin
 from robin_egg_server import fake_egg
 from robin_egg_server.fake_egg import FakeEgg
@@ -307,3 +307,66 @@ def test_the_late_answer_to_a_hand_off_long_ago_is_held_outside_speaking_hours(m
     announced, _, robin = run(brain, scenario, opts=late_evening)
     assert announced == []
     assert [h.text for h in robin.waiting.waiting()] == [LATE]
+
+
+class LaterRobin:
+    """robin-assistant accepts the question as row 101, Robin says it will look into it and hands the answer off."""
+
+    def __init__(self, *interim: str) -> None:
+        self.interim = interim
+        self.accepted_id: int | None = None
+        self.reply_ids: list[int] = []
+        self.later = False
+        self.listen: bool | None = None
+
+    async def reply(self, heard: str, user: str, reply_to: int | None = None, follow_up: bool = False):
+        self.accepted_id, self.reply_ids, self.later, self.listen = 101, [], False, None
+        for text in self.interim:
+            self.reply_ids.append(124)
+            yield text + "\n"
+        self.later = True  # listen left unset: the egg keeps the mic shut on its own
+        if not self.interim:
+            raise QuietTurn()
+
+
+def test_robin_handing_off_speaks_its_own_words_keeps_the_mic_shut_and_speaks_the_late_answer():
+    outcomes = []
+
+    async def scenario(egg, robin):
+        record = robin._record_turn
+        robin._record_turn = lambda t: (outcomes.append(t.log.outcome), record(t))
+        await eventually(lambda: 101 in robin._abandoned and robin.turn.task.done())
+        await then_late(robin, late(130, 101))
+        await eventually(lambda: egg.announcements)
+
+    always_listen = Options(speaking_hours=(0, 24), follow_up="always")
+    egg = FakeEgg([speech(), speech()])
+    announced, sent, robin = run(LaterRobin("Let me look into that."), scenario, egg=egg, opts=always_listen)
+    assert egg.runs[0].data(pb.VOICE_ASSISTANT_INTENT_END)["continue_conversation"] == "0"
+    assert len(egg.runs) == 1  # the second utterance was never listened for
+    assert robin._abandoned == {101: "later"}
+    assert " ".join(robin.tts.said) == f"Let me look into that. {LATE}"
+    assert outcomes[0] == HANDED_OFF
+    assert announced == [LATE] and sent == [(130, "spoken", "")]
+
+
+def test_robin_handing_off_with_no_words_ends_quietly_and_still_speaks_the_late_answer():
+    async def scenario(egg, robin):
+        await eventually(lambda: 101 in robin._abandoned and robin.turn.task.done())
+        await then_late(robin, late(130, 101))
+        await eventually(lambda: egg.announcements)
+
+    announced, sent, robin = run(LaterRobin(), scenario)
+    assert robin._abandoned == {101: "later"}
+    assert robin.tts.said == [LATE]
+    assert announced == [LATE] and sent == [(130, "spoken", "")]
+
+
+def test_the_late_answer_to_robins_own_hand_off_is_spoken_just_after_speaking_hours_end():
+    async def scenario(egg, robin):
+        await eventually(lambda: 101 in robin._abandoned and robin.turn.task.done())
+        await then_late(robin, late(130, 101))
+        await eventually(lambda: egg.announcements)
+
+    announced, _, _ = run(LaterRobin("Let me look into that."), scenario, opts=Options(speaking_hours=_hours_not_now(), follow_up="off"))
+    assert announced == [LATE]
