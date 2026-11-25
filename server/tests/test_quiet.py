@@ -73,6 +73,36 @@ def test_spoken_times(heard, when):
     assert until(heard) == when
 
 
+@pytest.mark.parametrize(
+    "heard, when",
+    [
+        ("be quiet until eight tonight.", datetime(2026, 11, 17, 20, 0)),
+        ("Be quiet until 8.30 tonight.", datetime(2026, 11, 17, 20, 30)),
+        ("Quiet until 12 tonight.", datetime(2026, 11, 18, 0, 0)),
+        ("Quiet until 6 this evening.", datetime(2026, 11, 17, 18, 0)),
+        ("Quiet until 4 this afternoon.", datetime(2026, 11, 17, 16, 0)),
+        ("Quiet until 10 at night.", datetime(2026, 11, 17, 22, 0)),
+        ("Quiet until 7 in the morning.", datetime(2026, 11, 18, 7, 0)),
+        ("Quiet until 5 in the evening.", datetime(2026, 11, 17, 17, 0)),
+        ("Quiet until 9 tomorrow.", datetime(2026, 11, 18, 9, 0)),
+        ("Quiet until 3 tomorrow.", datetime(2026, 11, 18, 3, 0)),
+        ("Quiet until 3 PM tomorrow.", datetime(2026, 11, 18, 15, 0)),
+        ("Quiet until 7:30 tomorrow morning.", datetime(2026, 11, 18, 7, 30)),
+        ("Quiet until 2 tomorrow afternoon.", datetime(2026, 11, 18, 14, 0)),
+        ("Quiet until 9 p.m. tonight.", datetime(2026, 11, 17, 21, 0)),
+        ("Quiet until 18:00 this evening.", datetime(2026, 11, 17, 18, 0)),
+    ],
+)
+def test_times_with_a_part_of_the_day(heard, when):
+    assert until(heard) == when
+
+
+def test_a_part_of_the_day_that_does_not_fit_the_time_is_unclear():
+    for heard in ("quiet until 9 this morning", "quiet until 1 this afternoon", "quiet until 7 AM tonight", "quiet until 9 PM in the morning", "quiet until 18:00 in the morning"):
+        request = understand(heard, NOW)
+        assert request is not None and request.kind == "unclear", heard
+
+
 def test_tomorrow_follows_the_start_of_speaking_hours():
     assert until("quiet until tomorrow", morning_hour=10) == datetime(2026, 11, 18, 10, 0)
     early = datetime(2026, 11, 17, 1, 0)

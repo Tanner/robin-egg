@@ -54,6 +54,23 @@ _TOMORROW = {"tomorrow", "tomorrow morning"}
 _NEXT_MORNING = {"morning", "the morning"}
 _REST_OF_DAY = {"tonight", "the night", "today", "the day", "the rest of the day", "the rest of today"}
 _A_WHILE = {"a while", "a bit", "a little while", "a little bit"}
+# A part of the day after a clock time: the half of the day it implies, and which day it is.
+# Longer parts come first, so "tomorrow morning" is not read as "tomorrow".
+_DAY_PARTS: dict[tuple[str, ...], tuple[str | None, str]] = {
+    ("in", "the", "morning"): ("am", "next"),
+    ("in", "the", "afternoon"): ("pm", "next"),
+    ("in", "the", "evening"): ("pm", "next"),
+    ("tomorrow", "morning"): ("am", "tomorrow"),
+    ("tomorrow", "afternoon"): ("pm", "tomorrow"),
+    ("tomorrow", "evening"): ("pm", "tomorrow"),
+    ("tomorrow", "night"): ("pm", "tomorrow"),
+    ("this", "morning"): ("am", "today"),
+    ("this", "afternoon"): ("pm", "today"),
+    ("this", "evening"): ("pm", "today"),
+    ("at", "night"): ("pm", "next"),
+    ("tonight",): ("pm", "today"),
+    ("tomorrow",): (None, "tomorrow"),
+}
 _ONES = {
     "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
     "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
@@ -119,11 +136,26 @@ def _next_at(now: datetime, hour: int, minute: int = 0) -> datetime:
     return at if at > now else at + timedelta(days=1)
 
 
+def _part_of_day(words: list[str]) -> tuple[list[str], str | None, str | None, bool]:
+    """Splits "8 tonight" into the clock words and what the part of the day says about them.
+
+    Returns the clock words, "am" or "pm" when the part implies one, the day ("today",
+    "next" or "tomorrow") or None when there is no part, and whether it is the night,
+    so "12 tonight" is midnight rather than noon.
+    """
+    for part, (half, day) in _DAY_PARTS.items():
+        n = len(part)
+        if len(words) > n and tuple(words[-n:]) == part:
+            return words[:-n], half, day, part[-1] in ("tonight", "night")
+    return words, None, None, False
+
+
 def _clock_time(words: list[str], now: datetime) -> datetime | None:
+    words, part_half, day, night = _part_of_day(words)
     text = " ".join(words)
-    if text in ("noon", "midday"):
+    if day is None and text in ("noon", "midday"):
         return _next_at(now, 12)
-    if text == "midnight":
+    if day is None and text == "midnight":
         return _next_at(now, 0)
     spoken = _number(words) if words and not words[0].isdigit() else None
     if spoken is not None:
@@ -134,12 +166,39 @@ def _clock_time(words: list[str], now: datetime) -> datetime | None:
     hour, minute, half = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").replace(" ", "")
     if minute > 59 or hour > 23 or (half and not 1 <= hour <= 12):
         return None
+    if day is not None:
+        return _on_day(now, hour, minute, half, part_half, day, night)
     if half:
         return _next_at(now, hour % 12 + (12 if half == "pm" else 0), minute)
     if hour == 0 or hour > 12:
         return _next_at(now, hour, minute)
     # "until seven" with no AM or PM means the next seven o'clock, whichever comes first.
     return min(_next_at(now, hour % 12, minute), _next_at(now, hour % 12 + 12, minute))
+
+
+def _on_day(now: datetime, hour: int, minute: int, half: str, part_half: str | None, day: str, night: bool) -> datetime | None:
+    """A clock time with a part of the day after it, or None when the two do not fit together.
+
+    "Tonight" and "this evening" are today, and a time today that has passed is unclear,
+    not tomorrow. "In the morning" and "at night" are the next such time. "Tomorrow" is
+    tomorrow's date, and with no AM or PM it is the first time the clock shows it that day.
+    """
+    if half and part_half and half != part_half:
+        return None
+    if not half and part_half and hour > 12 and part_half == "am":
+        return None
+    if half:
+        hour = hour % 12 + (12 if half == "pm" else 0)
+    elif part_half and hour <= 12:
+        hour = 0 if night and hour == 12 else hour % 12 + (12 if part_half == "pm" else 0)
+    elif hour == 12 and night:
+        hour = 0
+    midnight_after = night and hour == 0
+    if day == "next":
+        return _next_at(now, hour, minute)
+    date = now + timedelta(days=(1 if day == "tomorrow" else 0) + (1 if midnight_after else 0))
+    at = date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return at if at > now else None
 
 
 def understand(heard: str, now: datetime, morning_hour: int = FALLBACK_MORNING_HOUR) -> Request | None:
