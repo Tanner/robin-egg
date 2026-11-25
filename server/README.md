@@ -242,7 +242,7 @@ When Robin has not started answering 10 s after the end of speech, the egg stops
 - Only the first answer has to beat the deadline. Once Robin has begun, the rest may take until `--server-timeout`.
 - `--hand-off-after` changes the 10 s, and `0` turns the hand-off off, so the egg waits for `--server-timeout` as before.
 - The turn log records these turns as `handed off`, not `failed`.
-- A late answer that arrives outside `--speaking-hours` is held like any other message Robin sends on its own.
+- The person was told the answer is coming, so for 10 minutes after the hand-off it is spoken even outside `--speaking-hours`. Quiet asked for by voice and a muted microphone still stop it. After that it is held for "what did I miss?" like any other message Robin sends on its own.
 
 ## The closing sound
 

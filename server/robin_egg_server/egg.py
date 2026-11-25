@@ -84,6 +84,9 @@ ANNOUNCE_EARLY_S = 0.5  # a guess until the finish timing in the log is read on 
 RECONNECT_DELAY_S = 2.0  # the first wait before trying the egg again; doubles up to 30 s
 ANNOUNCE_WAIT_S = 60.0  # how long /announce waits for the egg to be idle before giving up
 INTERRUPTED = ("wake_word", "abort")  # how a turn ends when the person stops it, so its late answer is texted, not spoken
+HANDED_OFF_HOW = ("timeout",)  # how a turn ends when the egg said the answer would come later
+# The person was told the answer is coming, so for this long after that it is spoken even past speaking hours.
+HANDOFF_GRACE_S = 10 * 60.0
 ABANDONED_KEPT = 8  # how many turns that ended before Robin's answer came are remembered, for late answers
 
 
@@ -206,6 +209,7 @@ class Robin:
         self.room_context: Any = None  # a RoomContext when Robin is told facts about the room
         self.outcomes: Any = None  # an OutcomeClient when robin-assistant is told what became of each message
         self._abandoned: dict[int, str] = {}  # how recent turns ended that gave up before Robin's answer came, by their user row
+        self._handed_off_at: dict[int, float] = {}  # when the person was told a turn's answer would come later, on time.monotonic(), by user row
         self._unfinished_replies: deque[int] = deque(maxlen=32)  # replies already reported as not spoken to the end
         self.mic_mute = MicMute()
         self.voice_heard = VoiceHeard(self._voice_ignore_reason, self._voices_heard, self._room_quiet)
@@ -826,6 +830,11 @@ class Robin:
         self._abandoned[row] = how
         while len(self._abandoned) > ABANDONED_KEPT:
             del self._abandoned[next(iter(self._abandoned))]
+        self._handed_off_at.pop(row, None)
+        if how in HANDED_OFF_HOW:
+            self._handed_off_at[row] = time.monotonic()
+        for kept in [r for r in self._handed_off_at if r not in self._abandoned]:
+            del self._handed_off_at[kept]
         LOG.info("The turn for message row %s ended before Robin's answer came (%s), so an answer that comes later is matched to it", row, how.replace("_", " "))
 
     def _played_s(self, t: Turn, now: float, behind_s: float = digests.PLAYED_MARGIN_S) -> float:
@@ -992,15 +1001,16 @@ class Robin:
         start, end = self.opts.speaking_hours
         return f"{start}:00 to {end}:00"
 
-    def _why_not_speak_first(self, urgent: bool = False) -> str | None:
+    def _why_not_speak_first(self, urgent: bool = False, promised: bool = False) -> str | None:
         """Why Robin may not speak first right now, or None when it may.
 
         The one place that decides it, for Robin's own messages and /announce alike. Whether
         the egg is free to play something this second is a separate question: _busy_reason.
         An urgent message is not held to speaking hours. Quiet asked for by voice still
-        silences it, as a muted microphone does: that is someone's own choice.
+        silences it, as a muted microphone does: that is someone's own choice. Neither is a late
+        answer the person was just told to expect (`promised`).
         """
-        if not urgent and not self._in_speaking_hours():
+        if not (urgent or promised) and not self._in_speaking_hours():
             return f"outside speaking hours ({self._hours()})"
         return self.quiet.reason()
 
@@ -1193,7 +1203,10 @@ class Robin:
         with tagged(msg.tag):
             if msg.late and self._late_answer_not_wanted(msg):
                 return
-            refusal = self._why_not_speak_first(msg.urgent)
+            promised = msg.late and self._promised(msg)
+            refusal = self._why_not_speak_first(msg.urgent, promised)
+            if promised and not refusal and not self._in_speaking_hours():
+                LOG.info("Late answer %s is spoken outside speaking hours (%s): the person was told in the last %.0f minutes that it would come", msg.describe(), self._hours(), HANDOFF_GRACE_S / 60)
             if refusal and self._held(msg, refusal):
                 LOG.info('Held message %s for "what did I miss?": %s', msg.describe(), refusal)
                 self._message_outcome(msg, "held, outside speaking hours")
@@ -1231,6 +1244,11 @@ class Robin:
         self._proactive_queue.put_nowait((0 if msg.urgent else 1, self._proactive_count, time.monotonic(), msg))
         if self._proactive_worker is None or self._proactive_worker.done():
             self._proactive_worker = asyncio.create_task(self._speak_proactive_messages())
+
+    def _promised(self, msg: SpeakerMessage) -> bool:
+        """The late answer is to a turn where the egg said, recently, that the answer would come later."""
+        now = time.monotonic()
+        return any(now - self._handed_off_at.get(row, -math.inf) <= HANDOFF_GRACE_S for row in msg.answers)
 
     def _late_answer_not_wanted(self, msg: SpeakerMessage) -> bool:
         """Settles a late answer that is not to be spoken. Any other is spoken as a message Robin sent on its own.
@@ -1279,7 +1297,7 @@ class Robin:
                     LOG.info("Dropped message %s: it waited %.0f s for the egg, longer than the %.0f s allowed", msg.describe(), waited, self.opts.proactive_max_age_s)
                     self._message_outcome(msg, "dropped, it waited too long for the egg")
                     continue
-                refusal = self._why_not_speak_first(msg.urgent)
+                refusal = self._why_not_speak_first(msg.urgent, msg.late and self._promised(msg))
                 if refusal and self._held(msg, refusal):
                     LOG.info('Held message %s for "what did I miss?" after it waited for the egg to be idle: %s', msg.describe(), refusal)
                     self._message_outcome(msg, "held, speaking hours ended while it waited")

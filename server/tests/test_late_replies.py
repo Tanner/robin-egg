@@ -272,3 +272,38 @@ def test_hand_off_flag():
     base = ["egg.local", "--echo"]
     assert parse_args(base).hand_off_after == 10.0 and Options().handoff_s == 10.0
     assert parse_args(base + ["--hand-off-after", "15"]).hand_off_after == 15.0
+
+
+def _hours_not_now() -> tuple[int, int]:
+    now = time.localtime().tm_hour
+    return (now + 1) % 24, (now + 2) % 24
+
+
+def test_the_late_answer_to_a_hand_off_is_spoken_just_after_speaking_hours_end():
+    brain = SlowRobin("hang")
+    late_evening = Options(speaking_hours=_hours_not_now(), follow_up="off", handoff_s=0.5)
+
+    async def scenario(egg, robin):
+        await eventually(lambda: 101 in robin._abandoned and robin.turn.task.done())
+        await then_late(robin, late(130, 101))
+        await eventually(lambda: egg.announcements)
+
+    announced, sent, robin = run(brain, scenario, opts=late_evening)
+    assert announced == [LATE]
+    assert sent == [(130, "spoken", "")]
+    assert robin.waiting.waiting() == []
+
+
+def test_the_late_answer_to_a_hand_off_long_ago_is_held_outside_speaking_hours(monkeypatch):
+    monkeypatch.setattr("robin_egg_server.egg.HANDOFF_GRACE_S", 0.0)
+    brain = SlowRobin("hang")
+    late_evening = Options(speaking_hours=_hours_not_now(), follow_up="off", handoff_s=0.5)
+
+    async def scenario(egg, robin):
+        await eventually(lambda: 101 in robin._abandoned and robin.turn.task.done())
+        await then_late(robin, late(130, 101))
+        await eventually(lambda: robin.waiting.waiting())
+
+    announced, _, robin = run(brain, scenario, opts=late_evening)
+    assert announced == []
+    assert [h.text for h in robin.waiting.waiting()] == [LATE]
