@@ -28,7 +28,9 @@ UNKNOWN_SPEAKER = "Unknown Speaker"
 
 MIN_EMBED_SAMPLES = MIC_RATE // 10
 
-DEFAULT_SPEAKER_MODEL = Path(__file__).resolve().parent.parent / "models" / "wespeaker_en_voxceleb_resnet34_LM.onnx"
+# 3D-Speaker CAM++, trained on VoxCeleb. Chosen on 2026-11-24 over WeSpeaker ResNet34, which sherpa-onnx
+# runs without normalising its features (see check_feature_normalisation).
+DEFAULT_SPEAKER_MODEL = Path(__file__).resolve().parent.parent / "models" / "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
 
 
 class SpeakerEmbedder(Protocol):
@@ -42,6 +44,28 @@ class SpeakerEmbedder(Protocol):
         ...
 
 
+def check_feature_normalisation(metadata: dict[str, str], model_name: str) -> None:
+    """Raise ValueError unless the model's metadata tells sherpa-onnx how to normalise its features.
+
+    sherpa-onnx takes away each utterance's mean from the features only when the model says so.
+    The WeSpeaker exports do not, so the room and the mics swamp the voice: on the egg, Tanner and
+    Ryan scored 0.86 against each other and strangers up to 0.78 against them.
+    """
+    if not metadata.get("feature_normalize_type"):
+        raise ValueError(
+            f"The speaker model {model_name} does not say how its features are normalised (no feature_normalize_type "
+            "in its metadata), so sherpa-onnx would run it without taking away each utterance's mean and everyone "
+            "would sound alike. Use a 3D-Speaker or NeMo model instead."
+        )
+
+
+def _model_metadata(model_path: str) -> dict[str, str]:
+    import onnxruntime
+
+    session = onnxruntime.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+    return dict(session.get_modelmeta().custom_metadata_map)
+
+
 class SherpaEmbedder:
     """Speaker embeddings from a sherpa-onnx model. The name is the model file name, so
     voiceprints saved by a different model are recognised and ignored."""
@@ -49,6 +73,7 @@ class SherpaEmbedder:
     def __init__(self, model_path: str) -> None:
         import sherpa_onnx
 
+        check_feature_normalisation(_model_metadata(model_path), Path(model_path).name)
         LOG.info("Loading speaker model %s", model_path)
         self.name = Path(model_path).name
         config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=model_path, num_threads=2)
@@ -124,7 +149,7 @@ class People:
 class Thresholds:
     accept: float = 0.45
     margin: float = 0.10
-    reject_inherited: float = 0.25
+    reject_inherited: float = 0.35
     retrain: float = 0.65
     retrain_margin: float = 0.25
     min_judge_s: float = 1.0
@@ -300,10 +325,8 @@ class Match:
         return self.key if self.key is not None else UNKNOWN_SPEAKER
 
 
-def decide(
-    ranked: list[tuple[str, float]], seconds: float, t: Thresholds, previous: Match | None, base_accept: float | None = None
-) -> Match:
-    """Who spoke, from the scores. base_accept is the accept threshold before any raise for close voices."""
+def decide(ranked: list[tuple[str, float]], seconds: float, t: Thresholds, previous: Match | None) -> Match:
+    """Who spoke, from the scores."""
     best, s1 = ranked[0] if ranked else (None, -1.0)
     other, s2 = ranked[1] if len(ranked) > 1 else (None, -1.0)
 
@@ -311,15 +334,13 @@ def decide(
     if clear and s1 >= t.accept:
         return Match(best, s1, other, s2, seconds, False, None)
     if previous is not None and previous.key is not None:
-        # A raised threshold must only turn a name into Unknown Speaker. Without this, a follow-up that
-        # is clearly someone else by the unraised threshold would be kept for whoever spoke last.
-        if clear and best != previous.key and base_accept is not None and s1 >= base_accept:
-            return Match(None, s1, other, s2, seconds, False, None)
+        # However short the turn, it is only kept for whoever spoke last when they still score well
+        # and nobody else scores as high: a quick "yes" from someone else must not go to them.
         prev_score = next((s for k, s in ranked if k == previous.key), -1.0)
-        if seconds >= t.min_judge_s and prev_score < t.reject_inherited:
+        rival = max((s for k, s in ranked if k != previous.key), default=-1.0)
+        if prev_score < t.reject_inherited or rival >= prev_score:
             return Match(None, s1, other, s2, seconds, False, None)
-        return Match(previous.key, prev_score, best if best != previous.key else other,
-                     s1 if best != previous.key else s2, seconds, True, None)
+        return Match(previous.key, prev_score, other, s2, seconds, True, None)  # they rank first, so other is the runner-up
     return Match(None, s1, other, s2, seconds, False, None)
 
 
@@ -348,7 +369,7 @@ class SpeakerId:
             previous = None
         embedding = self.embedder.embed(pcm16)
         ranked = scores(embedding, self.store, keys)
-        m = decide(ranked, seconds, self._thresholds_for(keys), previous, base_accept=self.thresholds.accept)
+        m = decide(ranked, seconds, self._thresholds_for(keys), previous)
         m.embedding = embedding
         LOG.info("%s", _describe(m, ranked))
         return m

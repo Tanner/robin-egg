@@ -41,11 +41,13 @@ Download Robin's voice once. The server looks for it in `server/voices/`, which 
 mkdir -p voices && (cd voices && ../.venv/bin/python -m piper.download_voices en_US-ryan-medium)
 ```
 
-Speaker recognition needs a voice embedding model (WeSpeaker ResNet34, about 25 MB, run by sherpa-onnx). Download it once. The server looks for it in `server/models/`, which git ignores:
+Speaker recognition needs a voice embedding model (3D-Speaker CAM++, trained on VoxCeleb, about 30 MB, run by sherpa-onnx). Download it once. The server looks for it in `server/models/`, which git ignores:
 
 ```sh
-mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx
+mkdir -p models && curl -L -o models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx
 ```
+
+The server refuses a model whose metadata does not name a `feature_normalize_type`. sherpa-onnx takes away each utterance's mean from the audio features only when the model asks for it, and without that the room and the mics swamp the voice. The WeSpeaker models are like this. Until 24 November 2026 the server used WeSpeaker ResNet34, and Tanner and Ryan scored about 0.86 against each other, so neither could be named. With CAM++ they score about 0.15 against each other and 0.5 to 0.8 against themselves.
 
 Voiceprints are tied to the model that made them. After changing the model, stop the server, rebuild the voiceprints from the saved enrolment audio, and start it again:
 
@@ -459,7 +461,7 @@ The server names a speaker only when their score is at least the accept threshol
 - The threshold for the turn is the higher of 0.45 and the closest call plus 0.10. It never goes below 0.45, so the only cost of a raise is more turns sent as Unknown Speaker.
 - Only people robin-assistant lists count.
 - The log says when the threshold changes: `The voices of ryan and tanner score up to 0.41 against each other, so the accept threshold is raised from 0.45 to 0.51`. A warning follows if someone's own enrolment sentences score below the new threshold, because that person will sometimes be Unknown Speaker.
-- A follow-up that is clearly someone else by 0.45, but under the raised threshold, is sent as Unknown Speaker. It is not kept for whoever spoke last.
+- A follow-up that is not clearly anyone is kept for whoever spoke last only if they score at least 0.35 and nobody else scores as high. This holds for a follow-up of any length, so a quick "yes" from someone else is sent as Unknown Speaker, not put down to the last speaker.
 - With one person enrolled there is nothing to compare, and the threshold stays at 0.45.
 - The check that refuses an enrolment for sounding like someone else keeps using 0.45.
 
@@ -737,7 +739,7 @@ Each option is also a key in [the config file](#the-config-file), without the le
 | `--offer-enrolment`, `--no-offer-enrolment` | on | After three questions from the same unrecognised voice, end the reply with a hint to say "learn my voice". Only while someone in the household has no voiceprint, and at most once a day. |
 | `--voiceprints` | `~/.robin-egg/voiceprints.json` | Where the enrolled voiceprints are kept. |
 | `--enrolment-audio DIR` | `~/.robin-egg/enrolment` | Where the sentences from each enrolment are kept as audio. |
-| `--speaker-model` | `models/wespeaker_en_voxceleb_resnet34_LM.onnx` | Another speaker embedding model. Changing it means everyone enrols again. |
+| `--speaker-model` | `models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx` | Another speaker embedding model. Changing it means everyone enrols again. |
 | `--recognition-light`, `--no-recognition-light` | on | Show a recognised speaker's colour on the LED ring while Robin thinks and replies. Needs speaker recognition. |
 | `--led-colours` | `~/.robin-egg/led-colours.json` | The ring colour for each person, by robin-assistant user key. |
 | `--turn-log FILE` | `~/.robin-egg/turns.jsonl` | Where each turn's outcome and timings are recorded for `stats`. Not used with `--demo` or `--echo`. |

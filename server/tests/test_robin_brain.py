@@ -656,8 +656,22 @@ def test_speaker_recognition_without_the_model_exits_with_the_download_line(no_w
         build(parse_args(argv))
     message = str(exit_info.value)
     assert str(missing) in message
-    assert "curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx" in message
+    assert "curl -L -o models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx" in message
     assert "--no-speaker-recognition" in message
+
+
+def test_a_speaker_model_that_does_not_normalise_its_features_stops_the_start(no_whisper, tmp_path, monkeypatch):
+    from robin_egg_server import speakers
+
+    model = tmp_path / "wespeaker_en_voxceleb_resnet34_LM.onnx"
+    model.write_bytes(b"not read: the metadata is faked")
+    monkeypatch.setattr(speakers, "_model_metadata", lambda path: {"framework": "wespeaker"})
+    argv = ["egg.local", "--tts", "say", "--server", "10.0.0.5", "--agent-name", "robin", "--speaker-model", str(model)]
+    with pytest.raises(SystemExit) as exit_info:
+        build(parse_args(argv))
+    message = str(exit_info.value)
+    assert "feature_normalize_type" in message
+    assert "curl -L -o models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx" in message
 
 
 def test_speaker_flag_defaults():

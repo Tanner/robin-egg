@@ -24,6 +24,7 @@ from robin_egg_server.speakers import (
     DEFAULT_SPEAKER_MODEL,
     SherpaEmbedder,
     UNKNOWN_SPEAKER,
+    check_feature_normalisation,
     Match,
     People,
     Person,
@@ -101,9 +102,25 @@ def test_short_turn_without_previous_is_unknown():
 
 
 def test_follow_up_short_and_borderline_inherits():
-    m = decide([("tanner", 0.3), ("ryan", 0.2)], 0.6, T, identified())
+    m = decide([("tanner", 0.4), ("ryan", 0.2)], 0.6, T, identified())
     assert m.key == "tanner"
     assert m.inherited is True
+
+
+def test_a_short_follow_up_that_sounds_more_like_someone_else_is_not_kept_for_the_last_speaker():
+    # Tanner asked; Ryan says "yes". Too short to name Ryan, but it must not be put down to Tanner either.
+    m = decide([("ryan", 0.5), ("tanner", 0.4)], 0.6, T, identified("tanner"))
+    assert (m.key, m.inherited) == (None, False)
+
+
+def test_a_short_follow_up_the_last_speaker_scores_poorly_on_is_unknown():
+    m = decide([("tanner", 0.3), ("ryan", 0.1)], 0.6, T, identified("tanner"))
+    assert (m.key, m.inherited) == (None, False)
+
+
+def test_a_follow_up_tied_with_someone_else_is_not_kept_for_the_last_speaker():
+    m = decide([("ryan", 0.4), ("tanner", 0.4)], 0.6, T, identified("tanner"))
+    assert m.key is None
 
 
 def test_follow_up_long_and_clearly_someone_else_switches():
@@ -229,6 +246,22 @@ def test_store_ignores_a_broken_or_foreign_file(tmp_path, caplog):
 def speech(seconds: float = 1.0, amp: float = 6000) -> bytes:
     t = np.arange(int(seconds * MIC_RATE)) / MIC_RATE
     return (amp * np.sin(2 * np.pi * 300 * t)).astype("<i2").tobytes()
+
+
+def test_a_model_that_does_not_say_how_to_normalise_its_features_is_refused():
+    # sherpa-onnx only takes away each utterance's mean when the model asks for it. Without that,
+    # the room and the mics swamp the voice and every person scores about the same as every other.
+    with pytest.raises(ValueError, match="feature_normalize_type"):
+        check_feature_normalisation({"framework": "wespeaker", "normalize_samples": "0"}, "wespeaker_en_voxceleb_resnet34_LM.onnx")
+
+
+def test_a_model_that_says_how_to_normalise_its_features_is_accepted():
+    check_feature_normalisation({"framework": "3d-speaker", "feature_normalize_type": "global-mean"}, "m.onnx")
+    check_feature_normalisation({"framework": "nemo", "feature_normalize_type": "per_feature"}, "m.onnx")
+
+
+def test_the_default_speaker_model_is_one_that_normalises_its_features():
+    assert DEFAULT_SPEAKER_MODEL.name == "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
 
 
 @pytest.mark.skipif(not DEFAULT_SPEAKER_MODEL.exists(), reason="speaker model not downloaded (see server/README.md)")
@@ -604,16 +637,20 @@ def test_a_follow_up_the_default_threshold_would_give_to_someone_else_is_not_kep
     # Tanner spoke last. Ryan follows up: clearly Ryan by the default threshold, but under the raised one.
     ranked = [("ryan", 0.58), ("tanner", 0.46)]
     raised = replace(Thresholds(), accept=0.60)
-    m = decide(ranked, 2.0, raised, identified("tanner"), base_accept=0.45)
+    m = decide(ranked, 2.0, raised, identified("tanner"))
     assert (m.key, m.inherited) == (None, False)
 
 
 def test_a_follow_up_nobody_else_claims_is_still_kept_for_the_last_speaker_with_the_threshold_raised():
     raised = replace(Thresholds(), accept=0.60)
-    m = decide([("tanner", 0.52), ("ryan", 0.20)], 2.0, raised, identified("tanner"), base_accept=0.45)
+    m = decide([("tanner", 0.52), ("ryan", 0.20)], 2.0, raised, identified("tanner"))
     assert (m.key, m.inherited) == ("tanner", True)
-    close = decide([("ryan", 0.50), ("tanner", 0.46)], 2.0, raised, identified("tanner"), base_accept=0.45)
-    assert (close.key, close.inherited) == ("tanner", True)  # too close to call either way, as before the raise
+
+
+def test_a_follow_up_someone_else_scores_higher_on_is_unknown_even_when_too_close_to_call():
+    raised = replace(Thresholds(), accept=0.60)
+    m = decide([("ryan", 0.50), ("tanner", 0.46)], 2.0, raised, identified("tanner"))
+    assert (m.key, m.inherited) == (None, False)
 
 
 def test_identify_does_not_give_the_other_persons_follow_up_to_the_last_speaker(tmp_path):

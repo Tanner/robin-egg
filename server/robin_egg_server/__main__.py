@@ -40,8 +40,8 @@ DEFAULT_CAPTURES = Path("~/.robin-egg/captures").expanduser()
 RING_FILE = Path("~/.robin-egg/ring-before-waiting.json").expanduser()
 # The same line as in server/README.md, run from server/.
 SPEAKER_MODEL_DOWNLOAD = (
-    "mkdir -p models && curl -L -o models/wespeaker_en_voxceleb_resnet34_LM.onnx "
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx"
+    "mkdir -p models && curl -L -o models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx "
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
 )
 
 
@@ -104,7 +104,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--offer-enrolment", action=argparse.BooleanOptionalAction, default=True, help="After a few questions from the same unrecognised voice, add a spoken hint that it can say 'learn my voice', while someone in the household has no voiceprint (default on; at most once a day)")
     p.add_argument("--voiceprints", default=str(DEFAULT_VOICEPRINTS), help="Where enrolled voiceprints are kept (default ~/.robin-egg/voiceprints.json)")
     p.add_argument("--enrolment-audio", metavar="DIR", default=str(DEFAULT_ENROLMENT_AUDIO), help="Where the sentences from each enrolment are kept as audio, so voiceprints can be rebuilt (default ~/.robin-egg/enrolment)")
-    p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/wespeaker_en_voxceleb_resnet34_LM.onnx)")
+    p.add_argument("--speaker-model", default=str(DEFAULT_SPEAKER_MODEL), help="Path to the speaker embedding .onnx model (default: models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx)")
     p.add_argument("--recognition-light", action=argparse.BooleanOptionalAction, default=True, help="Show a recognised speaker's colour on the LED ring while Robin thinks and replies (default on; needs speaker recognition)")
     p.add_argument("--led-colours", default=str(DEFAULT_COLOURS_FILE), help="JSON file of ring colours by robin-assistant user key, e.g. {\"tanner\": \"orange\"} (default ~/.robin-egg/led-colours.json; people it leaves out get a default colour)")
     p.add_argument("--speaking-hours", default="8-20", help="Hours when Robin may speak first (its own messages and /announce), e.g. 8-20; 20-8 runs past midnight; 0-24 for always")
@@ -296,7 +296,10 @@ def build(args: argparse.Namespace):
         from .commands import VoiceCommands
         from .speakers import People, SherpaEmbedder, SpeakerId
 
-        embedder = SherpaEmbedder(args.speaker_model)
+        try:
+            embedder = SherpaEmbedder(args.speaker_model)
+        except ValueError as err:
+            raise SystemExit(f"{err}\nDownload the default model from server/, or start with --no-speaker-recognition:\n  {SPEAKER_MODEL_DOWNLOAD}") from err
         store = VoiceprintStore(Path(args.voiceprints).expanduser(), embedder.name)
         store.load()
         speakers = SpeakerId(embedder, store)
