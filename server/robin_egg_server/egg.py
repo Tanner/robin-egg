@@ -109,6 +109,7 @@ class Options:
     repeat_window_s: float = DEFAULT_WINDOW_S  # how long "say that again" can bring back the last thing said; 0 turns it off
     urgent_sound: Path | None = None  # played before an urgent message instead; URGENT_CHIME if None
     ready_sound: Path | None = None  # played each time the server connects to the egg, at any hour; off if None
+    ready_sound_first_connect: bool = True  # False after a restart onto new code, which nobody near the egg needs to hear
     unsure_retries: int = 1  # times in a row to ask for a repeat when speech-to-text is unsure; 0 never asks
     confidence: ConfidenceLimits = field(default_factory=ConfidenceLimits)
     quiet_hours: tuple[int, int] | None = (21, 7)  # replies and announcements are quieter in this window
@@ -232,6 +233,7 @@ class Robin:
         self.urgent_sound = load_sound(self.opts.urgent_sound or URGENT_CHIME)
         self.ready_sound = load_sound(self.opts.ready_sound) if self.opts.ready_sound else None
         self._ready_task: asyncio.Task | None = None  # the ready sound being sent after a connect
+        self._connected_before = False  # this server has connected to the egg once already
         self.thinking_sound = load_sound(THINKING_CUE)
         self.closing_sound = load_sound(CLOSING_CUE)
         self.listening_sound = load_sound(LISTENING_CUE)
@@ -1641,8 +1643,11 @@ class Robin:
                     handle_announcement_finished=self.handle_announcement_finished,
                 )
                 LOG.info("Ready. Say the wake word, then a question.")
-                if self.ready_sound is not None:
+                if self.ready_sound is not None and (self._connected_before or self.opts.ready_sound_first_connect):
                     self._ready_task = asyncio.create_task(self._play_ready_sound(client))
+                elif self.ready_sound is not None:
+                    LOG.info("Not playing the ready sound, because the server restarted onto new code")
+                self._connected_before = True
                 set_up = True
                 delay = RECONNECT_DELAY_S
                 waiter = asyncio.create_task(stop.wait())

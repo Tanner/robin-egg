@@ -20,7 +20,7 @@ from .hosted_tts import DEFAULT_ELEVENLABS_MODEL, DEFAULT_ELEVENLABS_VOICE, DEFA
 from .leds import DEFAULT_COLOURS_FILE, LedRing, PersonColours
 from .logs import setup as setup_logging
 from .overheard import OVERHEARD_MODES
-from .restart import DEFAULT_IDLE_MINUTES, RESTART_EXIT, CodeWatch, supervise, supervised
+from .restart import DEFAULT_IDLE_MINUTES, RESTART_EXIT, CodeWatch, restarted, supervise, supervised
 from .room import FLOOR_GAIN, parse_hours
 from .speakers import DEFAULT_SPEAKER_MODEL, Person, VoiceprintStore
 from .vad import VAD_KINDS
@@ -125,7 +125,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--message-waiting", action=argparse.BooleanOptionalAction, default=True, help="Hold the messages Robin sends on its own outside --speaking-hours, breathe the egg's ring while any wait, and read them out to 'what did I miss?' (default on; off drops them)")
     p.add_argument("--morning-mention", action=argparse.BooleanOptionalAction, default=True, help="Once speaking hours have begun, end the first reply from Robin by saying how many held messages are waiting and how to hear them, once per batch (default on; needs --message-waiting)")
     p.add_argument("--min-volume", type=float, default=MIN_VOLUME, help=f"The quietest the egg can be set by voice, from 0 to 1 (default {MIN_VOLUME}). 'Set the volume to one' sets this")
-    p.add_argument("--restart-on-change", nargs="?", type=float, const=DEFAULT_IDLE_MINUTES, metavar="MINUTES", help=f"Restart the server onto new code when its files change, once the egg has been idle this many minutes (default {DEFAULT_IDLE_MINUTES:g}) with nothing under way, queued or held, and only if the new code starts. Off unless given. Not used with --demo")
+    p.add_argument("--restart-on-change", action=argparse.BooleanOptionalAction, default=True, help="Restart the server onto new code when its files change, once the egg has been idle for --restart-idle-minutes with nothing under way, queued or held, and only if the new code starts. No ready sound plays after it (default on; not used with --demo)")
+    p.add_argument("--restart-idle-minutes", type=float, default=DEFAULT_IDLE_MINUTES, metavar="MINUTES", help=f"How long the egg must be idle before --restart-on-change restarts the server (default {DEFAULT_IDLE_MINUTES:g})")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
@@ -133,8 +134,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error('--default-speaker-name is gone: a voice the server cannot identify is now sent as "Unknown Speaker". Remove the flag.')
     if args.save_audio_hours < 0:
         p.error("--save-audio-requests-hours (or --save-audio-hours) is a number of hours, or 0 to keep captures until you delete them")
-    if args.restart_on_change is not None and args.restart_on_change < 0:
-        p.error("--restart-on-change is a number of idle minutes before restarting, or leave the number out for the default")
+    if args.restart_idle_minutes < 0:
+        p.error("--restart-idle-minutes is a number of minutes, 0 or more")
     if args.offline_alert < 0:
         p.error("--offline-alert is a number of minutes, or 0 to turn it off")
     try:
@@ -254,6 +255,7 @@ def build(args: argparse.Namespace):
         quiet_state=Path(args.quiet_state).expanduser(),
         urgent_sound=Path(args.urgent_sound).expanduser() if args.urgent_sound else None,
         ready_sound=None if args.ready_sound == "off" else Path(args.ready_sound).expanduser(),
+        ready_sound_first_connect=not restarted(),
         unsure_retries=args.unsure_retries,
         overheard=args.overheard,
         confidence=ConfidenceLimits(args.min_logprob, args.max_no_speech, args.max_compression),
@@ -404,8 +406,8 @@ async def run(args: argparse.Namespace, argv: list[str] | None = None) -> bool:
         if not args.echo and args.offline_alert > 0:
             watcher = asyncio.create_task(OfflineAlert(robin, args.server, args.agent_name, after_s=args.offline_alert * 60).run(stop))
         code_watch = None
-        if args.restart_on_change is not None:
-            watch = CodeWatch(robin, args.restart_on_change * 60, sys.argv[1:] if argv is None else argv)
+        if args.restart_on_change:
+            watch = CodeWatch(robin, args.restart_idle_minutes * 60, sys.argv[1:] if argv is None else argv)
 
             async def restart_when_ready() -> None:
                 nonlocal restart
@@ -474,7 +476,7 @@ async def demo(args: argparse.Namespace, robin: Robin, web: AudioServer) -> None
 def main() -> None:
     args = parse_args()
     setup_logging(args.verbose)
-    if args.restart_on_change is not None and not args.demo and not supervised():
+    if args.restart_on_change and not args.demo and not supervised():
         sys.exit(supervise())
     restart = False
     with contextlib.suppress(KeyboardInterrupt):

@@ -53,6 +53,19 @@ def test_a_reconnect_plays_the_ready_sound_again(caplog):
     assert all(starts_with(audio, robin.ready_sound) for _, audio in egg.announcements)
 
 
+def test_a_server_restarted_onto_new_code_plays_the_ready_sound_only_after_a_reconnect(caplog):
+    async def scenario(egg, robin, tts, handled):
+        await eventually(lambda: "Not playing the ready sound" in caplog.text)
+        assert egg.announcements == []
+        egg.drop()
+        await eventually(lambda: len(egg.announcements) == 1)  # the egg itself came back, which is worth hearing
+
+    restarted = Options(ready_sound=READY_CHIME, speaking_hours=NEVER, ready_sound_first_connect=False)
+    with caplog.at_level(logging.INFO, logger="robin"):
+        egg, robin, _ = run(restarted, scenario)
+    assert len(egg.announcements) == 1
+
+
 def test_the_ready_sound_plays_with_the_microphone_muted():
     async def scenario(egg, robin, tts, handled):
         await eventually(lambda: egg.announcements)

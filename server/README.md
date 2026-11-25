@@ -314,15 +314,14 @@ If the egg has been unreachable for 10 minutes, the server asks Robin to tell th
 
 ### Picking up new code on its own
 
-With `--restart-on-change`, the server restarts onto new code without being stopped by hand. It looks at its own files every 15 seconds. Once one changes, it waits for the files to stay unchanged for 30 seconds and for the egg to be idle for 10 minutes (`--restart-on-change MINUTES` changes this). The egg counts as idle when nobody has finished a turn or heard an announcement in that time, and nothing would be lost by restarting: no conversation, reply, announcement or voice enrolment under way, and none of Robin's messages queued or held for "what did I miss?". The first restart also waits that long after the server started.
+The server restarts onto new code without being stopped by hand. It looks at its own files every 15 seconds. Once one changes, it waits for the files to stay unchanged for 30 seconds and for the egg to be idle for 2 minutes (`--restart-idle-minutes` changes this). The egg counts as idle when nobody has finished a turn or heard an announcement in that time, and nothing would be lost by restarting: no conversation, reply, announcement or voice enrolment under way, and none of Robin's messages queued or held for "what did I miss?". The first restart also waits that long after the server started. `--no-restart-on-change` turns this off.
 
 Before restarting, it compiles every module and parses the same command line in a separate Python. If that fails, for example because of a syntax error, a missing package or a renamed option, the log says why with `Not restarting onto the new server code`, and the server keeps running the code it has until the files change again.
 
-The command you ran becomes a small supervisor that loads no models and runs the server as a child process, starting it again each time the server stops to restart. A restart takes a few seconds. `caffeinate` keeps holding the Mac awake throughout, because the supervisor stays running. Ctrl-C and `kill` stop both.
+The command you ran becomes a small supervisor that loads no models and runs the server as a child process, starting it again each time the server stops to restart. A restart takes a few seconds, and the ready sound does not play when the new server connects. `caffeinate` keeps holding the Mac awake throughout, because the supervisor stays running. Ctrl-C and `kill` stop both.
 
-```sh
-caffeinate -ims .venv/bin/python -m robin_egg_server EGG --server ROBIN --agent-name AGENT --restart-on-change
-```
+A restart forgets what is kept only in memory: the last thing Robin said, so "say that again" has nothing to repeat until Robin speaks again, and who last spoke for `--presence-minutes`.
+
 ## Message waiting
 
 A message Robin sends on its own outside speaking hours is held instead of spoken, and the egg's LED ring breathes softly while any are held. Say the wake word, then "what did I miss?", and Robin reads them out, oldest first, each with the time it arrived. The ring then goes back to how it was.
@@ -656,7 +655,8 @@ Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin
 | `--openai-voice` | `ash` | The OpenAI voice name, with `--tts openai`. |
 | `--tts-time-limit` | 4 s | How long the hosted voice gets for one sentence before Piper speaks the rest of the reply. |
 | `--offline-alert MINUTES` | 10 | Have Robin text the household once the egg has been unreachable this long, and again when it is back. `0` turns it off. Not used with `--echo`. |
-| `--restart-on-change [MINUTES]` | off | Restart onto new code when the server's files change, once the egg has been idle this many minutes (10 when no number is given), nothing is under way, queued or held, and the new code starts. See [Picking up new code on its own](#picking-up-new-code-on-its-own). Not used with `--demo`. |
+| `--restart-on-change`, `--no-restart-on-change` | on | Restart onto new code when the server's files change, once the egg has been idle for `--restart-idle-minutes`, nothing is under way, queued or held, and the new code starts. No ready sound plays after it. See [Picking up new code on its own](#picking-up-new-code-on-its-own). Not used with `--demo`. |
+| `--restart-idle-minutes` | 2 | How long the egg must be idle before a restart onto new code. |
 | `--save-audio-requests [DIR]` | off | Keep each mic capture, the request after the wake word, as a WAV for 24 hours, in DIR or in `~/.robin-egg/captures` when no folder is given. Put it after the egg's address, or write `--save-audio-requests=DIR`. `--save-audio` still works. |
 | `--save-audio-requests-hours HOURS` | 24 | How long `--save-audio-requests` keeps a capture before the server deletes it. `0` keeps captures until you delete them. `--save-audio-hours` still works. |
 | `--min-volume` | 0.3 | The quietest the egg can be set by voice, from 0 to 1. "Set the volume to one" sets this. |

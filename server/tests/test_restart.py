@@ -16,7 +16,7 @@ from robin_egg_server import fake_egg
 from robin_egg_server.__main__ import parse_args
 from robin_egg_server.egg import Options, Robin
 from robin_egg_server import restart
-from robin_egg_server.restart import PACKAGE, RESTART_EXIT, SUPERVISED_ENV, CodeWatch, verify
+from robin_egg_server.restart import PACKAGE, RESTART_EXIT, RESTARTED_ENV, SUPERVISED_ENV, CodeWatch, verify
 from robin_egg_server.speaker_stream import SpeakerMessage
 from robin_egg_server.web import AudioServer
 from test_server import FakeSTT, SlowBrain, ToneTTS, converse, speech
@@ -222,10 +222,11 @@ def test_quiet_time_counts_from_the_end_of_the_last_turn():
     assert r.quiet_for() >= IDLE_S
 
 
-def test_restart_on_change_takes_idle_minutes_or_uses_the_default():
-    assert parse_args(["egg.local", "--echo"]).restart_on_change is None
-    assert parse_args(["egg.local", "--echo", "--restart-on-change"]).restart_on_change == 10.0
-    assert parse_args(["egg.local", "--echo", "--restart-on-change", "2"]).restart_on_change == 2.0
+def test_restarting_onto_new_code_is_on_with_a_two_minute_wait_unless_changed():
+    assert parse_args(["egg.local", "--echo"]).restart_on_change is True
+    assert parse_args(["egg.local", "--echo"]).restart_idle_minutes == 2.0
+    assert parse_args(["egg.local", "--echo", "--no-restart-on-change"]).restart_on_change is False
+    assert parse_args(["egg.local", "--echo", "--restart-idle-minutes", "5"]).restart_idle_minutes == 5.0
 
 
 def test_the_supervisor_starts_the_server_again_until_it_exits_for_another_reason(tmp_path, monkeypatch):
@@ -234,9 +235,12 @@ def test_the_supervisor_starts_the_server_again_until_it_exits_for_another_reaso
     script.write_text(
         "import os, pathlib, sys\n"
         f"runs = pathlib.Path({str(runs)!r})\n"
-        "runs.write_text(runs.read_text() + os.environ.get(" + repr(SUPERVISED_ENV) + ", '-') if runs.exists() else os.environ.get(" + repr(SUPERVISED_ENV) + ", '-'))\n"
-        f"sys.exit({RESTART_EXIT} if len(runs.read_text()) < 3 else 4)\n"
+        f"seen = os.environ.get({SUPERVISED_ENV!r}, '-') + os.environ.get({RESTARTED_ENV!r}, '-')\n"
+        "before = runs.read_text().split() if runs.exists() else []\n"
+        "runs.write_text(' '.join(before + [seen]))\n"
+        f"sys.exit({RESTART_EXIT} if len(before) < 2 else 4)\n"
     )
+    monkeypatch.delenv(RESTARTED_ENV, raising=False)
     monkeypatch.setattr(restart.sys, "orig_argv", [restart.sys.executable, str(script)])
     assert restart.supervise() == 4
-    assert runs.read_text() == "111"  # three runs, each told it was supervised
+    assert runs.read_text().split() == ["1-", "11", "11"]  # supervised every time, and told it restarted after the first

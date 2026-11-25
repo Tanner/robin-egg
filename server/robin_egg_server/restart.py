@@ -29,12 +29,13 @@ from typing import Awaitable, Callable, Protocol
 LOG = logging.getLogger("robin.restart")
 
 PACKAGE = Path(__file__).resolve().parent
-DEFAULT_IDLE_MINUTES = 10.0
+DEFAULT_IDLE_MINUTES = 2.0
 CHECK_S = 15.0  # how often the files are looked at
 SETTLE_S = 30.0  # how long the files must stay unchanged, so a half-finished edit is not started
 VERIFY_TIMEOUT_S = 120.0
 RESTART_EXIT = 75  # the exit code by which the server asks its supervisor to start it again
 SUPERVISED_ENV = "ROBIN_EGG_SUPERVISED"
+RESTARTED_ENV = "ROBIN_EGG_RESTARTED"  # set for every server the supervisor starts after the first
 
 Snapshot = dict[Path, float]
 
@@ -124,7 +125,7 @@ class CodeWatch:
 
     async def _watch(self, stop: asyncio.Event) -> bool:
         running = snapshot(self.folder)
-        LOG.info("Restarting onto new code in %s once it changes and the egg has been idle for %g minutes (--restart-on-change)", self.folder, self.idle_s / 60)
+        LOG.info("Restarting onto new code in %s once it changes and the egg has been idle for %g minutes (--no-restart-on-change turns this off)", self.folder, self.idle_s / 60)
         started = self.clock()
         latest, changed_at = running, None
         refused: Snapshot | None = None  # files the last failed check saw, so it is not repeated until they change
@@ -175,6 +176,11 @@ def supervised() -> bool:
     return os.environ.get(SUPERVISED_ENV) == "1"
 
 
+def restarted() -> bool:
+    """True in a server started again onto new code, rather than by hand."""
+    return os.environ.get(RESTARTED_ENV) == "1"
+
+
 def supervise() -> int:
     """Runs the server as a child process with this command line, starting it again each time it exits to restart.
 
@@ -203,3 +209,4 @@ def supervise() -> int:
         if code != RESTART_EXIT:
             return 128 - code if code < 0 else code  # a child stopped by a signal exits the way a shell reports it
         LOG.info("Starting the server again on the new code")
+        env[RESTARTED_ENV] = "1"
