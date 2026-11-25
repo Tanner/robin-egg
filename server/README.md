@@ -87,10 +87,36 @@ Do not point that at a file you already have: the shell empties the file before 
 
 Things to know:
 
-- API keys stay out of the file. The hosted voice reads `OPENAI_API_KEY` from the environment, and an API key in the file is refused.
-- The egg's encryption key, `psk`, may be in the file. It is never logged or printed, and the server warns if other accounts on the Mac can read the file (`chmod 600 ~/.robin-egg/config.toml`).
+- API keys stay out of the file. They go in [the .env file](#secrets-in-the-env-file), and an API key in the config file is refused.
+- The egg's encryption key, `psk`, may be in the file, though the .env file is the better place for it. It is never logged or printed, and the server warns if other accounts on the Mac can read the file (`chmod 600 ~/.robin-egg/config.toml`).
 - An on/off option without a `--no-` form, such as `--echo` or `--no-stream` (`no-stream = true`), cannot be turned back off from the command line once the file turns it on.
 - `piper-voice` and `speaker-model` need a full path in the file, because `~` is not expanded for them.
+
+## Secrets in the .env file
+
+Secrets live in `~/.robin-egg/.env`, beside the config file and outside the repo:
+
+```sh
+OPENAI_API_KEY=sk-...
+ELEVENLABS_API_KEY=...
+ROBIN_EGG_PSK=base64-key-from-the-egg
+```
+
+```sh
+chmod 600 ~/.robin-egg/.env
+```
+
+The server reads three names, and any other name stops the start with a message naming the line:
+
+| Name | What it is |
+| --- | --- |
+| `OPENAI_API_KEY` | OpenAI's API key, for `--tts openai`. |
+| `ELEVENLABS_API_KEY` | ElevenLabs' API key, for `--tts elevenlabs`. |
+| `ROBIN_EGG_PSK` | The egg's encryption key, the same as `--psk`. Only needed if one was set on the egg. |
+
+Each line is `NAME=value`. `export ` in front, quotes around the value, blank lines and `#` comments are all fine, so the same file can be loaded with `source` in a shell.
+
+A variable already set in the environment wins over the file, and `--psk` on the command line wins over both. `ROBIN_EGG_PSK` wins over a `psk` in the config file. `--env-file FILE` reads another file, which must exist; no file at the usual path is fine. The log says at the start which names were read from the file, never their values, and warns if other accounts on the Mac can read it.
 
 ## Try it today, without the egg
 
@@ -579,14 +605,14 @@ For each WAV in the folder and its subfolders it prints where each detector woul
 Text-to-speech is a choice of engine behind one interface in `voices.py`. Piper is the default and stays Robin's voice. There are two hosted voices. `--tts openai` speaks with OpenAI's speech API, using the model and voice robin-assistant uses for its voice replies (`gpt-4o-mini-tts`, `ash`).
 
 ```sh
-export OPENAI_API_KEY=...   # in the shell or the service's environment, never on the command line or in the repo
+echo 'OPENAI_API_KEY=...' >> ~/.robin-egg/.env   # or export it in the shell; never on the command line or in the repo
 .venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin --tts openai
 ```
 
-`--tts elevenlabs` speaks with ElevenLabs' text-to-speech API. It needs `ELEVENLABS_API_KEY` in the environment, and takes a voice ID from your ElevenLabs voice library (`--elevenlabs-voice`, default George, a premade voice) and a model ID (`--elevenlabs-model`, default `eleven_flash_v2_5`, the fastest).
+`--tts elevenlabs` speaks with ElevenLabs' text-to-speech API. It needs `ELEVENLABS_API_KEY` in [the .env file](#secrets-in-the-env-file) or the environment, and takes a voice ID from your ElevenLabs voice library (`--elevenlabs-voice`, default George, a premade voice) and a model ID (`--elevenlabs-model`, default `eleven_flash_v2_5`, the fastest).
 
 ```sh
-export ELEVENLABS_API_KEY=...
+echo 'ELEVENLABS_API_KEY=...' >> ~/.robin-egg/.env
 .venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin --tts elevenlabs --elevenlabs-voice <voice-id>
 ```
 
@@ -656,6 +682,7 @@ Each option is also a key in [the config file](#the-config-file), without the le
 | Option | Default | What it does |
 | --- | --- | --- |
 | `--config FILE` | `~/.robin-egg/config.toml` | The TOML file settings are read from. The command line overrides it. |
+| `--env-file FILE` | `~/.robin-egg/.env` | The file secrets are read from: `OPENAI_API_KEY`, `ELEVENLABS_API_KEY` and `ROBIN_EGG_PSK`. The environment overrides it. |
 | `--print-config` | off | Print the settings this start would use as TOML, then exit. |
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
 | `--thinking-cue`, `--no-thinking-cue` | on | Play a soft sound while Robin is slow to start answering. Not played with `--no-stream`. |

@@ -167,7 +167,7 @@ def _with_fallback(
 ) -> TextToSpeech:
     key = (os.environ if env is None else env).get(key_env, "").strip()
     if not key:
-        LOG.warning("%s is not set, so the %s voice is off and Piper speaks every reply. Set it in the environment and start again to use the %s voice", key_env, name, name)
+        LOG.warning("%s is not set, so the %s voice is off and Piper speaks every reply. Set it in ~/.robin-egg/.env or the environment and start again to use the %s voice", key_env, name, name)
         return local
     LOG.info("Using the %s voice %s, with Piper as the fallback after %g s per sentence. The text of Robin's replies is sent to %s", name, describe, time_limit_s, name)
     return FallbackTTS(make(key, time_limit_s + HTTP_TIMEOUT_MARGIN_S), local, time_limit_s, primary_name=name)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import tomllib
 
 import pytest
@@ -133,7 +134,7 @@ def test_the_usual_checks_apply_to_the_file_and_name_it(home_file, capsys):
 def test_api_keys_are_refused_and_pointed_at_the_environment(home_file, capsys):
     home_file.write_text(ROBIN + 'openai-api-key = "sk-not-a-real-key"\n')
     err = refused([], capsys)
-    assert "OPENAI_API_KEY from the environment" in err and "sk-not-a-real-key" not in err
+    assert "Put OPENAI_API_KEY or ELEVENLABS_API_KEY in" in err and ".env" in err and "sk-not-a-real-key" not in err
 
 
 def test_the_log_says_what_came_from_the_file_and_the_command_line_without_secrets(home_file, caplog):
@@ -185,3 +186,78 @@ def test_print_config_with_nothing_set_is_a_starting_file(home_file, capsys):
     assert "# host =" in out and "port = 6053" in out
     home_file.write_text(out)
     assert parse_args(["egg.local", "--echo"]).port == 6053
+
+
+@pytest.fixture
+def env_file(monkeypatch, tmp_path):
+    """Where the server looks for its .env file when --env-file is not given."""
+    path = tmp_path / ".env"
+    monkeypatch.setattr(config, "DEFAULT_ENV_FILE", path)
+    return path
+
+
+def test_the_env_file_puts_the_api_keys_in_the_environment(env_file, monkeypatch):
+    env_file.write_text('# Robin Egg secrets\n\nexport OPENAI_API_KEY="sk-from-the-file"\nELEVENLABS_API_KEY=el-from-the-file\n')
+    report = parse_args(["egg.local", "--echo"]).config_report
+    assert "OPENAI_API_KEY" not in os.environ, "parsing alone leaves the environment alone"
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    config.apply_env(report)
+    assert os.environ["OPENAI_API_KEY"] == "sk-from-the-file"
+    assert os.environ["ELEVENLABS_API_KEY"] == "el-from-the-file"
+
+
+def test_the_environment_wins_over_the_env_file(env_file, monkeypatch, caplog):
+    env_file.write_text("OPENAI_API_KEY=sk-from-the-file\n")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-the-shell")
+    report = parse_args(["egg.local", "--echo"]).config_report
+    config.apply_env(report)
+    assert os.environ["OPENAI_API_KEY"] == "sk-from-the-shell"
+    with caplog.at_level(logging.INFO):
+        config.log_report(report)
+    assert "not used: OPENAI_API_KEY" in caplog.text and "sk-from" not in caplog.text
+
+
+def test_the_eggs_key_comes_from_the_env_file_under_the_command_line(env_file, home_file):
+    env_file.write_text("ROBIN_EGG_PSK='a2V5LWZyb20tZW52'\n")
+    assert parse_args(["egg.local", "--echo"]).psk == "a2V5LWZyb20tZW52"
+    assert parse_args(["egg.local", "--echo", "--psk", "a2V5LWNsaQ=="]).psk == "a2V5LWNsaQ=="
+    home_file.write_text('psk = "a2V5LWZyb20tdG9tbA=="\n')
+    args = parse_args(["egg.local", "--echo"])
+    assert args.psk == "a2V5LWZyb20tZW52", "the secret's own file wins over the config file"
+    assert "(overridden by ROBIN_EGG_PSK)" in args.config_report.from_file["psk"]
+
+
+def test_the_log_names_the_secrets_but_never_their_values(env_file, caplog):
+    env_file.write_text("OPENAI_API_KEY=sk-from-the-file\nROBIN_EGG_PSK=a2V5LWZyb20tZW52\n")
+    env_file.chmod(0o644)
+    with caplog.at_level(logging.INFO):
+        config.log_report(parse_args(["egg.local", "--echo"]).config_report)
+    assert f"Read secrets from the .env file {env_file}: OPENAI_API_KEY, ROBIN_EGG_PSK" in caplog.text
+    assert "comes from ROBIN_EGG_PSK" in caplog.text and "chmod 600" in caplog.text
+    assert "sk-from" not in caplog.text and "a2V5" not in caplog.text
+
+
+def test_a_missing_env_file_in_the_usual_place_is_not_an_error(env_file):
+    report = parse_args(["egg.local", "--echo"]).config_report
+    assert report.env_read is False and report.env == {}
+
+
+def test_another_env_file_is_read_with_env_file_and_must_exist(env_file, tmp_path, capsys):
+    other = tmp_path / "bench.env"
+    other.write_text("ROBIN_EGG_PSK=YmVuY2g=\n")
+    assert parse_args(["egg.local", "--echo", "--env-file", str(other)]).psk == "YmVuY2g="
+    err = refused(["egg.local", "--echo", "--env-file", str(tmp_path / "missing.env")], capsys)
+    assert "missing.env cannot be read" in err
+
+
+def test_everything_wrong_with_the_env_file_is_reported_at_once_without_values(env_file, capsys):
+    env_file.write_text("OPENAI_KEY=sk-secret-one\njust some words\nROBIN_EGG_PSK=\nOPENAI_API_KEY=a\nOPENAI_API_KEY=b\n")
+    err = refused(["egg.local", "--echo"], capsys)
+    assert "line 1: OPENAI_KEY is not a secret the server reads. Did you mean OPENAI_API_KEY?" in err
+    assert "line 2 is not NAME=value" in err and "line 3: ROBIN_EGG_PSK is empty" in err and "line 5: OPENAI_API_KEY is set twice" in err
+    assert "sk-secret-one" not in err
+
+
+def test_env_file_is_not_a_setting(home_file, capsys):
+    home_file.write_text('env-file = "/tmp/x.env"\n')
+    assert "'env-file' is not a setting" in refused([], capsys)

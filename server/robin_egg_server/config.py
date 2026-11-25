@@ -1,4 +1,4 @@
-"""Settings from a TOML file, so the server starts without a long command line.
+"""Settings from a TOML file, and secrets from a .env file, so the server starts without a long command line.
 
 The accepted keys are read off the command line's own argparse definitions:
 every option is a key under the same name, with the same type and choices.
@@ -11,6 +11,7 @@ import argparse
 import difflib
 import json
 import logging
+import os
 import stat
 import sys
 import tomllib
@@ -18,11 +19,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .hosted_tts import ELEVENLABS_KEY_ENV, OPENAI_KEY_ENV
+
 LOG = logging.getLogger("robin")
 
 DEFAULT_CONFIG_FILE = Path("~/.robin-egg/config.toml").expanduser()
+DEFAULT_ENV_FILE = Path("~/.robin-egg/.env").expanduser()
+PSK_ENV = "ROBIN_EGG_PSK"
+# The secrets the .env file may hold, and what each is for.
+ENV_KEYS = {
+    OPENAI_KEY_ENV: "OpenAI's API key, for --tts openai",
+    ELEVENLABS_KEY_ENV: "ElevenLabs' API key, for --tts elevenlabs",
+    PSK_ENV: "the egg's encryption key, as --psk",
+}
 # Options that say how to read the settings are not settings themselves.
-NOT_SETTINGS = {"config", "print_config"}
+NOT_SETTINGS = {"config", "env_file", "print_config"}
 SECRET_WORDS = ("psk", "key", "token", "secret", "password")
 SWITCHES = (argparse._StoreTrueAction, argparse._StoreFalseAction, argparse.BooleanOptionalAction)
 STORES = (argparse._StoreAction, *SWITCHES)
@@ -37,10 +48,17 @@ class ConfigReport:
     from_file: dict[str, str] = field(default_factory=dict)
     from_command_line: dict[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    env_path: Path = DEFAULT_ENV_FILE
+    env_read: bool = False
+    # The secrets from the .env file that the environment does not already set.
+    env: dict[str, str] = field(default_factory=dict)
+    env_overridden: list[str] = field(default_factory=list)
+    psk_from_env: bool = False
 
 
 def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--config", metavar="FILE", help=f"Read settings from this TOML file instead of {tilde(DEFAULT_CONFIG_FILE)}. Every option here is a key in it, without the leading dashes; the command line overrides the file")
+    p.add_argument("--env-file", metavar="FILE", help=f"Read secrets from this .env file instead of {tilde(DEFAULT_ENV_FILE)}: {', '.join(ENV_KEYS)}. A variable already set in the environment wins over the file")
     p.add_argument("--print-config", action="store_true", help="Print the settings this start would use as TOML, then exit. With no config file yet, this is a starting one")
 
 
@@ -156,7 +174,7 @@ def read_file(path: Path, known: dict[str, argparse.Action]) -> dict[str, Any]:
         dest = key.replace("-", "_")
         if dest not in known:
             if "api_key" in dest.lower():
-                problems.append(f"{key!r} is not a setting: API keys are not kept in this file. The hosted voice reads OPENAI_API_KEY from the environment")
+                problems.append(f"{key!r} is not a setting: API keys are not kept in this file. Put {' or '.join(k for k in ENV_KEYS if k != PSK_ENV)} in {tilde(DEFAULT_ENV_FILE)} or the environment")
                 continue
             close = difflib.get_close_matches(dest, known, n=1)
             hint = f" Did you mean {name(close[0])!r}?" if close else ""
@@ -171,6 +189,69 @@ def read_file(path: Path, known: dict[str, argparse.Action]) -> dict[str, Any]:
     if problems:
         raise ValueError(f"The config file {path} has {'a setting' if len(problems) == 1 else 'settings'} the server cannot use:\n  " + "\n  ".join(problems))
     return values
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """The secrets in a .env file by name, or ValueError listing everything wrong with it.
+
+    Each line is NAME=value, optionally after `export `, with the value optionally in quotes.
+    Blank lines and lines starting with # are skipped.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as err:
+        raise ValueError(f"The .env file {path} cannot be read: {err.strerror or err}") from err
+    except UnicodeDecodeError as err:
+        raise ValueError(f"The .env file {path} is not UTF-8 text: {err}") from err
+    values: dict[str, str] = {}
+    problems: list[str] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = line.removeprefix("export ").lstrip()
+        key, equals, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if not equals or not key:
+            problems.append(f"line {number} is not NAME=value")
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key not in ENV_KEYS:
+            close = difflib.get_close_matches(key, ENV_KEYS, n=1)
+            hint = f" Did you mean {close[0]}?" if close else ""
+            problems.append(f"line {number}: {key} is not a secret the server reads.{hint} It reads {', '.join(ENV_KEYS)}; other settings go in the config file")
+        elif key in values:
+            problems.append(f"line {number}: {key} is set twice")
+        elif not value:
+            problems.append(f"line {number}: {key} is empty")
+        else:
+            values[key] = value
+    if problems:
+        raise ValueError(f"The .env file {path} has {'a line' if len(problems) == 1 else 'lines'} the server cannot use:\n  " + "\n  ".join(problems))
+    return values
+
+
+def readable_by_others(path: Path) -> bool:
+    return bool(stat.S_IMODE(path.stat().st_mode) & 0o077)
+
+
+def read_secrets(p: argparse.ArgumentParser, given: argparse.Namespace, report: ConfigReport) -> dict[str, str]:
+    """The secrets this start uses: the environment over the .env file. Records the file's part in the report."""
+    explicit = getattr(given, "env_file", None)
+    report.env_path = Path(explicit).expanduser() if explicit else DEFAULT_ENV_FILE
+    from_file: dict[str, str] = {}
+    if explicit or report.env_path.exists():
+        try:
+            from_file = read_env_file(report.env_path)
+        except ValueError as err:
+            p.error(str(err))
+        report.env_read = True
+        if from_file and readable_by_others(report.env_path):
+            report.warnings.append(f"The .env file {report.env_path} can be read by other accounts on this Mac; chmod 600 keeps it private")
+    report.env = {k: v for k, v in from_file.items() if k not in os.environ}
+    report.env_overridden = [k for k in from_file if k in os.environ]
+    return {**from_file, **{k: os.environ[k] for k in ENV_KEYS if k in os.environ}}
 
 
 def given_on_command_line(p: argparse.ArgumentParser, argv: list[str] | None) -> argparse.Namespace:
@@ -210,6 +291,7 @@ def parse(p: argparse.ArgumentParser, argv: list[str] | None) -> argparse.Namesp
     explicit = getattr(given, "config", None)
     path = Path(explicit).expanduser() if explicit else DEFAULT_CONFIG_FILE
     report = ConfigReport(path)
+    secrets = read_secrets(p, given, report)
     values: dict[str, Any] = {}
     if explicit or path.exists():
         try:
@@ -218,11 +300,14 @@ def parse(p: argparse.ArgumentParser, argv: list[str] | None) -> argparse.Namesp
             p.error(str(err))
         report.read = True
         with_secrets = [name(d) for d in values if is_secret(d)]
-        if with_secrets and stat.S_IMODE(path.stat().st_mode) & 0o077:
+        if with_secrets and readable_by_others(path):
             report.warnings.append(f"The config file {path} holds {' and '.join(with_secrets)} and can be read by other accounts on this Mac; chmod 600 keeps it private")
     p.set_defaults(**values)
+    if PSK_ENV in secrets and not hasattr(given, "psk"):
+        p.set_defaults(psk=secrets[PSK_ENV])
+        report.psk_from_env = True
     args = p.parse_args(argv)
-    report.from_file = {d: shown(d, v) for d, v in values.items() if not hasattr(given, d)}
+    report.from_file = {d: shown(d, v) + (f" (overridden by {PSK_ENV})" if d == "psk" and report.psk_from_env else "") for d, v in values.items() if not hasattr(given, d)}
     report.from_command_line = {d: shown(d, getattr(given, d)) + (" (overrides the file)" if d in values else "") for d in known if hasattr(given, d)}
     args.config_report = report
     if args.print_config:
@@ -248,6 +333,12 @@ def as_toml(known: dict[str, argparse.Action], args: argparse.Namespace) -> str:
     return "\n".join(lines)
 
 
+def apply_env(report: ConfigReport) -> None:
+    """Put the .env file's secrets into this process's environment, under any already set there."""
+    for key, value in report.env.items():
+        os.environ.setdefault(key, value)
+
+
 def log_report(report: ConfigReport) -> None:
     if report.read:
         LOG.info("Read settings from the config file %s: %s", report.path, ", ".join(report.from_file.values()) or "none that the command line does not override")
@@ -255,5 +346,11 @@ def log_report(report: ConfigReport) -> None:
         LOG.info("No config file at %s, so settings come from the command line and the defaults", report.path)
     if report.from_command_line:
         LOG.info("Settings from the command line: %s", ", ".join(report.from_command_line.values()))
+    if report.env_read:
+        LOG.info("Read secrets from the .env file %s: %s", report.env_path, ", ".join(report.env) or "none that the environment does not already set")
+        if report.env_overridden:
+            LOG.info("Already set in the environment, so the .env file's value is not used: %s", ", ".join(report.env_overridden))
+    if report.psk_from_env:
+        LOG.info("The egg's encryption key comes from %s", PSK_ENV)
     for warning in report.warnings:
         LOG.warning(warning)
