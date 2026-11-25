@@ -598,6 +598,8 @@ class FakeEgg:
         return max(0.0, run.first_byte_at + audio_seconds(run.final or run.streamed) - played_clock())
 
     def _after_run(self, run: Run) -> None:
+        if run is not self.runs[-1]:
+            return  # the wake word started a newer run while this one's reply was still arriving, so the egg has moved on
         following = self.wake_words[len(self.runs)] if self.wake_words and len(self.runs) < len(self.wake_words) else None
         if following is not None:
             self._freeze(following)

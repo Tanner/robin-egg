@@ -755,8 +755,12 @@ class PlaysInRealTime(FakeEgg):
         if not self._following:
             return super()._start_run(wake_word)
 
+        finished = self.runs[-1]
+
         async def later() -> None:
             await asyncio.sleep(0)
+            if self.runs[-1] is not finished:
+                return  # the wake word started a new run before the reopen, so the mic does not reopen
             fake_egg.skip_played(self.ends_at() - self.early_s - fake_egg.played_clock())  # the reply plays until the reopen
             self.reopened_at = fake_egg.played_clock()
             FakeEgg._start_run(self, wake_word if self.phrase is None else self.phrase)
