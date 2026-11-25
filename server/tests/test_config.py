@@ -261,3 +261,34 @@ def test_everything_wrong_with_the_env_file_is_reported_at_once_without_values(e
 def test_env_file_is_not_a_setting(home_file, capsys):
     home_file.write_text('env-file = "/tmp/x.env"\n')
     assert "'env-file' is not a setting" in refused([], capsys)
+
+
+def test_an_option_is_its_flag_name_even_when_argparse_stores_it_elsewhere(home_file, tmp_path, caplog):
+    home_file.write_text(ROBIN + f'save-wake-clips = "{tmp_path}/wakes"\nsave-audio-requests = "{tmp_path}/captures"\nsave-audio-requests-hours = 6\n')
+    args = parse_args([])
+    assert args.wake_clips == tmp_path / "wakes"
+    assert args.save_audio == f"{tmp_path}/captures" and args.save_audio_hours == 6.0
+    with caplog.at_level(logging.INFO):
+        config.log_report(args.config_report)
+    assert "save-wake-clips=" in caplog.text and "save-audio-requests-hours=6.0" in caplog.text
+    assert "wake-clips=" not in caplog.text.replace("save-wake-clips=", "")
+
+
+def test_an_options_other_spelling_is_a_key_too_but_not_both(home_file, capsys):
+    home_file.write_text(ROBIN + 'save-audio = "/tmp/captures"\n')
+    assert parse_args([]).save_audio == "/tmp/captures"
+    home_file.write_text(ROBIN + 'save-audio = "/tmp/a"\nsave-audio-requests = "/tmp/b"\n')
+    assert "set twice" in refused([], capsys)
+
+
+def test_argparses_own_names_are_not_keys(home_file, capsys):
+    home_file.write_text(ROBIN + 'wake-clips = "/tmp/wakes"\n')
+    assert "Did you mean 'save-wake-clips'?" in refused([], capsys)
+
+
+def test_print_config_uses_the_flag_names(home_file, capsys):
+    with pytest.raises(SystemExit):
+        parse_args(["egg.local", "--save-wake-clips=/tmp/wakes", "--print-config"])
+    printed = capsys.readouterr().out
+    assert 'save-wake-clips = "/tmp/wakes"' in printed and "save-audio-requests-hours = 24.0" in printed
+    assert "\nwake-clips" not in printed and "# wake-clips" not in printed

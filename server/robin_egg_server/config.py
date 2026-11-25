@@ -62,12 +62,30 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--print-config", action="store_true", help="Print the settings this start would use as TOML, then exit. With no config file yet, this is a starting one")
 
 
+def key_of(flag: str) -> str:
+    return flag.removeprefix("--").replace("-", "_")
+
+
 def settings(p: argparse.ArgumentParser) -> dict[str, argparse.Action]:
-    """The options that can be set in the file, by key."""
+    """The options that can be set in the file, by key.
+
+    An option's key is its first long flag, so --save-wake-clips is save_wake_clips even
+    though argparse keeps it as wake_clips. The egg's address, which has no flag, is host.
+    """
     return {
-        a.dest: a
+        key_of(next((f for f in a.option_strings if f.startswith("--")), a.dest)): a
         for a in p._actions
         if isinstance(a, STORES) and a.dest not in NOT_SETTINGS and a.help is not argparse.SUPPRESS
+    }
+
+
+def other_spellings(known: dict[str, argparse.Action]) -> dict[str, str]:
+    """The keys of an option's other long flags, such as save_audio for --save-audio-requests."""
+    return {
+        key_of(f): key
+        for key, a in known.items()
+        for f in a.option_strings
+        if f.startswith("--") and key_of(f) != key
     }
 
 
@@ -170,8 +188,10 @@ def read_file(path: Path, known: dict[str, argparse.Action]) -> dict[str, Any]:
         raise ValueError(f"The config file {path} is not valid TOML: {err}") from err
     values: dict[str, Any] = {}
     problems: list[str] = []
+    aliases = other_spellings(known)
     for key, value in raw.items():
         dest = key.replace("-", "_")
+        dest = aliases.get(dest, dest)
         if dest not in known:
             if "api_key" in dest.lower():
                 problems.append(f"{key!r} is not a setting: API keys are not kept in this file. Put {' or '.join(k for k in ENV_KEYS if k != PSK_ENV)} in {tilde(DEFAULT_ENV_FILE)} or the environment")
@@ -180,7 +200,7 @@ def read_file(path: Path, known: dict[str, argparse.Action]) -> dict[str, Any]:
             hint = f" Did you mean {name(close[0])!r}?" if close else ""
             problems.append(f"{key!r} is not a setting.{hint} The settings are the options listed by --help, without the leading dashes")
         elif dest in values:
-            problems.append(f"{key!r} is set twice, once with hyphens and once with underscores")
+            problems.append(f"{key!r} is set twice, under two of its spellings")
         else:
             try:
                 values[dest] = convert(known[dest], value)
@@ -268,7 +288,7 @@ def given_on_command_line(p: argparse.ArgumentParser, argv: list[str] | None) ->
 
 def name_the_file_in_errors(p: argparse.ArgumentParser, path: Path, from_file: set[str]) -> None:
     """Make the parser's later complaints about a value say so when the value came from the file."""
-    flags = {flag: a.dest for a in p._actions for flag in a.option_strings}
+    flags = {flag: key for key, a in settings(p).items() for flag in a.option_strings}
     plain = p.error
 
     def error(message: str):
@@ -302,13 +322,13 @@ def parse(p: argparse.ArgumentParser, argv: list[str] | None) -> argparse.Namesp
         with_secrets = [name(d) for d in values if is_secret(d)]
         if with_secrets and readable_by_others(path):
             report.warnings.append(f"The config file {path} holds {' and '.join(with_secrets)} and can be read by other accounts on this Mac; chmod 600 keeps it private")
-    p.set_defaults(**values)
+    p.set_defaults(**{known[k].dest: v for k, v in values.items()})
     if PSK_ENV in secrets and not hasattr(given, "psk"):
         p.set_defaults(psk=secrets[PSK_ENV])
         report.psk_from_env = True
     args = p.parse_args(argv)
-    report.from_file = {d: shown(d, v) + (f" (overridden by {PSK_ENV})" if d == "psk" and report.psk_from_env else "") for d, v in values.items() if not hasattr(given, d)}
-    report.from_command_line = {d: shown(d, getattr(given, d)) + (" (overrides the file)" if d in values else "") for d in known if hasattr(given, d)}
+    report.from_file = {k: shown(k, v) + (f" (overridden by {PSK_ENV})" if k == "psk" and report.psk_from_env else "") for k, v in values.items() if not hasattr(given, known[k].dest)}
+    report.from_command_line = {k: shown(k, getattr(given, a.dest)) + (" (overrides the file)" if k in values else "") for k, a in known.items() if hasattr(given, a.dest)}
     args.config_report = report
     if args.print_config:
         sys.stdout.write(as_toml(known, args))
@@ -321,7 +341,7 @@ def as_toml(known: dict[str, argparse.Action], args: argparse.Namespace) -> str:
     """The effective settings as a config file, each under its help text."""
     lines = ["# Settings for the Robin Egg Server. The command line overrides this file.", ""]
     for dest, action in known.items():
-        value = getattr(args, dest, None)
+        value = getattr(args, action.dest, None)
         lines.append("# " + " ".join(str(action.help or "").split()))
         if value is None:
             lines.append(f"# {name(dest)} =")
