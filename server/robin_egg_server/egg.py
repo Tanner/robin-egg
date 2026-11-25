@@ -55,7 +55,7 @@ from .speaker_stream import SpeakerMessage
 from .speakers import Match, People, SpeakerId
 from .thinking import THINKING_CUE, ThinkingCue
 from .vad import ModelVad, make_vad
-from .turn_log import ANSWERED, ASKED_AGAIN, FAILED, LOCAL_COMMAND, NOBODY_SPOKE, NOTHING_RECOGNISED, OVERHEARD, QUIET, TurnLog, TurnRecord
+from .turn_log import ANSWERED, ASKED_AGAIN, FAILED, HANDED_OFF, LOCAL_COMMAND, NOBODY_SPOKE, NOTHING_RECOGNISED, OVERHEARD, QUIET, TurnLog, TurnRecord
 from .voices import SpeechToText, TextToSpeech
 from .waiting import MessageWaiting, is_missed_question
 from .wake_clip_switch import set_wake_clips, wake_clips_off
@@ -73,6 +73,8 @@ CLOSING_CUE = Path(__file__).parent / "sounds" / "closing.flac"  # played when t
 LISTENING_CUE = Path(__file__).parent / "sounds" / "listening.flac"  # the wake word cue, ending anything the egg listens again after
 NO_REPLY = "Sorry, I didn't get an answer for that."
 FAILED_TURN = "Sorry, something went wrong and I can't answer right now."
+# Robin is still working and its answer will come down the speaker stream as a late reply.
+HANDOFF = "This is taking me a while. I'll tell you when I have it."
 # After a reply that asked for a follow-up, how long past its end to wait for the egg to reopen its mic.
 FOLLOW_UP_GRACE_S = 3.0
 # How much sooner than the clock says a reply ends the egg may still reopen its mic for a follow-up to it.
@@ -117,6 +119,7 @@ class Options:
     match_voice: bool = False  # also speak more quietly to someone who spoke quietly
     thinking_cue: bool = True  # a soft sound while Robin is slow to start answering; needs stream
     thinking_delay_s: float = 2.0  # how long after the end of speech before it starts
+    handoff_s: float | None = 10.0  # with no answer begun this long after the end of speech, say it will come later; None waits for --server-timeout
     closing_cue: bool = True  # a soft sound when the egg stops listening without a reply; needs stream
     listening_cue: bool = True  # the wake word cue at the end of a reply or message the egg listens again after
     recognition_light: bool = True  # with a ring, show a recognised speaker's colour while Robin thinks and replies
@@ -508,7 +511,10 @@ class Robin:
                 ended = "voice_command"
                 return
             t.cue = self._thinking_cue(t, t0)
-            spoken = await self._speak(self._tracking_replies(t, self.brain.reply(heard, user=match.user, reply_to=t.answering_id, follow_up=t.follow_up)), t.reply, turn=t, t0=t0, voiced=t.voiced)
+            answer = self.brain.reply(heard, user=match.user, reply_to=t.answering_id, follow_up=t.follow_up)
+            if self.opts.handoff_s:
+                answer = _begun_by(answer, t0 + self.opts.handoff_s, self.opts.handoff_s)
+            spoken = await self._speak(self._tracking_replies(t, answer), t.reply, turn=t, t0=t0, voiced=t.voiced)
             reply_text = " ".join(spoken)
             LOG.info('Robin: "%s"', reply_text)
             cont = self._listens_after_robin(reply_text)
@@ -536,13 +542,16 @@ class Robin:
             await self._close_without_reply(t)
             ended = "quiet"
         except Exception as err:  # noqa: BLE001 - the person in the room must hear that it failed
-            LOG.exception("The turn failed")
+            if isinstance(err, RobinTooSlow):
+                LOG.info("Handing the turn off: %s. Robin keeps working, and its answer will be spoken when it comes", err)
+            else:
+                LOG.exception("The turn failed")
             # What was voiced before the failure still plays, ahead of the apology.
             self._report_unfinished(t, "robin-assistant stopped partway" if isinstance(err, RobinUnavailable) else "the voice failed", played_s=math.inf)
             if isinstance(err, RobinTooSlow):
                 self._abandon(t, "timeout")
-            ended = "failed"
-            t.log.outcome = FAILED
+            ended = "handed_off" if isinstance(err, RobinTooSlow) else "failed"
+            t.log.outcome = HANDED_OFF if isinstance(err, RobinTooSlow) else FAILED
             self._reset_commands()  # the apology ends the conversation
             await self._apologise(t, err)
         finally:
@@ -882,10 +891,11 @@ class Robin:
         The firmware has no error sound, only a one-second LED, so the error event is
         the fallback for when the voice itself is what failed.
         """
+        say = HANDOFF if isinstance(err, RobinTooSlow) else FAILED_TURN
         try:
-            LOG.info('Telling the person in the room the turn failed: "%s"', FAILED_TURN)
-            await self._speak(_once(FAILED_TURN), t.reply, turn=t)
-            await self._finish_reply(t, FAILED_TURN, cont=False)
+            LOG.info('Telling the person in the room %s: "%s"', "the answer will come later" if say is HANDOFF else "the turn failed", say)
+            await self._speak(_once(say), t.reply, turn=t)
+            await self._finish_reply(t, say, cont=False)
         except Exception:  # noqa: BLE001 - fall back to the error event
             LOG.exception("Could not speak the apology for the failed turn; sending the egg an error instead")
             self._follow_up_pending = False
@@ -1775,3 +1785,24 @@ def key_refused(errors: list[Exception]) -> bool:
 
 async def _once(text: str) -> AsyncIterator[str]:
     yield text
+
+
+async def _begun_by(deltas: AsyncIterator[str], deadline: float, handoff_s: float) -> AsyncIterator[str]:
+    """Passes an answer on, giving up with RobinTooSlow if its first words have not come by `deadline`.
+
+    Once it has begun, the rest may take as long as the brain allows. Giving up closes the brain's
+    request; robin-assistant keeps working and sends the answer later down the speaker stream.
+    """
+    it = aiter(deltas)
+    try:
+        try:
+            first = await asyncio.wait_for(anext(it), max(0.0, deadline - time.monotonic()))
+        except StopAsyncIteration:
+            return
+        except asyncio.TimeoutError:
+            raise RobinTooSlow(f"Robin had not started answering {handoff_s:g} s after the end of speech") from None
+        yield first
+        async for d in it:
+            yield d
+    finally:
+        await it.aclose()

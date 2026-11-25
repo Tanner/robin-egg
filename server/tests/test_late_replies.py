@@ -14,10 +14,11 @@ from aioesphomeapi import VoiceAssistantEventType
 from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.brain import RobinTooSlow
-from robin_egg_server.egg import Options, Robin
+from robin_egg_server.egg import HANDOFF, Options, Robin
 from robin_egg_server import fake_egg
 from robin_egg_server.fake_egg import FakeEgg
 from robin_egg_server.speaker_stream import SpeakerMessage
+from robin_egg_server.turn_log import HANDED_OFF
 from robin_egg_server.web import AudioServer
 from test_outcomes import Reports
 from test_server import FakeSTT, ToneTTS, speech
@@ -63,7 +64,7 @@ class SlowRobin:
         yield ""
 
 
-def run(brain, scenario, egg: FakeEgg | None = None):
+def run(brain, scenario, egg: FakeEgg | None = None, opts: Options = ALWAYS):
     """The scenario against the real server, then what the egg announced and what was reported."""
     reports = Reports()
 
@@ -73,7 +74,7 @@ def run(brain, scenario, egg: FakeEgg | None = None):
         port = await egg.start()
         web = AudioServer()
         await web.start("127.0.0.1", 0, "127.0.0.1")
-        robin = Robin(FakeSTT(["when is the dentist", "stop"]), brain, ToneTTS(), web, VoiceAssistantEventType, ALWAYS)
+        robin = Robin(FakeSTT(["when is the dentist", "stop"]), brain, ToneTTS(), web, VoiceAssistantEventType, opts)
         robin.outcomes = reports
         stop = asyncio.Event()
         server = asyncio.create_task(robin.run_forever("127.0.0.1", port, stop=stop))
@@ -111,8 +112,49 @@ def test_a_late_reply_after_a_timeout_is_spoken_after_the_chime_and_reported_spo
 
     announced, sent, robin = run(SlowRobin("timeout"), scenario)
     assert robin._abandoned == {101: "timeout"}
+    assert " ".join(robin.tts.said) == f"{HANDOFF} {LATE}"
     assert announced == [LATE]
     assert sent == [(130, "spoken", "")]
+
+
+QUICK_HANDOFF = Options(speaking_hours=(0, 24), follow_up="off", handoff_s=0.5)
+
+
+def test_robin_slow_to_start_answering_is_handed_off_and_its_late_answer_is_spoken():
+    brain = SlowRobin("hang")
+    outcomes = []
+
+    async def scenario(egg, robin):
+        record = robin._record_turn
+        robin._record_turn = lambda t: (outcomes.append(t.log.outcome), record(t))
+        await brain.started.wait()
+        await eventually(lambda: robin.turn is not None and robin.turn.task is not None and robin.turn.task.done())
+        await then_late(robin, late(130, 101))
+        await eventually(lambda: egg.announcements)
+
+    announced, sent, robin = run(brain, scenario, opts=QUICK_HANDOFF)
+    assert robin._abandoned == {101: "timeout"}
+    assert " ".join(robin.tts.said) == f"{HANDOFF} {LATE}"
+    assert outcomes[0] == HANDED_OFF
+    assert announced == [LATE]
+    assert sent == [(130, "spoken", "")]
+
+
+class SlowSecondSentence:
+    """Starts answering at once, then takes longer than the hand-off for the rest."""
+
+    async def reply(self, heard: str, user: str, reply_to: int | None = None, follow_up: bool = False):
+        yield "Let me check the calendar.\n"
+        await asyncio.sleep(1.0)
+        yield "Your dentist is at ten.\n"
+
+
+def test_an_answer_that_has_started_is_not_handed_off_however_long_the_rest_takes():
+    async def scenario(egg, robin):
+        await eventually(lambda: robin.turn is not None and robin.turn.task is not None and robin.turn.task.done())
+
+    _, _, robin = run(SlowSecondSentence(), scenario, opts=QUICK_HANDOFF)
+    assert robin.tts.said == ["Let me check the calendar.", "Your dentist is at ten."]
 
 
 def test_a_late_reply_to_a_turn_the_wake_word_cut_off_is_dropped_and_reported():
@@ -222,3 +264,11 @@ def test_a_reply_already_reported_unfinished_is_not_spoken_again_when_it_comes_l
     assert robin._abandoned == {101: "disconnect"}
     assert announced == [LATE]  # 125 only
     assert sent == [(124, "dropped", "the egg disconnected"), (125, "spoken", "")]
+
+
+def test_hand_off_flag():
+    from robin_egg_server.__main__ import parse_args
+
+    base = ["egg.local", "--echo"]
+    assert parse_args(base).hand_off_after == 10.0 and Options().handoff_s == 10.0
+    assert parse_args(base + ["--hand-off-after", "15"]).hand_off_after == 15.0
