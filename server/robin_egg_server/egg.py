@@ -1143,6 +1143,26 @@ class Robin:
             return "the egg is playing an announcement"
         return None
 
+    def restart_blocker(self) -> str | None:
+        """What a restart now would cut off or lose, or None when there is nothing."""
+        if self._in_conversation():
+            return "the egg is in a conversation"
+        if self.client is not None and (busy := self._busy_reason()) is not None:
+            return busy
+        if self._proactive_task is not None and not self._proactive_task.done():
+            return "the egg is speaking one of Robin's messages"
+        if self.proactive_waiting:
+            return "Robin's messages are queued for the egg"
+        if self.waiting is not None and self.waiting.waiting():
+            return "Robin's messages are held for \"what did I miss?\""
+        if self.commands is not None and self.commands.active:
+            return "a voice enrolment is under way"
+        return None
+
+    def quiet_for(self) -> float:
+        """Seconds since the egg last finished a turn or an announcement."""
+        return self.played_clock() - max(self._turn_ended_at, self._announced_at)
+
     async def proactive(self, msg: SpeakerMessage) -> None:
         """A message Robin sent on its own: a chime, then the message, once the egg is idle.
 
