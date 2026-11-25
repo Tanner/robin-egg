@@ -11,6 +11,7 @@ import socket
 import sys
 from pathlib import Path
 
+from . import config
 from .brain import server_url
 from .digest import DEFAULT_MAX as DEFAULT_DIGEST_MAX, MAX_MAX as MAX_DIGEST_MAX, MIN_MAX as MIN_DIGEST_MAX
 from .egg import READY_CHIME, Options, Robin
@@ -73,7 +74,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--ready-sound", metavar="FILE", default=str(READY_CHIME), help="Sound to play each time the server connects to the egg (wav, aiff or flac), or off. Default: the egg's own ready chime")
     p.add_argument("--server-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
-    p.add_argument("--tts", choices=["piper", "say", "openai", "elevenlabs"], default="piper", help="Text-to-speech engine: piper (Robin's voice), macOS say, openai (hosted; needs OPENAI_API_KEY in the environment and falls back to Piper) or elevenlabs (hosted; needs ELEVENLABS_API_KEY and falls back to Piper)")
+    p.add_argument("--tts", choices=["piper", "say", "openai", "elevenlabs"], default="piper", help="Text-to-speech engine: piper (Robin's voice), macOS say, openai (hosted; needs OPENAI_API_KEY in ~/.robin-egg/.env or the environment and falls back to Piper) or elevenlabs (hosted; needs ELEVENLABS_API_KEY, the same way, and falls back to Piper)")
     p.add_argument("--openai-model", default=DEFAULT_OPENAI_MODEL, help="OpenAI speech model, with --tts openai")
     p.add_argument("--openai-voice", default=DEFAULT_OPENAI_VOICE, help="OpenAI voice name, with --tts openai")
     p.add_argument("--elevenlabs-model", default=DEFAULT_ELEVENLABS_MODEL, help="ElevenLabs model ID, with --tts elevenlabs")
@@ -129,7 +130,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--restart-idle-minutes", type=float, default=DEFAULT_IDLE_MINUTES, metavar="MINUTES", help=f"How long the egg must be idle before --restart-on-change restarts the server (default {DEFAULT_IDLE_MINUTES:g})")
     p.add_argument("--logs", action="store_true", help="Print the egg's own logs")
     p.add_argument("-v", "--verbose", action="store_true")
-    args = p.parse_args(argv)
+    config.add_arguments(p)
+    args = config.parse(p, argv)
     if args.default_speaker_name is not None:
         p.error('--default-speaker-name is gone: a voice the server cannot identify is now sent as "Unknown Speaker". Remove the flag.')
     if args.save_audio_hours < 0:
@@ -478,6 +480,8 @@ def main() -> None:
     setup_logging(args.verbose)
     if args.restart_on_change and not args.demo and not supervised():
         sys.exit(supervise())
+    config.apply_env(args.config_report)
+    config.log_report(args.config_report)
     restart = False
     with contextlib.suppress(KeyboardInterrupt):
         restart = asyncio.run(run(args))

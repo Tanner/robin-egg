@@ -57,6 +57,67 @@ Anyone who enrolled before 19 November 2026 has no saved audio and has to enrol 
 
 Use Python 3.14 for the venv for now. faster-whisper's onnxruntime dependency has no Python 3.15 build yet.
 
+## The config file
+
+Settings live in `~/.robin-egg/config.toml`, so the server starts with no arguments:
+
+```toml
+host = "respeaker-xvf3800-a1b2c3.local"
+server = "127.0.0.1"
+agent-name = "robin"
+speaking-hours = "8-20"
+thinking-cue = false
+```
+
+```sh
+.venv/bin/python -m robin_egg_server
+```
+
+Every option under [Useful options](#useful-options) and in `--help` is a key, under the same name without the leading dashes; `http-port` and `http_port` are the same key. The egg's address is `host`. The values are checked as on the command line: a number option takes a number, a choice takes one of its choices in quotes, an on/off option such as `--thinking-cue` or `--echo` takes `true` or `false`, and `demo` takes a list. A key the server does not know, a value of the wrong type, or a file that cannot be read stops the start with a message naming the file, the key and what was expected.
+
+The command line overrides the file, and the file overrides the defaults. `--config FILE` reads another file instead, which must exist; no file at the usual path is fine. The log says at the start which file was read, which settings came from it and which from the command line.
+
+`--print-config` prints the settings a start would use as TOML, each under its description, and exits. With no file yet, that is a starting one:
+
+```sh
+mkdir -p ~/.robin-egg && .venv/bin/python -m robin_egg_server --print-config > ~/.robin-egg/config.toml
+```
+
+Do not point that at a file you already have: the shell empties the file before the server reads it. Print to a new file and move it into place.
+
+Things to know:
+
+- API keys stay out of the file. They go in [the .env file](#secrets-in-the-env-file), and an API key in the config file is refused.
+- The egg's encryption key, `psk`, may be in the file, though the .env file is the better place for it. It is never logged or printed, and the server warns if other accounts on the Mac can read the file (`chmod 600 ~/.robin-egg/config.toml`).
+- An on/off option without a `--no-` form, such as `--echo` or `--no-stream` (`no-stream = true`), cannot be turned back off from the command line once the file turns it on.
+- `piper-voice` and `speaker-model` need a full path in the file, because `~` is not expanded for them.
+
+## Secrets in the .env file
+
+Secrets live in `~/.robin-egg/.env`, beside the config file and outside the repo:
+
+```sh
+OPENAI_API_KEY=sk-...
+ELEVENLABS_API_KEY=...
+ROBIN_EGG_PSK=base64-key-from-the-egg
+```
+
+```sh
+chmod 600 ~/.robin-egg/.env
+```
+
+The server reads three names, and any other name stops the start with a message naming the line:
+
+| Name | What it is |
+| --- | --- |
+| `OPENAI_API_KEY` | OpenAI's API key, for `--tts openai`. |
+| `ELEVENLABS_API_KEY` | ElevenLabs' API key, for `--tts elevenlabs`. |
+| `ROBIN_EGG_PSK` | The egg's encryption key, the same as `--psk`. Only needed if one was set on the egg. |
+
+Each line is `NAME=value`. `export ` in front, quotes around the value, blank lines and `#` comments are all fine, so the same file can be loaded with `source` in a shell.
+
+A variable already set in the environment wins over the file, and `--psk` on the command line wins over both. `ROBIN_EGG_PSK` wins over a `psk` in the config file. `--env-file FILE` reads another file, which must exist; no file at the usual path is fine. The log says at the start which names were read from the file, never their values, and warns if other accounts on the Mac can read it.
+
 ## Try it today, without the egg
 
 `--demo` runs the real server (real Whisper, real Robin, real voice) against a fake egg that "says" audio files, one per turn:
@@ -81,7 +142,13 @@ Each line made during a turn starts with that turn's tag, so one turn can be fol
 
 ## On Monday, with the egg
 
-Flash and find the egg first, as in `tools/bench-voice-test/README.md`. Then:
+Flash and find the egg first, as in `tools/bench-voice-test/README.md`. Put its address in [the config file](#the-config-file) as `host`, with `server` and `agent-name`, then:
+
+```sh
+.venv/bin/python -m robin_egg_server --logs
+```
+
+Or give everything on the command line:
 
 ```sh
 .venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin --logs
@@ -538,14 +605,14 @@ For each WAV in the folder and its subfolders it prints where each detector woul
 Text-to-speech is a choice of engine behind one interface in `voices.py`. Piper is the default and stays Robin's voice. There are two hosted voices. `--tts openai` speaks with OpenAI's speech API, using the model and voice robin-assistant uses for its voice replies (`gpt-4o-mini-tts`, `ash`).
 
 ```sh
-export OPENAI_API_KEY=...   # in the shell or the service's environment, never on the command line or in the repo
+echo 'OPENAI_API_KEY=...' >> ~/.robin-egg/.env   # or export it in the shell; never on the command line or in the repo
 .venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin --tts openai
 ```
 
-`--tts elevenlabs` speaks with ElevenLabs' text-to-speech API. It needs `ELEVENLABS_API_KEY` in the environment, and takes a voice ID from your ElevenLabs voice library (`--elevenlabs-voice`, default George, a premade voice) and a model ID (`--elevenlabs-model`, default `eleven_flash_v2_5`, the fastest).
+`--tts elevenlabs` speaks with ElevenLabs' text-to-speech API. It needs `ELEVENLABS_API_KEY` in [the .env file](#secrets-in-the-env-file) or the environment, and takes a voice ID from your ElevenLabs voice library (`--elevenlabs-voice`, default George, a premade voice) and a model ID (`--elevenlabs-model`, default `eleven_flash_v2_5`, the fastest).
 
 ```sh
-export ELEVENLABS_API_KEY=...
+echo 'ELEVENLABS_API_KEY=...' >> ~/.robin-egg/.env
 .venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin --tts elevenlabs --elevenlabs-voice <voice-id>
 ```
 
@@ -610,8 +677,13 @@ Each command takes `--dir DIR` to read clips from somewhere other than `~/.robin
 
 ## Useful options
 
+Each option is also a key in [the config file](#the-config-file), without the leading dashes: `--follow-up-window 4` is `follow-up-window = 4`, and `--no-thinking-cue` is `thinking-cue = false`. Keep the settings you always use in the file and give the command line only what differs for one run.
+
 | Option | Default | What it does |
 | --- | --- | --- |
+| `--config FILE` | `~/.robin-egg/config.toml` | The TOML file settings are read from. The command line overrides it. |
+| `--env-file FILE` | `~/.robin-egg/.env` | The file secrets are read from: `OPENAI_API_KEY`, `ELEVENLABS_API_KEY` and `ROBIN_EGG_PSK`. The environment overrides it. |
+| `--print-config` | off | Print the settings this start would use as TOML, then exit. |
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
 | `--thinking-cue`, `--no-thinking-cue` | on | Play a soft sound while Robin is slow to start answering. Not played with `--no-stream`. |
 | `--thinking-delay` | 2 s | How long after the end of speech the thinking sound starts, if Robin has not produced a first sentence. |
@@ -738,6 +810,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 - Answering a message Robin sent on its own. The server sends the announcement with `start_conversation`, and the firmware source says the egg then starts a run with no wake word once the announcement has played. Unchecked on the egg: that the mic does reopen, that it does not pick up the tail of the message through the speaker, that 5 s is long enough to react to a message nobody was expecting, and that silence ends with the light going back to idle. In the firmware source the wake word during a message only stops it and clears the reopening, so the mic should stay closed after a barge-in.
 - Speaker recognition. The thresholds start from the defaults, not from clips recorded on the egg, so check them with `evaluate` once there are some. The automatic raise for close voices and its 0.10 gap have only seen hand-made vectors, never two real enrolled voices. Run `evaluate --enrolment` once two people have enrolled.
 - Enrolment. The 10-second mic window and the sentence matching have only heard the fake egg's audio and canned transcripts, not the egg's mic and real speech-to-text.
+- The config file. It has been read only in tests and by hand on the Mac, never for a real start against the egg. In particular `psk` from the file has not been used to connect to an egg with encryption on.
 - Quiet by voice. The phrases have only been matched against typed transcripts, not what Whisper writes for real speech from the egg's mic, such as how it spells times ("7 p.m.", "7:30", "seven thirty").
 - Room facts. The posts have only met the fake robin-assistant, not the real `/api/context` route, and nobody has yet read how Robin uses them in a real answer. Whether a Wi-Fi blip on the real egg makes `egg_connection` flap between `disconnected` and `connected` is unknown.
 - "Say that again". The phrases were chosen by guess, not from what Whisper hears through the egg's mic, so a short one such as "pardon" may be transcribed as something else and go to Robin. Whether a repeated long reply plays cleanly on the egg is also untested.
@@ -773,6 +846,7 @@ The fake egg follows the firmware source, but these are untested on hardware:
 | `robin_egg_server/vad.py` | The speech-model end-of-speech detector, and the `compare` command |
 | `robin_egg_server/room.py` | Quieter replies in quiet hours and to a quiet voice |
 | `robin_egg_server/voices.py` | Whisper, `say` and Piper |
+| `robin_egg_server/config.py` | The config file: settings from TOML, checked against the command line's own options, and `--print-config` |
 | `robin_egg_server/confidence.py` | How sure speech-to-text was, and the limits for asking again |
 | `robin_egg_server/hosted_tts.py` | The OpenAI voice, and the fallback to Piper when it fails or is slow |
 | `robin_egg_server/speaker_stream.py` | robin-assistant's speaker stream: Robin's own messages, with reconnects |
