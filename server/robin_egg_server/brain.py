@@ -133,7 +133,7 @@ class RobinBrain:
         """
         import httpx2
 
-        self.accepted_id, self.reply_ids, self.listen = None, [], None
+        self.accepted_id, self.reply_ids, self.listen, self.later = None, [], None, False
         fields = {"text": heard, "chat": "speaker", "device": "speaker", "wait": "1", "user": user, "send_id": secrets.token_urlsafe(16)}
         # robin-assistant refuses the whole message for a reply_to that is not a positive row id.
         if _row_id(reply_to) is not None and reply_to > 0:
@@ -192,6 +192,9 @@ class RobinBrain:
                                 outcome = data.get("outcome")
                                 if isinstance(data.get("listen"), bool):
                                     self.listen = data["listen"]
+                                if data.get("later") is True:
+                                    LOG.info("Robin is answering later: robin-assistant ended the wait and will send the answer down the speaker stream")
+                                    self.later = True
                                 break
             except httpx2.ConnectError as err:
                 # Nothing reached robin-assistant, which is what a restart looks like.

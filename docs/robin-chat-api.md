@@ -157,7 +157,8 @@ Done in this repo once the robin-assistant side lands.
 - Outcomes:
   - `quiet`: say nothing. `_speak` currently says `NO_REPLY` for an empty turn (`egg.py:206-208`), so `RobinBrain` needs a way to end silently.
   - `error`: speak the apology row if there is one. With no reply, it counts as a failed turn.
-  - `stopped`, a connection error, or no `end` within `--server-timeout`: a failed turn. The server says `FAILED_TURN` in its own voice, after whatever part of the reply was already spoken. The firmware has no error sound, only a one-second error LED, so the error event is sent only if that apology cannot be spoken.
+  - `stopped` or a connection error: a failed turn. The server says `FAILED_TURN` in its own voice, after whatever part of the reply was already spoken. The firmware has no error sound, only a one-second error LED, so the error event is sent only if that apology cannot be spoken.
+  - No first `reply` within `--hand-off-after` (10 s) of the end of speech, or no `end` within `--server-timeout`: a handed-off turn. The server says `HANDOFF` ("I'll tell you when I have it") and closes the request; the answer comes later down the speaker stream.
 - After a timeout or a barge-in, Robin's turn keeps running. In the plain chat its late answer landed unheard; in the speaker chat it comes down the speaker stream as a late reply, which the egg speaks or reports so it is texted (`server/README.md`, "Late replies"). The next thing said may be steered into that turn. Accept this for v1 and log it. An approval card from a speaker turn has the same effect until the timeout.
 - Options: `--server` (a host or IP, `host:port` or URL; a bare host gets port 8273, a URL keeps its scheme's port) and `--agent-name`, both required unless `--echo`, then `--server-timeout`. There is no brain choice: always Robin, or `--echo`.
 - The server keeps no conversation history. Robin keeps its own.
@@ -282,3 +283,46 @@ The urgent proposal carries a boolean, `urgent`, from the task to `metadata.prio
 #### Complexity
 
 Small, and smaller still if it lands together with urgent: the same optional field on the same path, with a second value. The care points are settling on one `priority` field before a boolean `urgent` is stored anywhere, and the tool wording. The cost of a wrong mark is the reverse of urgent's: a message marked low that mattered is only a chime and a light until someone asks, so the description should tell the model to leave reminders a person asked to be told about at normal priority.
+
+## Robin answering later: `later` on `end`
+
+Added 2026-11-24. For work Robin knows will take a while, it says something brief and hands the answer off, rather than leaving the person to the thinking sound and the egg's 10 s timer (`--hand-off-after`).
+
+### The protocol
+
+On a speaker turn Robin calls `AnswerLater({ say })`. robin-assistant writes `say` as a reply to the turn's messages, ends the wait at once, and keeps the turn running:
+
+```
+event: reply  {"id": 124, "text": "Let me look into that."}
+event: end    {"outcome": "response", "later": true, "listen": false}
+```
+
+The JSON form of `wait=1` gets the same `later` key. The turn's final answer then finds no open wait, so it goes down the speaker stream as a late reply with `answers`, as a reply after a timeout does today.
+
+`say` is a parameter, not text written beside the tool call, because a speaker turn drops intermediate text (`dropsIntermediateText`, `src/agent/tool-loop.ts:405`).
+
+Mixed versions:
+
+- **Old egg server, new robin-assistant.** It ignores `later`, speaks `say`, keeps the mic shut for `listen: false`, and speaks the late answer as one that matches no turn.
+- **New egg server, old robin-assistant.** `later` never comes, and the 10 s timer hands off as before.
+
+### What the egg server does
+
+`RobinBrain.later` is true only when `end` carries `"later": true`, and is reset each turn. When it is set, the egg speaks Robin's words, does not reopen the mic whatever `listen` and `--follow-up` say, adds no hint, and remembers the turn as `"later"` so its late answer is spoken. The turn log records it as `handed off`. Like the timer's hand-off, the late answer is spoken for 10 minutes past speaking hours. `later` with no reply ends the turn quietly and is still remembered.
+
+### robin-assistant changes
+
+- `src/methods/web-waits.ts`: `handOff(chatId, answers)` ends each open, listening wait whose key is in `answers`, with `later: true, listen: false`. It returns false when none qualified.
+- `src/admin/wait-response.ts`: `later` in both forms.
+- `src/methods/web.ts`: `answerLater(chatId, say, metadata)` checks for a listening wait, then sends `say` through the usual send path and hands off. With no wait it writes nothing and returns `"no_wait"`.
+- `src/tools/answer-later.ts`, modelled on SetListening: speaker turns only, a required non-empty `say`, registered beside SetListening and silent in tool descriptions.
+- `src/agent/prompt-variables.ts`: when to use it. Only for work that will clearly take more than about ten seconds, called first, before other tools; never for a quick lookup, a question back to the person, or a follow-up.
+
+### Preventing regressions
+
+- Egg server: `test_listen_choice.py` (the brain keeps `later` and forgets it next turn), `test_late_replies.py` (Robin's words spoken with no canned line, the mic shut with `--follow-up always`, the late answer spoken, after speaking hours too, and a hand-off with no words). The late-reply tests from before stay unchanged.
+- robin-assistant: `handOff` ends only the named waits and a later `settled` sends no second `end`; the reply after a hand-off goes down the stream `late` with `answers`; the tool refuses non-speaker turns, an empty `say` and a second call.
+
+### Complexity
+
+Egg server: small. robin-assistant: medium, mostly the hook from the tool to the speaker route's waits, and the check-then-send order in `answerLater`. The prompt wording carries the most behavioural risk: overuse turns quick answers into chimed late ones.

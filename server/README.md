@@ -305,6 +305,16 @@ When Robin has not produced a first sentence 2 s after the end of speech, the eg
 - It plays only on turns that ask Robin. "Learn my voice", "forget my voice" and enrolment answers are answered by the server and never get it, and neither does a turn where nobody spoke or nothing was recognised.
 - It does not start once the first sentence has arrived and is only waiting to be spoken.
 
+## Handing off a slow answer
+
+When Robin has not started answering 10 s after the end of speech, the egg stops the thinking sound and says "This is taking me a while. I'll tell you when I have it." Robin keeps working in robin-assistant, and its answer comes down the speaker stream as a late reply, which the egg speaks after the chime once it is idle (see [Late replies](#talking-in-the-speaker-chat)). The same line is said when an answer that had begun misses `--server-timeout`.
+
+- Only the first answer has to beat the deadline. Once Robin has begun, the rest may take until `--server-timeout`.
+- `--hand-off-after` changes the 10 s, and `0` turns the hand-off off, so the egg waits for `--server-timeout` as before.
+- The turn log records these turns as `handed off`, not `failed`.
+- Robin can also hand off on its own, for work it knows is long: it says something brief such as "Let me look into that" and robin-assistant ends the egg's wait with `later: true`. The egg speaks Robin's words in place of the line above, does not listen again, and treats the late answer the same way. See `docs/robin-chat-api.md`, "Robin answering later".
+- The person was told the answer is coming, so for 10 minutes after the hand-off it is spoken even outside `--speaking-hours`. Quiet asked for by voice and a muted microphone still stop it. After that it is held for "what did I miss?" like any other message Robin sends on its own.
+
 ## The closing sound
 
 When the egg stops listening and there is no reply, it plays `robin_egg_server/sounds/closing.flac`: two soft notes, B-flat falling a fifth to E-flat. That happens when a follow-up window runs out with nobody speaking, when someone says the wake word and then nothing, when nothing recognisable was said, and when Robin chooses to say nothing. A turn that Robin answers ends with its reply, not with this sound. `--no-closing-cue` turns it off, and the egg then closes silently.
@@ -690,6 +700,7 @@ Each option is also a key in [the config file](#the-config-file), without the le
 | `--no-stream` | off | Play the reply only once it is complete. Use it if streamed replies cut out on the egg. |
 | `--thinking-cue`, `--no-thinking-cue` | on | Play a soft sound while Robin is slow to start answering. Not played with `--no-stream`. |
 | `--thinking-delay` | 2 s | How long after the end of speech the thinking sound starts, if Robin has not produced a first sentence. |
+| `--hand-off-after` | 10 s | How long after the end of speech the egg waits for Robin to start answering before saying the answer will come later. `0` waits for `--server-timeout`. |
 | `--closing-cue`, `--no-closing-cue` | on | Play a soft sound when the egg stops listening without a reply. Not played with `--no-stream`. |
 | `--listening-cue`, `--no-listening-cue` | on | End a reply or message the egg listens again after with the wake word's listening sound. |
 | `--follow-up always\|questions\|off` | `always` | When to reopen the mic after a reply. Robin's own choice, from the `listen` field on the reply's `end` event, comes first: see [Talking in the speaker chat](#talking-in-the-speaker-chat). Enrolling and forgetting a voice still reopen it, whatever this is set to. |
@@ -717,7 +728,7 @@ Each option is also a key in [the config file](#the-config-file), without the le
 | `--match-voice`, `--no-match-voice` | off | Also speak more quietly to someone who spoke quietly. Off until it is tried on the real egg. |
 | `--message-waiting`, `--no-message-waiting` | on | Hold Robin's own messages from outside `--speaking-hours`, and low-priority ones after their chime, breathe the ring while any wait, and read them out to "what did I miss?". Off drops the first and speaks the second. |
 | `--morning-mention`, `--no-morning-mention` | on | Once speaking hours have begun, end the first reply from Robin with one sentence saying how many held messages are waiting and how to hear them. Once per batch of messages. Needs `--message-waiting`. |
-| `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the turn failed. |
+| `--server-timeout` | 90 s | How long to wait for Robin to finish answering before saying the answer will come later. |
 | `--unsure-retries` | 1 | Times in a row to say "Sorry, I didn't catch that." and listen again when speech-to-text is unsure. `0` never asks. |
 | `--min-logprob` | −1.0 | Speech-to-text is unsure below this average log-probability. Closer to 0 is stricter. |
 | `--max-no-speech` | 0.8 | Speech-to-text is unsure above this no-speech probability. |
@@ -778,6 +789,7 @@ The egg talks in robin-assistant's speaker chat, not in the plain web chat the p
 | How the turn ended | The late answer |
 | --- | --- |
 | It timed out | Spoken as a message Robin sent on its own: after the egg is idle, after the chime |
+| Robin said it would answer later, with AnswerLater | Spoken the same way |
 | The wake word cut it off, or the egg cancelled the run | Not spoken. Reported `dropped`, so it arrives as a text. On the egg, the wake word while Robin is thinking cancels the run |
 | The egg disconnected | Spoken, within the usual 10-minute limit |
 | No turn matches, as after a restart | Spoken |

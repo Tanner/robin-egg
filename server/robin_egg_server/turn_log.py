@@ -49,6 +49,7 @@ QUIET = "quiet"
 LOCAL_COMMAND = "local command"
 ASKED_AGAIN = "asked again"
 FAILED = "failed"
+HANDED_OFF = "handed off"  # Robin was slow to start, so the egg said the answer would come later
 CANCELLED = "cancelled"
 OVERHEARD = "overheard"
 

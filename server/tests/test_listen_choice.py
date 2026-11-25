@@ -128,3 +128,25 @@ def test_a_follow_up_turn_is_posted_with_follow_up_and_a_wake_word_turn_is_not()
     woken, followed = posted_messages(fake)
     assert woken["text"] == "hey there" and "follow_up" not in woken
     assert followed["text"] == "and also" and followed["follow_up"] == "1"
+
+
+# ---- Robin handing the answer off with AnswerLater ----
+
+
+def test_the_brain_keeps_robins_later_hand_off_from_the_end_event_and_forgets_it_next_turn():
+    async def scenario(*scripts):
+        fake = FakeRobinAssistant(list(scripts))
+        brain = RobinBrain(await fake.start(), "robin")
+        seen = []
+        try:
+            for _ in scripts:
+                async for _ in brain.reply("hello", user="Ryan"):
+                    pass
+                seen.append(brain.later)
+            return seen
+        finally:
+            await brain.close()
+            await fake.stop()
+
+    assert asyncio.run(scenario(answer("Let me look into that.", later=True), answer("Sure."))) == [True, False]
+    assert asyncio.run(scenario(answer("Okay.", later="yes"))) == [False]

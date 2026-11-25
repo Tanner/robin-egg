@@ -87,6 +87,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--closing-cue", action=argparse.BooleanOptionalAction, default=True, help="Play a soft sound when the egg stops listening without a reply (default on; --no-closing-cue closes silently; not played with --no-stream)")
     p.add_argument("--listening-cue", action=argparse.BooleanOptionalAction, default=True, help="End a reply or message the egg listens again after with the wake word's listening sound (default on; --no-listening-cue reopens the mic silently)")
     p.add_argument("--thinking-delay", type=float, default=2.0, help="Seconds after the end of speech before the thinking sound starts")
+    p.add_argument("--hand-off-after", type=float, default=10.0, help="Seconds after the end of speech with no answer begun before the egg says Robin will answer later; 0 waits for --server-timeout")
     p.add_argument("--follow-up", choices=["always", "questions", "off"], default="always", help="Reopen the mic after a reply without the wake word")
     p.add_argument("--follow-up-window", type=float, default=5.0, help="Seconds to wait for a follow-up before closing")
     p.add_argument("--repeat-window", type=float, default=10.0, metavar="MINUTES", help="How long after Robin says something 'say that again' still repeats it (default 10; 0 turns the command off)")
@@ -266,6 +267,7 @@ def build(args: argparse.Namespace):
         match_voice=args.match_voice,
         thinking_cue=args.thinking_cue,
         thinking_delay_s=args.thinking_delay,
+        handoff_s=args.hand_off_after or None,
         closing_cue=args.closing_cue,
         listening_cue=args.listening_cue,
         recognition_light=args.recognition_light,
