@@ -18,7 +18,7 @@ This is the MVP, to prove egg to Mac mini end to end. It does not yet know who i
 | --- | --- | --- |
 | Speech-to-text | faster-whisper, `base.en`, on the CPU | Local, pip install, fast enough on Apple Silicon. The model downloads on first run. |
 | Reply | Robin, through robin-assistant's web chat API with `device=speaker` and `wait=1` | Robin keeps the conversation, memory and tools. `--echo` repeats what was heard, to test the audio chain with no robin-assistant. |
-| Text-to-speech | Piper with the `en_US-ryan-medium` voice, Robin's voice. macOS `say` with `--tts say`. OpenAI's hosted voice with `--tts openai` | Piper and `say` are local. Ryan was picked on the bench on 2026-11-16. The hosted voice sends reply text off the Mac mini and falls back to Piper. |
+| Text-to-speech | Piper with the `en_US-ryan-medium` voice, Robin's voice. macOS `say` with `--tts say`. OpenAI's or ElevenLabs' hosted voice with `--tts openai` or `--tts elevenlabs` | Piper and `say` are local. Ryan was picked on the bench on 2026-11-16. The hosted voice sends reply text off the Mac mini and falls back to Piper. |
 
 robin-assistant keeps the conversation. The egg server keeps no history of its own.
 
@@ -524,14 +524,21 @@ For each WAV in the folder and its subfolders it prints where each detector woul
 
 ## A hosted voice
 
-Text-to-speech is a choice of engine behind one interface in `voices.py`. Piper is the default and stays Robin's voice. `--tts openai` speaks with OpenAI's speech API instead, using the model and voice robin-assistant uses for its voice replies (`gpt-4o-mini-tts`, `ash`).
+Text-to-speech is a choice of engine behind one interface in `voices.py`. Piper is the default and stays Robin's voice. There are two hosted voices. `--tts openai` speaks with OpenAI's speech API, using the model and voice robin-assistant uses for its voice replies (`gpt-4o-mini-tts`, `ash`).
 
 ```sh
 export OPENAI_API_KEY=...   # in the shell or the service's environment, never on the command line or in the repo
 .venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin --tts openai
 ```
 
-With a hosted voice the text of Robin's replies leaves the Mac mini: each sentence is sent to OpenAI to be spoken. The local setup avoids that. What is said to the egg still stays local, since speech-to-text does not change.
+`--tts elevenlabs` speaks with ElevenLabs' text-to-speech API. It needs `ELEVENLABS_API_KEY` in the environment, and takes a voice ID from your ElevenLabs voice library (`--elevenlabs-voice`, default George, a premade voice) and a model ID (`--elevenlabs-model`, default `eleven_flash_v2_5`, the fastest).
+
+```sh
+export ELEVENLABS_API_KEY=...
+.venv/bin/python -m robin_egg_server respeaker-xvf3800-a1b2c3.local --server 127.0.0.1 --agent-name robin --tts elevenlabs --elevenlabs-voice <voice-id>
+```
+
+With a hosted voice the text of Robin's replies leaves the Mac mini: each sentence is sent to OpenAI or ElevenLabs to be spoken. The local setup avoids that. What is said to the egg still stays local, since speech-to-text does not change.
 
 Piper is always loaded as the fallback. If a sentence fails or takes longer than `--tts-time-limit`, Piper speaks that sentence and the rest of the reply, so the voice changes at most once in a reply, and the log says why:
 
@@ -539,7 +546,7 @@ Piper is always loaded as the fallback. If a sentence fails or takes longer than
 The OpenAI voice took longer than 4 s for one sentence, so Piper speaks the rest of this reply
 ```
 
-The next reply tries the hosted voice again. If `OPENAI_API_KEY` is not set, the server still starts, says so in the log, and Piper speaks every reply.
+The next reply tries the hosted voice again. If the hosted voice's key (`OPENAI_API_KEY` or `ELEVENLABS_API_KEY`) is not set, the server still starts, says so in the log, and Piper speaks every reply.
 ## Measuring latency and false wake-ups
 
 The server writes one line per voice turn, and one per message Robin sends on its own, to `~/.robin-egg/turns.jsonl`. A turn's line has the time, the turn's tag, whether a wake word or a follow-up started it and which wake word, how many seconds of audio were heard and why listening ended, how the turn ended, and the timings the log prints: speech-to-text, speaker identification, first audio ready, whole reply ready, and the reply's length. It also says whether the speaker was recognised and with what score. A message's line has its id, whether it was urgent or low, whether it was spoken, held, dropped, interrupted or failed, why, and how long it waited for the egg if it was queued.

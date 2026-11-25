@@ -16,7 +16,7 @@ from .digest import DEFAULT_MAX as DEFAULT_DIGEST_MAX, MAX_MAX as MAX_DIGEST_MAX
 from .egg import READY_CHIME, Options, Robin
 from .enrolment_audio import DEFAULT_ENROLMENT_AUDIO, EnrolmentAudio
 from .health import OfflineAlert, keep_captures_trimmed, status
-from .hosted_tts import DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_VOICE, DEFAULT_TIME_LIMIT_S
+from .hosted_tts import DEFAULT_ELEVENLABS_MODEL, DEFAULT_ELEVENLABS_VOICE, DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_VOICE, DEFAULT_TIME_LIMIT_S
 from .leds import DEFAULT_COLOURS_FILE, LedRing, PersonColours
 from .logs import setup as setup_logging
 from .overheard import OVERHEARD_MODES
@@ -72,9 +72,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--ready-sound", metavar="FILE", default=str(READY_CHIME), help="Sound to play each time the server connects to the egg (wav, aiff or flac), or off. Default: the egg's own ready chime")
     p.add_argument("--server-timeout", type=float, default=90.0, help="Seconds to wait for Robin to finish answering")
     p.add_argument("--whisper-model", default="base.en", help="faster-whisper model: tiny.en, base.en, small.en, ...")
-    p.add_argument("--tts", choices=["piper", "say", "openai"], default="piper", help="Text-to-speech engine: piper (Robin's voice), macOS say, or openai (hosted; needs OPENAI_API_KEY in the environment and falls back to Piper)")
+    p.add_argument("--tts", choices=["piper", "say", "openai", "elevenlabs"], default="piper", help="Text-to-speech engine: piper (Robin's voice), macOS say, openai (hosted; needs OPENAI_API_KEY in the environment and falls back to Piper) or elevenlabs (hosted; needs ELEVENLABS_API_KEY and falls back to Piper)")
     p.add_argument("--openai-model", default=DEFAULT_OPENAI_MODEL, help="OpenAI speech model, with --tts openai")
     p.add_argument("--openai-voice", default=DEFAULT_OPENAI_VOICE, help="OpenAI voice name, with --tts openai")
+    p.add_argument("--elevenlabs-model", default=DEFAULT_ELEVENLABS_MODEL, help="ElevenLabs model ID, with --tts elevenlabs")
+    p.add_argument("--elevenlabs-voice", default=DEFAULT_ELEVENLABS_VOICE, help="ElevenLabs voice ID, with --tts elevenlabs (default: George, a premade voice)")
     p.add_argument("--tts-time-limit", type=float, default=DEFAULT_TIME_LIMIT_S, help="Seconds the hosted voice gets for one sentence before Piper speaks the rest of the reply")
     p.add_argument("--piper-voice", default=str(DEFAULT_PIPER_VOICE), help="Path to a Piper .onnx voice (default: Robin's voice, Piper Ryan)")
     p.add_argument("--say-voice", help="macOS voice name for `say`, e.g. Samantha (`say -v '?'` lists them)")
@@ -209,7 +211,7 @@ def build(args: argparse.Namespace):
         LOG.info("The end of speech is found by the Silero speech model (--vad model)")
     stt = WhisperSTT(args.whisper_model)
     stt.load()  # load now, so the first question is not slow
-    if args.tts in ("piper", "openai"):
+    if args.tts in ("piper", "openai", "elevenlabs"):
         if not Path(args.piper_voice).exists():
             raise SystemExit(f"Piper voice not found at {args.piper_voice}. Download it as described in server/README.md.")
         tts = PiperTTS(args.piper_voice)
@@ -217,6 +219,10 @@ def build(args: argparse.Namespace):
             from .hosted_tts import openai_with_fallback
 
             tts = openai_with_fallback(tts, args.openai_model, args.openai_voice, args.tts_time_limit)
+        elif args.tts == "elevenlabs":
+            from .hosted_tts import elevenlabs_with_fallback
+
+            tts = elevenlabs_with_fallback(tts, args.elevenlabs_model, args.elevenlabs_voice, args.tts_time_limit)
     else:
         tts = SayTTS(args.say_voice)
     if args.echo:

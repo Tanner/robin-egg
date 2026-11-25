@@ -1,6 +1,6 @@
-"""The hosted voice and its fallback, against a fake speech endpoint.
+"""The hosted voices and their fallback, against a fake speech endpoint.
 
-Nothing here calls OpenAI or needs an API key: the endpoint is a local HTTP server.
+Nothing here calls OpenAI or ElevenLabs or needs an API key: the endpoint is a local HTTP server.
 """
 
 from __future__ import annotations
@@ -17,14 +17,23 @@ import pytest
 from aioesphomeapi import api_pb2 as pb
 
 from robin_egg_server.__main__ import build, parse_args
-from robin_egg_server.hosted_tts import OPENAI_KEY_ENV, OPENAI_PCM_RATE, FallbackTTS, OpenAITTS, openai_with_fallback
+from robin_egg_server.hosted_tts import (
+    ELEVENLABS_KEY_ENV,
+    OPENAI_KEY_ENV,
+    OPENAI_PCM_RATE,
+    ElevenLabsTTS,
+    FallbackTTS,
+    OpenAITTS,
+    elevenlabs_with_fallback,
+    openai_with_fallback,
+)
 from test_server import FakeSTT, SlowBrain, ToneTTS, converse, speech
 
 FAKE_KEY = "test-key-for-the-fake-endpoint"
 
 
 class FakeSpeechApi:
-    """Stands in for OpenAI's speech endpoint. `answers` are taken one per request; the last one repeats.
+    """Stands in for OpenAI's or ElevenLabs' speech endpoint. `answers` are taken one per request; the last one repeats.
 
     An answer is "ok", an HTTP status to fail with, or a number of seconds to wait before answering.
     """
@@ -33,20 +42,22 @@ class FakeSpeechApi:
         self.answers = list(answers) or ["ok"]
         self.requests: list[dict] = []
         self.keys: list[str] = []
+        self.paths: list[str] = []
         api = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 api.requests.append(body)
-                api.keys.append(self.headers.get("Authorization", ""))
+                api.keys.append(self.headers.get("Authorization") or self.headers.get("xi-api-key", ""))
+                api.paths.append(self.path)
                 answer = api.answers.pop(0) if len(api.answers) > 1 else api.answers[0]
                 if isinstance(answer, int):
                     self._send(answer, json.dumps({"error": {"message": "the fake endpoint was told to fail"}}).encode())
                     return
                 if isinstance(answer, float):
                     time.sleep(answer)
-                self._send(200, api.pcm(body["input"]))
+                self._send(200, api.pcm(body.get("input", body.get("text", ""))))
 
             def _send(self, status: int, payload: bytes) -> None:
                 try:
@@ -61,7 +72,8 @@ class FakeSpeechApi:
                 pass
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/v1/audio/speech"
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.url = f"{self.base}/v1/audio/speech"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     @staticmethod
@@ -242,3 +254,68 @@ def test_a_turn_on_the_egg_falls_back_mid_reply_and_recovers_on_the_next(api, ca
     assert local.said == ["There is fresh bread to go with it.", "I hope you both enjoy it."]
     assert first.final and second.final
     assert sum("speaks the rest of this reply" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_elevenlabs_voice_sends_the_voice_model_and_raw_pcm_request(api):
+    fake = api("ok")
+    samples, rate = ElevenLabsTTS(FAKE_KEY, url=fake.base).synthesize("Hello there.")
+    assert rate == 24000
+    assert samples.dtype == np.float32 and len(samples) == int(0.05 * len("Hello there.") * 24000)
+    assert fake.requests == [{"text": "Hello there.", "model_id": "eleven_flash_v2_5"}]
+    assert fake.paths == ["/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb?output_format=pcm_24000"]
+    assert fake.keys == [FAKE_KEY]
+
+
+def test_elevenlabs_voice_passes_on_other_choices(api):
+    fake = api("ok")
+    ElevenLabsTTS(FAKE_KEY, model="eleven_multilingual_v2", voice="abc123", url=fake.base).synthesize("Hi.")
+    assert fake.requests == [{"text": "Hi.", "model_id": "eleven_multilingual_v2"}]
+    assert fake.paths == ["/v1/text-to-speech/abc123?output_format=pcm_24000"]
+
+
+def test_elevenlabs_voice_raises_on_an_error_answer(api):
+    fake = api(401)
+    with pytest.raises(RuntimeError, match="answered 401"):
+        ElevenLabsTTS(FAKE_KEY, url=fake.base).synthesize("Hello.")
+
+
+def test_elevenlabs_falls_back_to_piper_and_names_itself(api, caplog):
+    fake, local = api(500), ToneTTS()
+    with caplog.at_level(logging.INFO, logger="robin"):
+        tts = elevenlabs_with_fallback(local, env={ELEVENLABS_KEY_ENV: FAKE_KEY}, url=fake.base)
+        tts.synthesize("One.")
+    assert local.said == ["One."]
+    assert "The text of Robin's replies is sent to ElevenLabs" in caplog.text
+    assert "The ElevenLabs voice failed" in caplog.text
+    assert FAKE_KEY not in caplog.text
+
+
+def test_elevenlabs_without_a_key_starts_with_the_local_voice_and_says_so(caplog):
+    local = ToneTTS()
+    with caplog.at_level(logging.INFO, logger="robin"):
+        assert elevenlabs_with_fallback(local, env={}) is local
+    assert "ELEVENLABS_API_KEY is not set, so the ElevenLabs voice is off and Piper speaks every reply" in caplog.text
+
+
+def test_the_server_starts_with_the_elevenlabs_voice(monkeypatch, tmp_path):
+    from robin_egg_server import voices
+
+    class StandInPiper(ToneTTS):
+        def __init__(self, model_path: str) -> None:
+            super().__init__()
+
+    monkeypatch.setattr(voices.WhisperSTT, "load", lambda self: None)
+    monkeypatch.setattr(voices, "PiperTTS", StandInPiper)
+    monkeypatch.setenv(ELEVENLABS_KEY_ENV, FAKE_KEY)
+    voice = tmp_path / "voice.onnx"
+    voice.write_bytes(b"")
+    argv = ["egg.local", "--echo", "--tts", "elevenlabs", "--piper-voice", str(voice), "--elevenlabs-voice", "abc123", "--elevenlabs-model", "eleven_v3"]
+    robin, _ = build(parse_args(argv))
+    assert isinstance(robin.tts, FallbackTTS) and isinstance(robin.tts.fallback, StandInPiper)
+    assert isinstance(robin.tts.primary, ElevenLabsTTS)
+    assert (robin.tts.primary.voice, robin.tts.primary.model) == ("abc123", "eleven_v3")
+
+
+def test_elevenlabs_options():
+    args = parse_args(["egg.local", "--echo"])
+    assert (args.elevenlabs_model, args.elevenlabs_voice) == ("eleven_flash_v2_5", "JBFqnCBsd6RMkjVDRZzb")
